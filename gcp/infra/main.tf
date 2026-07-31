@@ -363,6 +363,27 @@ resource "google_storage_bucket" "releases" {
   depends_on = [google_project_service.services]
 }
 
+resource "google_storage_bucket" "build_source" {
+  project                     = var.project_id
+  name                        = "${var.project_id}-${var.name_prefix}-build-source"
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = false
+  labels                      = local.labels
+
+  lifecycle_rule {
+    condition {
+      age = 7
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  depends_on = [google_project_service.services]
+}
+
 resource "google_storage_bucket_iam_member" "api_assets" {
   bucket = google_storage_bucket.assets.name
   role   = "roles/storage.objectAdmin"
@@ -396,6 +417,12 @@ resource "google_service_account_iam_member" "api_self_token_creator" {
 resource "google_storage_bucket_iam_member" "build_releases" {
   bucket = google_storage_bucket.releases.name
   role   = "roles/storage.objectAdmin"
+  member = google_service_account.runtime["build"].member
+}
+
+resource "google_storage_bucket_iam_member" "build_source" {
+  bucket = google_storage_bucket.build_source.name
+  role   = "roles/storage.objectViewer"
   member = google_service_account.runtime["build"].member
 }
 

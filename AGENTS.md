@@ -74,6 +74,8 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Keep Cloud Build source uploads constrained by `.gcloudignore`, and deploy
   Firebase Hosting through the `web` target bound at build time to the
   OpenTofu-managed site ID.
+- Stage manual Cloud Build uploads only in the dedicated short-lived
+  `seer-build-source` bucket; the build identity has read-only access there.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.

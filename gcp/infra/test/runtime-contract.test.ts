@@ -63,6 +63,23 @@ describe("managed database runtime contract", () => {
     );
   });
 
+  it("isolates manual build uploads in a short-lived read-only source bucket", async () => {
+    const main = await read("gcp/infra/main.tf");
+
+    expect(main).toContain(
+      'resource "google_storage_bucket" "build_source"',
+    );
+    expect(main).toContain(
+      'name                        = "${var.project_id}-${var.name_prefix}-build-source"',
+    );
+    expect(main).toMatch(
+      /resource "google_storage_bucket_iam_member" "build_source"[\s\S]*role\s+= "roles\/storage\.objectViewer"/,
+    );
+    expect(main).toMatch(
+      /resource "google_storage_bucket" "build_source"[\s\S]*age = 7/,
+    );
+  });
+
   it("installs both locked dependency trees before validating the GCP runtime", async () => {
     const runtimeBuild = await read("gcp/cloudbuild.runtime.yaml");
 

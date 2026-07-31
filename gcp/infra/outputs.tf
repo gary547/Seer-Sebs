@@ -6,6 +6,10 @@ output "assets_bucket" {
   value = google_storage_bucket.assets.name
 }
 
+output "build_source_bucket" {
+  value = google_storage_bucket.build_source.name
+}
+
 output "cloud_sql_connection_name" {
   value = google_sql_database_instance.main.connection_name
 }
