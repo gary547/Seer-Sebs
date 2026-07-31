@@ -1,9 +1,9 @@
 steps:
   - id: source-metadata
     name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
-    entrypoint: bash
     automapSubstitutions: true
     script: |
+      #!/usr/bin/env bash
       set -euo pipefail
       if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
         echo "A trigger-provided full COMMIT_SHA is required." >&2
@@ -12,8 +12,8 @@ steps:
 
   - id: install
     name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
-    entrypoint: bash
     script: |
+      #!/usr/bin/env bash
       set -euo pipefail
       npm ci --ignore-scripts --fund=false --audit=false
       npm ci --prefix gcp --ignore-scripts --fund=false --audit=false
@@ -107,9 +107,9 @@ steps:
 
   - id: resolve-digests
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    entrypoint: bash
     automapSubstitutions: true
     script: |
+      #!/usr/bin/env bash
       set -euo pipefail
       runtime_tagged_image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/runtime:${COMMIT_SHA}"
       database_tagged_image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}"
@@ -133,8 +133,8 @@ steps:
 
   - id: release-manifest
     name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
-    entrypoint: bash
     script: |
+      #!/usr/bin/env bash
       set -euo pipefail
       set -a
       source /workspace/release/image.env

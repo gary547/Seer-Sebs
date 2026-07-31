@@ -76,6 +76,8 @@ worker workflows, event delivery, object persistence, and restart persistence.
   OpenTofu-managed site ID.
 - Stage manual Cloud Build uploads only in the dedicated short-lived
   `seer-build-source` bucket; the build identity has read-only access there.
+- Cloud Build steps that use `script` must carry their own Bash shebang and
+  must not also declare `entrypoint`, which the Cloud Build API rejects.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.

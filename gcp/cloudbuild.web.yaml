@@ -1,7 +1,6 @@
 steps:
   - id: source-metadata
     name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
-    entrypoint: bash
     automapSubstitutions: true
     env:
       - VITE_FIREBASE_API_KEY=${_FIREBASE_API_KEY}
@@ -10,6 +9,7 @@ steps:
       - VITE_FIREBASE_PROJECT_ID=${PROJECT_ID}
       - VITE_SEER_API_URL=${_SEER_API_URL}
     script: |
+      #!/usr/bin/env bash
       set -euo pipefail
       if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
         echo "A trigger-provided full COMMIT_SHA is required." >&2
@@ -41,8 +41,8 @@ steps:
 
   - id: validate
     name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
-    entrypoint: bash
     script: |
+      #!/usr/bin/env bash
       set -euo pipefail
       npm run check:router-boundary
       npm run typecheck

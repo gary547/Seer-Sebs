@@ -91,6 +91,25 @@ describe("managed database runtime contract", () => {
     );
   });
 
+  it("uses API-valid executable scripts in both Cloud Build pipelines", async () => {
+    const builds = await Promise.all([
+      read("gcp/cloudbuild.runtime.yaml"),
+      read("gcp/cloudbuild.web.yaml"),
+    ]);
+
+    for (const build of builds) {
+      const scriptedSteps = build
+        .split(/\n(?=  - id: )/)
+        .filter((step) => step.includes("\n    script: |"));
+
+      expect(scriptedSteps.length).toBeGreaterThan(0);
+      for (const step of scriptedSteps) {
+        expect(step).not.toContain("\n    entrypoint:");
+        expect(step).toContain("\n    script: |\n      #!/usr/bin/env bash");
+      }
+    }
+  });
+
   it("uploads only deployable source and targets the managed Firebase site", async () => {
     const [cloudIgnore, firebaseConfig, hostingScript, webBuild] =
       await Promise.all([
