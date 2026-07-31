@@ -221,6 +221,18 @@ resource "google_secret_manager_secret" "runtime" {
   depends_on = [google_project_service.services]
 }
 
+resource "google_secret_manager_secret" "source_database_url" {
+  project   = var.project_id
+  secret_id = "${var.name_prefix}-source-database-url"
+  labels    = local.labels
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.services]
+}
+
 resource "google_sql_database_instance" "main" {
   project             = var.project_id
   name                = "${var.name_prefix}-${var.environment}-postgres"
@@ -384,6 +396,22 @@ resource "google_storage_bucket" "build_source" {
   depends_on = [google_project_service.services]
 }
 
+resource "google_storage_bucket" "migration_evidence" {
+  project                     = var.project_id
+  name                        = "${var.project_id}-${var.name_prefix}-migration-evidence"
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = false
+  labels                      = local.labels
+
+  versioning {
+    enabled = true
+  }
+
+  depends_on = [google_project_service.services]
+}
+
 resource "google_storage_bucket_iam_member" "api_assets" {
   bucket = google_storage_bucket.assets.name
   role   = "roles/storage.objectAdmin"
@@ -424,6 +452,19 @@ resource "google_storage_bucket_iam_member" "build_source" {
   bucket = google_storage_bucket.build_source.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.runtime["build"].member
+}
+
+resource "google_storage_bucket_iam_member" "migrator_evidence" {
+  bucket = google_storage_bucket.migration_evidence.name
+  role   = "roles/storage.objectAdmin"
+  member = google_service_account.runtime["migrator"].member
+}
+
+resource "google_secret_manager_secret_iam_member" "migrator_source_database" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.source_database_url.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = google_service_account.runtime["migrator"].member
 }
 
 resource "google_cloud_tasks_queue" "provider" {

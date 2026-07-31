@@ -91,6 +91,23 @@ steps:
       - test
       - build
 
+  - id: database-transfer-container
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-transfer:${COMMIT_SHA}
+      - --file
+      - gcp/database-transfer.Dockerfile
+      - .
+    waitFor:
+      - validate
+      - workflow-parity
+      - model-parity
+      - typecheck
+      - test
+      - build
+
   - id: push-runtime
     name: gcr.io/cloud-builders/docker
     args:
@@ -105,6 +122,13 @@ steps:
       - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}
     waitFor: ["database-container"]
 
+  - id: push-database-transfer
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-transfer:${COMMIT_SHA}
+    waitFor: ["database-transfer-container"]
+
   - id: resolve-digests
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     automapSubstitutions: true
@@ -113,8 +137,10 @@ steps:
       set -euo pipefail
       runtime_tagged_image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/runtime:${COMMIT_SHA}"
       database_tagged_image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}"
+      database_transfer_tagged_image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-transfer:${COMMIT_SHA}"
       runtime_digest="$(gcloud artifacts docker images describe "${runtime_tagged_image}" --format='value(image_summary.digest)')"
       database_digest="$(gcloud artifacts docker images describe "${database_tagged_image}" --format='value(image_summary.digest)')"
+      database_transfer_digest="$(gcloud artifacts docker images describe "${database_transfer_tagged_image}" --format='value(image_summary.digest)')"
       case "${runtime_digest}" in
         sha256:[0-9a-f][0-9a-f]*) ;;
         *) echo "Artifact Registry returned an invalid runtime digest." >&2; exit 1 ;;
@@ -123,13 +149,18 @@ steps:
         sha256:[0-9a-f][0-9a-f]*) ;;
         *) echo "Artifact Registry returned an invalid database migration digest." >&2; exit 1 ;;
       esac
+      case "${database_transfer_digest}" in
+        sha256:[0-9a-f][0-9a-f]*) ;;
+        *) echo "Artifact Registry returned an invalid database transfer digest." >&2; exit 1 ;;
+      esac
       mkdir -p /workspace/release
       printf 'SEER_RELEASE_IMAGE=%s\n' "${runtime_tagged_image%:*}@${runtime_digest}" > /workspace/release/image.env
       printf 'SEER_RELEASE_DATABASE_IMAGE=%s\n' "${database_tagged_image%:*}@${database_digest}" >> /workspace/release/image.env
+      printf 'SEER_RELEASE_DATABASE_TRANSFER_IMAGE=%s\n' "${database_transfer_tagged_image%:*}@${database_transfer_digest}" >> /workspace/release/image.env
       printf 'SEER_RELEASE_BUILD_ID=%s\n' "${BUILD_ID}" >> /workspace/release/image.env
       printf 'SEER_RELEASE_COMMIT_SHA=%s\n' "${COMMIT_SHA}" >> /workspace/release/image.env
       chmod 600 /workspace/release/image.env
-    waitFor: ["push-runtime", "push-database"]
+    waitFor: ["push-runtime", "push-database", "push-database-transfer"]
 
   - id: release-manifest
     name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
@@ -146,6 +177,7 @@ steps:
 images:
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/runtime:${COMMIT_SHA}
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-transfer:${COMMIT_SHA}
 
 artifacts:
   objects:

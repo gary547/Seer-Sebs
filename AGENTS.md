@@ -85,6 +85,12 @@ worker workflows, event delivery, object persistence, and restart persistence.
   `normalise_text` transform into the target checked-text role contract.
 - Source `competitors.added_by` is provenance text, not a user UUID; retain it
   in the lossless archive and leave the nullable canonical UUID unset.
+- Run source database transfer only through the managed archive and canonical
+  Cloud Run jobs. Plans are checksum-pinned, executions are generation-locked,
+  and checkpoints live in the private versioned migration-evidence bucket.
+- Keep the source database URL only in its dedicated migration secret. Grant
+  access solely to the migrator identity and remove the secret version after
+  the migration has been reconciled.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.

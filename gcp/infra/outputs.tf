@@ -35,8 +35,19 @@ output "database_migration_job" {
   value = var.database_migration_job_enabled ? google_cloud_run_v2_job.database_migration[0].id : null
 }
 
+output "database_transfer_jobs" {
+  value = {
+    for phase, job in google_cloud_run_v2_job.database_transfer :
+    phase => job.id
+  }
+}
+
 output "exports_bucket" {
   value = google_storage_bucket.exports.name
+}
+
+output "migration_evidence_bucket" {
+  value = google_storage_bucket.migration_evidence.name
 }
 
 output "release_metadata_bucket" {

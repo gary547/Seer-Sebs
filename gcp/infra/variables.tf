@@ -159,6 +159,49 @@ variable "database_migration_image" {
   }
 }
 
+variable "database_transfer_job_enabled" {
+  description = "Create the explicitly executed archive and canonical source database transfer jobs."
+  type        = bool
+  default     = false
+}
+
+variable "database_transfer_image" {
+  description = "Immutable managed database transfer image reference."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      !var.database_transfer_job_enabled ||
+      can(regex("@sha256:[0-9a-f]{64}$", var.database_transfer_image))
+    )
+    error_message = "database_transfer_image must use an immutable sha256 digest when database transfer jobs are enabled."
+  }
+}
+
+variable "database_transfer_plan_sha256s" {
+  description = "Approved archive and canonical transfer-plan checksums."
+  type = object({
+    archive   = string
+    canonical = string
+  })
+  default = {
+    archive   = ""
+    canonical = ""
+  }
+
+  validation {
+    condition = (
+      !var.database_transfer_job_enabled ||
+      alltrue([
+        for checksum in values(var.database_transfer_plan_sha256s) :
+        can(regex("^[0-9a-f]{64}$", checksum))
+      ])
+    )
+    error_message = "database_transfer_plan_sha256s must contain approved SHA-256 checksums when database transfer jobs are enabled."
+  }
+}
+
 variable "database_schema_ready" {
   description = "Explicit evidence gate confirming schema migration and IAM database role binding succeeded."
   type        = bool

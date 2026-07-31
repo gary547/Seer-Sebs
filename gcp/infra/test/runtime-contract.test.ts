@@ -220,6 +220,42 @@ describe("managed database runtime contract", () => {
     expect(bootstrap).not.toContain("SELECT role_name, member");
   });
 
+  it("runs source data transfer as resumable locked jobs with isolated access", async () => {
+    const [build, dockerfile, main, transfer, variables] = await Promise.all([
+      read("gcp/cloudbuild.runtime.yaml"),
+      read("gcp/database-transfer.Dockerfile"),
+      read("gcp/infra/main.tf"),
+      read("gcp/infra/database-transfer.tf"),
+      read("gcp/infra/variables.tf"),
+    ]);
+
+    expect(build).toContain("database-transfer:${COMMIT_SHA}");
+    expect(build).toContain("SEER_RELEASE_DATABASE_TRANSFER_IMAGE");
+    expect(dockerfile).toContain("managed-migrate-database.mjs");
+    expect(dockerfile).toMatch(
+      /cloud-sql-proxy@sha256:[0-9a-f]{64}/,
+    );
+    expect(main).toContain(
+      'resource "google_storage_bucket" "migration_evidence"',
+    );
+    expect(main).toContain(
+      'resource "google_secret_manager_secret" "source_database_url"',
+    );
+    expect(main).toMatch(
+      /resource "google_secret_manager_secret_iam_member" "migrator_source_database"[\s\S]*roles\/secretmanager\.secretAccessor/,
+    );
+    expect(transfer).toContain('archive = {');
+    expect(transfer).toContain('canonical = {');
+    expect(transfer).toContain("max_retries     = 0");
+    expect(transfer).toContain("parallelism = 1");
+    expect(transfer).toContain("database_schema_ready");
+    expect(transfer).toContain("SEER_DATABASE_TRANSFER_PLAN_SHA256");
+    expect(transfer).toContain("SEER_DATABASE_TRANSFER_LOCK_OBJECT");
+    expect(variables).toContain(
+      'variable "database_transfer_plan_sha256s"',
+    );
+  });
+
   it("schedules leased URL checks and retention through a private workflow", async () => {
     const [main, maintenance, monitor] = await Promise.all([
       read("gcp/infra/main.tf"),

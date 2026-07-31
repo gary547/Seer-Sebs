@@ -26,7 +26,7 @@ It creates:
 3. Initialise a remote-state backend for the environment, then run `tofu init`, `tofu validate` and `tofu plan`.
 4. Apply the foundation.
 5. Load non-database secret versions through the approved secret channel. Secret values never belong in `.tfvars`, state or Git.
-6. Build immutable runtime and database-migration images.
+6. Build immutable runtime, schema-migration, and database-transfer images.
 7. Set `database_migration_job_enabled = true` and `database_migration_image` to its Artifact Registry digest, then apply.
 8. Execute the migration job explicitly and retain the successful execution and reconciliation evidence.
 9. Set `database_schema_ready = true`, set all `runtime_images` to immutable Artifact Registry digests, then review and apply the runtime.
