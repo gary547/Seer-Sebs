@@ -48,6 +48,9 @@ npm ci
 npm ci --prefix gcp
 ```
 
+Cloud Build runtime validation must install both lockfiles before running GCP
+typechecks or tests.
+
 Run the standard validation before committing behaviour changes:
 
 ```bash
@@ -66,6 +69,8 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Identity Platform authorized domains must include the Firebase web app
   `authDomain` and both domains of the selected Hosting site. Keep the disabled
   phone sign-in block explicit to avoid provider drift.
+- The Cloud Build service agent needs `roles/secretmanager.admin` to create and
+  maintain GitHub connection secrets; keep this binding managed by OpenTofu.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.

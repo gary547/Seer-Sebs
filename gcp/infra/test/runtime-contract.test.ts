@@ -38,6 +38,31 @@ describe("managed database runtime contract", () => {
     expect(providers.match(/user_project_override\s+= true/g)).toHaveLength(2);
   });
 
+  it("lets the Cloud Build service agent manage connection secrets", async () => {
+    const main = await read("gcp/infra/main.tf");
+
+    expect(main).toContain(
+      'resource "google_project_iam_member" "cloud_build_connection_secret_admin"',
+    );
+    expect(main).toContain('role    = "roles/secretmanager.admin"');
+    expect(main).toContain('"roles/firebasehosting.admin"');
+    expect(main).toContain('"roles/serviceusage.serviceUsageConsumer"');
+    expect(main).toContain(
+      "service-${data.google_project.current.number}@gcp-sa-cloudbuild.iam.gserviceaccount.com",
+    );
+  });
+
+  it("installs both locked dependency trees before validating the GCP runtime", async () => {
+    const runtimeBuild = await read("gcp/cloudbuild.runtime.yaml");
+
+    expect(runtimeBuild).toContain(
+      "npm ci --ignore-scripts --fund=false --audit=false",
+    );
+    expect(runtimeBuild).toContain(
+      "npm ci --prefix gcp --ignore-scripts --fund=false --audit=false",
+    );
+  });
+
   it("authorizes the Firebase web app auth domain alongside the hosting domains", async () => {
     const main = await read("gcp/infra/main.tf");
 

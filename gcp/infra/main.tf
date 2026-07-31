@@ -55,7 +55,9 @@ locals {
     ])
     build = toset([
       "roles/artifactregistry.writer",
+      "roles/firebasehosting.admin",
       "roles/logging.logWriter",
+      "roles/serviceusage.serviceUsageConsumer",
     ])
     dispatcher = toset([
       "roles/cloudsql.client",
@@ -117,12 +119,24 @@ locals {
   ])
 }
 
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
 resource "google_project_service" "services" {
   for_each = local.services
 
   project            = var.project_id
   service            = each.value
   disable_on_destroy = false
+}
+
+resource "google_project_iam_member" "cloud_build_connection_secret_admin" {
+  project = var.project_id
+  role    = "roles/secretmanager.admin"
+  member  = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+
+  depends_on = [google_project_service.services]
 }
 
 resource "google_compute_network" "main" {
