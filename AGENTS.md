@@ -81,6 +81,10 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Managed schema bootstrap verifies IAM role membership through
   `information_schema.applicable_roles.grantee`; PostgreSQL exposes no
   `member` column in that view.
+- Keep portfolio and capture-window queries bounded before joining keyword,
+  revenue, and HAR forecast tables. Migration `026_portfolio_query_indexes`
+  supplies the latest-successful-run lookup index, and the 18,000-keyword
+  scale gate requires `/v1/portfolio` to complete in under five seconds.
 - Canonical migration maps the source `app_role` enum through an explicit
   `normalise_text` transform into the target checked-text role contract.
 - Canonical migration serializes every JSON/JSONB mapping through the explicit
