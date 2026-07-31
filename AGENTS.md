@@ -69,6 +69,10 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Identity Platform authorized domains must include the Firebase web app
   `authDomain` and both domains of the selected Hosting site. Keep the disabled
   phone sign-in block explicit to avoid provider drift.
+- Identity registration must create accounts through the project-scoped admin
+  endpoint with an application-generated UUID, then use password sign-in to
+  obtain the user's ID token for the public email-verification OOB request.
+  Roll back the Identity account and database profile if any stage fails.
 - The Cloud Build service agent needs `roles/secretmanager.admin` to create and
   maintain GitHub connection secrets; keep this binding managed by OpenTofu.
 - Keep Cloud Build source uploads constrained by `.gcloudignore`, and deploy
