@@ -71,6 +71,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
   phone sign-in block explicit to avoid provider drift.
 - The Cloud Build service agent needs `roles/secretmanager.admin` to create and
   maintain GitHub connection secrets; keep this binding managed by OpenTofu.
+- Keep Cloud Build source uploads constrained by `.gcloudignore`, and deploy
+  Firebase Hosting through the `web` target bound at build time to the
+  OpenTofu-managed site ID.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.

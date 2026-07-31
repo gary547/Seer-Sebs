@@ -1,8 +1,19 @@
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
 const repositoryRoot = process.cwd();
+const execFileAsync = promisify(execFile);
 
 async function read(path: string): Promise<string> {
   return readFile(`${repositoryRoot}/${path}`, "utf8");
@@ -61,6 +72,80 @@ describe("managed database runtime contract", () => {
     expect(runtimeBuild).toContain(
       "npm ci --prefix gcp --ignore-scripts --fund=false --audit=false",
     );
+  });
+
+  it("uploads only deployable source and targets the managed Firebase site", async () => {
+    const [cloudIgnore, firebaseConfig, hostingScript, webBuild] =
+      await Promise.all([
+        read(".gcloudignore"),
+        read("firebase.json"),
+        read("gcp/scripts/deploy-firebase-hosting.sh"),
+        read("gcp/cloudbuild.web.yaml"),
+      ]);
+
+    expect(cloudIgnore).toContain("gcp/infra/.terraform/**");
+    expect(cloudIgnore).toContain("migration-evidence/**");
+    expect(cloudIgnore).toContain("**/.env.*");
+    expect(firebaseConfig).toContain('"target": "web"');
+    expect(hostingScript).toContain(
+      'firebase target:apply hosting "${target}" "${site_id}"',
+    );
+    expect(hostingScript).toContain('--only "hosting:${target}"');
+    expect(hostingScript).toContain('--only "${target}"');
+    expect(webBuild).toContain(
+      "SEER_FIREBASE_SITE_ID=${_FIREBASE_SITE_ID}",
+    );
+  });
+
+  it.each([
+    {
+      channel: "live",
+      expectedDeploy:
+        "deploy --project secure-cipher-503913-f1 --only hosting:web --non-interactive",
+    },
+    {
+      channel: "review-42",
+      expectedDeploy:
+        "hosting:channel:deploy review-42 --project secure-cipher-503913-f1 --only web --expires 7d --non-interactive",
+    },
+  ])("runs the Firebase $channel deployment against the web target", async ({
+    channel,
+    expectedDeploy,
+  }) => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "seer-firebase-deploy-"),
+    );
+    const firebaseExecutable = join(temporaryDirectory, "firebase");
+    const callLog = join(temporaryDirectory, "calls.log");
+
+    try {
+      await writeFile(
+        firebaseExecutable,
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "${FIREBASE_CALL_LOG}"\n',
+      );
+      await chmod(firebaseExecutable, 0o755);
+
+      await execFileAsync("bash", ["gcp/scripts/deploy-firebase-hosting.sh"], {
+        cwd: repositoryRoot,
+        env: {
+          ...process.env,
+          BUILD_ID: "test-build",
+          FIREBASE_CALL_LOG: callLog,
+          PATH: `${temporaryDirectory}:${process.env.PATH ?? ""}`,
+          SEER_FIREBASE_CHANNEL: channel,
+          SEER_FIREBASE_PROJECT_ID: "secure-cipher-503913-f1",
+          SEER_FIREBASE_SITE_ID: "seer-161062363690",
+        },
+      });
+
+      const calls = await readFile(callLog, "utf8");
+      expect(calls).toContain(
+        "target:apply hosting web seer-161062363690 --project secure-cipher-503913-f1 --non-interactive",
+      );
+      expect(calls).toContain(expectedDeploy);
+    } finally {
+      await rm(temporaryDirectory, { force: true, recursive: true });
+    }
   });
 
   it("authorizes the Firebase web app auth domain alongside the hosting domains", async () => {

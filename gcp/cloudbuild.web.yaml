@@ -68,6 +68,7 @@ steps:
     env:
       - SEER_FIREBASE_CHANNEL=${_HOSTING_CHANNEL}
       - SEER_FIREBASE_PROJECT_ID=${PROJECT_ID}
+      - SEER_FIREBASE_SITE_ID=${_FIREBASE_SITE_ID}
     args: ["gcp/scripts/deploy-firebase-hosting.sh"]
     waitFor: ["build"]
 
@@ -78,6 +79,7 @@ substitutions:
   _FIREBASE_API_KEY: replace-with-firebase-api-key
   _FIREBASE_APP_ID: replace-with-firebase-app-id
   _FIREBASE_AUTH_DOMAIN: replace-with-firebase-auth-domain
+  _FIREBASE_SITE_ID: replace-with-firebase-site-id
   _HOSTING_CHANNEL: live
   _SEER_API_URL: replace-with-cloud-run-api-url
 
