@@ -220,7 +220,7 @@ describe("managed database runtime contract", () => {
     expect(bootstrap).not.toContain("SELECT role_name, member");
   });
 
-  it("runs source data transfer as resumable locked jobs with isolated access", async () => {
+  it("runs source data transfer as resumable locked jobs from an isolated snapshot", async () => {
     const [build, dockerfile, main, transfer, variables] = await Promise.all([
       read("gcp/cloudbuild.runtime.yaml"),
       read("gcp/database-transfer.Dockerfile"),
@@ -238,11 +238,8 @@ describe("managed database runtime contract", () => {
     expect(main).toContain(
       'resource "google_storage_bucket" "migration_evidence"',
     );
-    expect(main).toContain(
-      'resource "google_secret_manager_secret" "source_database_url"',
-    );
-    expect(main).toMatch(
-      /resource "google_secret_manager_secret_iam_member" "migrator_source_database"[\s\S]*roles\/secretmanager\.secretAccessor/,
+    expect(main).not.toContain(
+      'resource "google_secret_manager_secret_iam_member" "migrator_source_database"',
     );
     expect(transfer).toContain('archive = {');
     expect(transfer).toContain('canonical = {');
@@ -251,8 +248,13 @@ describe("managed database runtime contract", () => {
     expect(transfer).toContain("database_schema_ready");
     expect(transfer).toContain("SEER_DATABASE_TRANSFER_PLAN_SHA256");
     expect(transfer).toContain("SEER_DATABASE_TRANSFER_LOCK_OBJECT");
+    expect(transfer).toContain("var.database_transfer_source_database");
+    expect(transfer).not.toContain("secret_key_ref");
     expect(variables).toContain(
       'variable "database_transfer_plan_sha256s"',
+    );
+    expect(variables).toContain(
+      'variable "database_transfer_source_database"',
     );
   });
 

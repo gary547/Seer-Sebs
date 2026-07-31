@@ -95,13 +95,8 @@ resource "google_cloud_run_v2_job" "database_transfer" {
         }
 
         env {
-          name = "SEER_SOURCE_DATABASE_URL"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.source_database_url.secret_id
-              version = "latest"
-            }
-          }
+          name  = "SEER_SOURCE_DATABASE_URL"
+          value = "postgresql://${urlencode(google_sql_user.migrator.name)}@127.0.0.1:5432/${var.database_transfer_source_database}"
         }
       }
     }
@@ -109,7 +104,6 @@ resource "google_cloud_run_v2_job" "database_transfer" {
 
   depends_on = [
     google_project_iam_member.runtime,
-    google_secret_manager_secret_iam_member.migrator_source_database,
     google_service_networking_connection.private_services,
     google_sql_database.application,
     google_sql_user.migrator,

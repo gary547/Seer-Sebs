@@ -202,6 +202,17 @@ variable "database_transfer_plan_sha256s" {
   }
 }
 
+variable "database_transfer_source_database" {
+  description = "Isolated Cloud SQL database restored from the approved source snapshot."
+  type        = string
+  default     = "seer_source_snapshot"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9_]{2,62}$", var.database_transfer_source_database))
+    error_message = "database_transfer_source_database must be a safe PostgreSQL database name."
+  }
+}
+
 variable "database_schema_ready" {
   description = "Explicit evidence gate confirming schema migration and IAM database role binding succeeded."
   type        = bool

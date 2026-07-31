@@ -29,7 +29,8 @@ It creates:
 6. Build immutable runtime, schema-migration, and database-transfer images.
 7. Set `database_migration_job_enabled = true` and `database_migration_image` to its Artifact Registry digest, then apply.
 8. Execute the migration job explicitly and retain the successful execution and reconciliation evidence.
-9. Set `database_schema_ready = true`, set all `runtime_images` to immutable Artifact Registry digests, then review and apply the runtime.
+9. Restore the approved source dump into `seer_source_snapshot`, upload the checksum-pinned archive and canonical plans, then enable and execute both database-transfer jobs.
+10. Set `database_schema_ready = true`, set all `runtime_images` to immutable Artifact Registry digests, then review and apply the runtime.
 
 Runtime services connect through a pinned Cloud SQL Auth Proxy v2 sidecar using their own IAM identities. The database migration job uses a separate IAM user with the schema privileges required to apply the consolidated migrations and grant only the relevant `seer_*` role to each runtime identity.
 

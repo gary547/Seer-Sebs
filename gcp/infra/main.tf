@@ -460,13 +460,6 @@ resource "google_storage_bucket_iam_member" "migrator_evidence" {
   member = google_service_account.runtime["migrator"].member
 }
 
-resource "google_secret_manager_secret_iam_member" "migrator_source_database" {
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.source_database_url.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = google_service_account.runtime["migrator"].member
-}
-
 resource "google_cloud_tasks_queue" "provider" {
   for_each = var.task_queues
 

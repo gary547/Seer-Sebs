@@ -88,9 +88,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Run source database transfer only through the managed archive and canonical
   Cloud Run jobs. Plans are checksum-pinned, executions are generation-locked,
   and checkpoints live in the private versioned migration-evidence bucket.
-- Keep the source database URL only in its dedicated migration secret. Grant
-  access solely to the migrator identity and remove the secret version after
-  the migration has been reconciled.
+- Restore the approved source dump into the isolated `seer_source_snapshot`
+  Cloud SQL database and connect through migrator IAM authentication. Never
+  place a source database password in Cloud Run configuration or Terraform.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.
