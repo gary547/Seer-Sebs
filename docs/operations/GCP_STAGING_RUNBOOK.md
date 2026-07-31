@@ -170,15 +170,14 @@ After every release:
 8. Confirm browser traffic contains no Supabase hostname.
 9. Confirm a protected API route rejects an unauthenticated request.
 
-## DataForSEO degraded state
+## DataForSEO credential verification
 
-As of 2026-07-31, the supplied DataForSEO value has been tested as a raw Basic
-token, as the password for the Seer Workspace email, and as both login and
-password. DataForSEO returned `401` for every combination. The current secret
-version is provisional so the worker can start, but every stage that requires
-DataForSEO is expected to fail closed until the correct API login is supplied.
+As of 2026-07-31, the DataForSEO API login and password are verified. Secret
+version 2 contains the raw `login:password` value, and a managed Cloud Run
+probe completed both the authenticated user check and a live keyword
+enrichment through the production `DataForSeoClient` adapter.
 
-When the login is available:
+When rotating the credentials:
 
 1. Test `login:password` against DataForSEO's authenticated user endpoint.
 2. Require HTTP `200` and API status code `20000`.
