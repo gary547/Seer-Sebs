@@ -1,0 +1,84 @@
+steps:
+  - id: source-metadata
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: bash
+    automapSubstitutions: true
+    env:
+      - VITE_FIREBASE_API_KEY=${_FIREBASE_API_KEY}
+      - VITE_FIREBASE_APP_ID=${_FIREBASE_APP_ID}
+      - VITE_FIREBASE_AUTH_DOMAIN=${_FIREBASE_AUTH_DOMAIN}
+      - VITE_FIREBASE_PROJECT_ID=${PROJECT_ID}
+      - VITE_SEER_API_URL=${_SEER_API_URL}
+    script: |
+      set -euo pipefail
+      if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "A trigger-provided full COMMIT_SHA is required." >&2
+        exit 1
+      fi
+      for variable in \
+        VITE_FIREBASE_API_KEY \
+        VITE_FIREBASE_APP_ID \
+        VITE_FIREBASE_AUTH_DOMAIN \
+        VITE_FIREBASE_PROJECT_ID \
+        VITE_SEER_API_URL
+      do
+        value="${!variable:-}"
+        if [[ -z "${value}" || "${value}" == replace-with-* ]]; then
+          echo "${variable} must be provided by the deployment trigger." >&2
+          exit 1
+        fi
+      done
+      if [[ ! "${VITE_SEER_API_URL}" =~ ^https:// ]]; then
+        echo "VITE_SEER_API_URL must use HTTPS." >&2
+        exit 1
+      fi
+
+  - id: install
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args: ["ci", "--ignore-scripts", "--fund=false", "--audit=false"]
+    waitFor: ["source-metadata"]
+
+  - id: validate
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: bash
+    script: |
+      set -euo pipefail
+      npm run check:router-boundary
+      npm run typecheck
+      npm test
+    waitFor: ["install"]
+
+  - id: build
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args: ["run", "build"]
+    env:
+      - VITE_FIREBASE_API_KEY=${_FIREBASE_API_KEY}
+      - VITE_FIREBASE_APP_ID=${_FIREBASE_APP_ID}
+      - VITE_FIREBASE_AUTH_DOMAIN=${_FIREBASE_AUTH_DOMAIN}
+      - VITE_FIREBASE_PROJECT_ID=${PROJECT_ID}
+      - VITE_SEER_API_URL=${_SEER_API_URL}
+      - VITE_SEER_AUTH_MODE=identity-platform
+    waitFor: ["validate"]
+
+  - id: deploy
+    name: us-docker.pkg.dev/firebase-cli/us/firebase
+    entrypoint: bash
+    env:
+      - SEER_FIREBASE_CHANNEL=${_HOSTING_CHANNEL}
+      - SEER_FIREBASE_PROJECT_ID=${PROJECT_ID}
+    args: ["gcp/scripts/deploy-firebase-hosting.sh"]
+    waitFor: ["build"]
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _FIREBASE_API_KEY: replace-with-firebase-api-key
+  _FIREBASE_APP_ID: replace-with-firebase-app-id
+  _FIREBASE_AUTH_DOMAIN: replace-with-firebase-auth-domain
+  _HOSTING_CHANNEL: live
+  _SEER_API_URL: replace-with-cloud-run-api-url
+
+timeout: 1200s

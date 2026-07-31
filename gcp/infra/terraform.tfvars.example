@@ -1,0 +1,27 @@
+project_id  = "replace-with-isolated-project-id"
+environment = "staging"
+region      = "europe-west2"
+google_slides_template_id = "replace-with-google-slides-template-id"
+
+authorized_domains = [
+  "staging.example.com",
+]
+
+deletion_protection        = false
+database_availability_type = "ZONAL"
+runtime_enabled            = false
+compatibility_dispatcher_enabled = false
+database_migration_job_enabled    = false
+database_schema_ready             = false
+monitoring_enabled                = true
+
+alert_notification_channel_ids = []
+
+database_migration_image = ""
+
+runtime_images = {
+  api        = ""
+  dispatcher = ""
+  events     = ""
+  worker     = ""
+}

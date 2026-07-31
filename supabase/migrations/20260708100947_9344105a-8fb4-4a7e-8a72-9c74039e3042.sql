@@ -1,0 +1,2 @@
+ALTER TABLE public.ctr_curves DROP CONSTRAINT ctr_curves_device_check;
+ALTER TABLE public.ctr_curves ADD CONSTRAINT ctr_curves_device_check CHECK (device = ANY (ARRAY['mobile'::text, 'desktop'::text, 'all'::text]));

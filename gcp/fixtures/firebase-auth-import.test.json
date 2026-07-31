@@ -1,0 +1,11 @@
+{
+  "users": [
+    {
+      "createdAt": "1767225600000",
+      "email": "migration-fixture@example.test",
+      "emailVerified": true,
+      "localId": "migration-fixture-user",
+      "passwordHash": "JDJiJDEwJGFiY2RlZmdoaWprbG1ub3BxcnN0dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dQ=="
+    }
+  ]
+}

@@ -1,0 +1,1160 @@
+import { createHash } from "node:crypto";
+
+import { normaliseKeyword } from "../../../packages/fixtures/src/representative-project.js";
+import type { PipelineStageId } from "../../../packages/pipeline/src/definition.js";
+import type { DatabasePool } from "../../../packages/runtime/src/database.js";
+import { withTransaction } from "../../../packages/runtime/src/database.js";
+
+interface ProjectProviderRow {
+  country: string;
+  domain: string;
+  language: string;
+}
+
+interface KeywordProviderRow {
+  avg_monthly_volume: number | null;
+  keyword: string;
+  normalised_keyword: string;
+  ranking_url: string | null;
+}
+
+interface EnrichedKeyword {
+  avgMonthlyVolume: number | null;
+  intent: string | null;
+  keyword: string;
+  keywordDifficulty: number | null;
+  monthlyVolumes: Array<{ month: string; volume: number }>;
+}
+
+interface RankingMatch {
+  keyword: string;
+  rank: number;
+  url: string;
+}
+
+interface SerpTask {
+  itemKey: string;
+  keyword: string;
+  providerTaskId: string;
+}
+
+interface SerpResult {
+  domain: string;
+  rankAbsolute: number;
+  url: string;
+}
+
+interface AuthorityMetrics {
+  ahrefsRank: number | null;
+  backlinks: number | null;
+  domainRating: number | null;
+  referringDomains: number | null;
+  urlRating: number | null;
+}
+
+interface SiteArchitectureResult {
+  contentStatus: "amber" | "green" | "red";
+  keyword: string;
+  matchedUrl: string | null;
+  relevancyScore: number;
+  tacticalStatus:
+    | "create_content"
+    | "green"
+    | "new_content"
+    | "no_action_needed"
+    | "optimise_content";
+}
+
+interface ProviderWorkItemRow {
+  item_key: string;
+  provider_task_id: string | null;
+  state: "failed" | "pending" | "submitted" | "succeeded";
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value
+        .filter(
+          (item) => item && typeof item === "object" && !Array.isArray(item),
+        )
+        .map((item) => item as Record<string, unknown>)
+    : [];
+}
+
+function numberOrNull(value: unknown): number | null {
+  const parsed = Number(value);
+  return value !== null &&
+    value !== undefined &&
+    value !== "" &&
+    Number.isFinite(parsed) &&
+    parsed >= 0
+    ? parsed
+    : null;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function batches<T>(values: readonly T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let offset = 0; offset < values.length; offset += size) {
+    result.push(values.slice(offset, offset + size));
+  }
+  return result;
+}
+
+async function concurrently<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let index = 0;
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, Math.max(values.length, 1)) },
+      async () => {
+        while (index < values.length) {
+          const current = index;
+          index += 1;
+          results[current] = await operation(values[current]!);
+        }
+      },
+    ),
+  );
+  return results;
+}
+
+function countryName(country: string): string {
+  try {
+    return (
+      new Intl.DisplayNames(["en"], { type: "region" }).of(
+        country.toUpperCase(),
+      ) ?? country
+    );
+  } catch {
+    return country;
+  }
+}
+
+function languageCode(language: string): string {
+  const normalised = language.trim().toLowerCase();
+  return /^[a-z]{2}$/.test(normalised) ? normalised : "en";
+}
+
+function cleanDomain(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split(/[/?#]/)[0]!;
+}
+
+function providerTag(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+class ProviderHttpClient {
+  constructor(
+    private readonly authorization: string,
+    private readonly fetchImplementation: typeof fetch = fetch,
+  ) {}
+
+  async json(
+    url: string,
+    init: Omit<RequestInit, "headers"> & {
+      headers?: Record<string, string>;
+    } = {},
+  ): Promise<Record<string, unknown>> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      try {
+        const response = await this.fetchImplementation(url, {
+          ...init,
+          headers: {
+            authorization: this.authorization,
+            ...(init.body === undefined
+              ? {}
+              : { "content-type": "application/json" }),
+            ...init.headers,
+          },
+          signal: AbortSignal.timeout(120_000),
+        });
+        if (!response.ok) {
+          if (
+            (response.status === 429 || response.status >= 500) &&
+            attempt < 5
+          ) {
+            const retryAfter = Number(response.headers.get("retry-after"));
+            await new Promise((resolve) =>
+              setTimeout(
+                resolve,
+                Number.isFinite(retryAfter) && retryAfter > 0
+                  ? retryAfter * 1_000
+                  : 250 * 2 ** (attempt - 1),
+              ),
+            );
+            continue;
+          }
+          throw new Error(`Provider API returned ${response.status}.`);
+        }
+        return record(await response.json());
+      } catch (error) {
+        lastError = error;
+        if (attempt < 5) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 250 * 2 ** (attempt - 1)),
+          );
+        }
+      }
+    }
+    throw new Error("Provider API failed after five attempts.", {
+      cause: lastError,
+    });
+  }
+}
+
+function dataForSeoItems(value: unknown): Record<string, unknown>[] {
+  const root = record(value);
+  const task = records(root.tasks)[0];
+  if (!task || task.status_code !== 20000) {
+    throw new Error("DataForSEO task did not complete successfully.");
+  }
+  const result = records(task.result);
+  const nested = records(result[0]?.items);
+  return nested.length > 0 ? nested : result;
+}
+
+function searchIntent(item: Record<string, unknown>): string | null {
+  const raw = item.keyword_intent ?? item.intent;
+  const label = Array.isArray(raw)
+    ? stringOrNull(record(raw[0]).label)
+    : typeof raw === "object"
+      ? stringOrNull(record(raw).label)
+      : stringOrNull(raw);
+  const normalised = label?.toLowerCase() ?? null;
+  return normalised &&
+    ["commercial", "informational", "navigational", "transactional"].includes(
+      normalised,
+    )
+    ? normalised
+    : null;
+}
+
+export class DataForSeoClient {
+  private readonly http: ProviderHttpClient;
+
+  constructor(
+    credentials: string,
+    fetchImplementation: typeof fetch = fetch,
+  ) {
+    const encoded = credentials.includes(":")
+      ? Buffer.from(credentials).toString("base64")
+      : credentials;
+    if (!encoded.trim()) throw new Error("DataForSEO credentials are required.");
+    this.http = new ProviderHttpClient(`Basic ${encoded}`, fetchImplementation);
+  }
+
+  private async liveItems(
+    path: string,
+    task: Record<string, unknown>,
+  ): Promise<Record<string, unknown>[]> {
+    return dataForSeoItems(
+      await this.http.json(`https://api.dataforseo.com${path}`, {
+        body: JSON.stringify([task]),
+        method: "POST",
+      }),
+    );
+  }
+
+  async enrichKeywords(
+    keywords: readonly string[],
+    country: string,
+    language: string,
+  ): Promise<EnrichedKeyword[]> {
+    const result = new Map<string, EnrichedKeyword>();
+    for (const group of batches(keywords, 200)) {
+      const request = {
+        keywords: group,
+        language_code: languageCode(language),
+        location_name: countryName(country),
+      };
+      const [volumeItems, difficultyItems, intentItems] = await Promise.all([
+        this.liveItems(
+          "/v3/keywords_data/google_ads/search_volume/live",
+          request,
+        ),
+        this.liveItems(
+          "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live",
+          request,
+        ),
+        this.liveItems("/v3/dataforseo_labs/google/search_intent/live", {
+          keywords: group,
+          language_code: languageCode(language),
+        }),
+      ]);
+      for (const keyword of group) {
+        result.set(normaliseKeyword(keyword), {
+          avgMonthlyVolume: null,
+          intent: null,
+          keyword,
+          keywordDifficulty: null,
+          monthlyVolumes: [],
+        });
+      }
+      for (const item of volumeItems) {
+        const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
+        const value = result.get(key);
+        if (!value) continue;
+        value.avgMonthlyVolume = numberOrNull(item.search_volume);
+        value.monthlyVolumes = records(item.monthly_searches)
+          .map((point) => {
+            const year = numberOrNull(point.year);
+            const month = numberOrNull(point.month);
+            const volume = numberOrNull(point.search_volume);
+            return year &&
+              month &&
+              month <= 12 &&
+              volume !== null
+              ? {
+                  month: `${year}-${String(month).padStart(2, "0")}-01`,
+                  volume,
+                }
+              : null;
+          })
+          .filter(
+            (
+              point,
+            ): point is {
+              month: string;
+              volume: number;
+            } => point !== null,
+          );
+      }
+      for (const item of difficultyItems) {
+        const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
+        const value = result.get(key);
+        if (value) {
+          value.keywordDifficulty = numberOrNull(item.keyword_difficulty);
+        }
+      }
+      for (const item of intentItems) {
+        const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
+        const value = result.get(key);
+        if (value) value.intent = searchIntent(item);
+      }
+    }
+    return [...result.values()];
+  }
+
+  async rankingUrls(
+    domain: string,
+    keywords: readonly string[],
+    country: string,
+    language: string,
+  ): Promise<RankingMatch[]> {
+    const matches: RankingMatch[] = [];
+    for (const group of batches(keywords, 700)) {
+      let offset = 0;
+      while (true) {
+        const items = await this.liveItems(
+          "/v3/dataforseo_labs/google/ranked_keywords/live",
+          {
+            filters: ["keyword_data.keyword", "in", group],
+            historical_serp_mode: "live",
+            ignore_synonyms: true,
+            item_types: ["organic"],
+            language_code: languageCode(language),
+            limit: 1_000,
+            load_rank_absolute: false,
+            location_name: countryName(country),
+            offset,
+            target: cleanDomain(domain),
+          },
+        );
+        for (const item of items) {
+          const keyword = stringOrNull(record(item.keyword_data).keyword);
+          const serp = record(record(item.ranked_serp_element).serp_item);
+          const url =
+            stringOrNull(serp.relative_url) ?? stringOrNull(serp.url);
+          const rank =
+            numberOrNull(serp.rank_group) ??
+            numberOrNull(serp.rank_absolute);
+          if (keyword && url && rank !== null) {
+            matches.push({ keyword, rank: Math.round(rank), url });
+          }
+        }
+        if (items.length < 1_000) break;
+        offset += items.length;
+      }
+    }
+    return matches;
+  }
+
+  async submitSerpTasks(
+    items: readonly { itemKey: string; keyword: string }[],
+    country: string,
+    language: string,
+  ): Promise<SerpTask[]> {
+    const submitted: SerpTask[] = [];
+    for (const group of batches(items, 100)) {
+      const byTag = new Map(
+        group.map((item) => [providerTag(item.itemKey), item]),
+      );
+      const response = await this.http.json(
+        "https://api.dataforseo.com/v3/serp/google/organic/task_post",
+        {
+          body: JSON.stringify(
+            group.map((item) => ({
+              depth: 10,
+              keyword: item.keyword,
+              language_code: languageCode(language),
+              location_name: countryName(country),
+              tag: providerTag(item.itemKey),
+            })),
+          ),
+          method: "POST",
+        },
+      );
+      for (const task of records(response.tasks)) {
+        const status = numberOrNull(task.status_code);
+        const id = stringOrNull(task.id);
+        const tag = stringOrNull(record(task.data).tag);
+        const item = tag ? byTag.get(tag) : null;
+        if (!status || status < 20000 || status >= 30000 || !id || !item) {
+          throw new Error("DataForSEO SERP task submission failed.");
+        }
+        submitted.push({
+          itemKey: item.itemKey,
+          keyword: item.keyword,
+          providerTaskId: id,
+        });
+      }
+      if (submitted.length < items.indexOf(group[0]!) + group.length) {
+        throw new Error("DataForSEO did not acknowledge every SERP task.");
+      }
+    }
+    return submitted;
+  }
+
+  async readySerpTaskIds(): Promise<Set<string>> {
+    const response = await this.http.json(
+      "https://api.dataforseo.com/v3/serp/google/organic/tasks_ready",
+    );
+    const ready = new Set<string>();
+    for (const task of records(response.tasks)) {
+      for (const item of records(task.result)) {
+        const id = stringOrNull(item.id);
+        if (id) ready.add(id);
+      }
+    }
+    return ready;
+  }
+
+  async serpTaskResult(providerTaskId: string): Promise<SerpResult[]> {
+    const items = dataForSeoItems(
+      await this.http.json(
+        `https://api.dataforseo.com/v3/serp/google/organic/task_get/advanced/${encodeURIComponent(providerTaskId)}`,
+      ),
+    );
+    return items
+      .filter((item) => item.type === "organic")
+      .map((item) => {
+        const rank = numberOrNull(item.rank_absolute);
+        const url = stringOrNull(item.url);
+        const domain =
+          stringOrNull(item.domain) ?? (url ? cleanDomain(url) : null);
+        return rank && rank <= 100 && url && domain
+          ? {
+              domain,
+              rankAbsolute: Math.round(rank),
+              url,
+            }
+          : null;
+      })
+      .filter((item): item is SerpResult => item !== null);
+  }
+}
+
+export class AhrefsClient {
+  private readonly http: ProviderHttpClient;
+
+  constructor(apiKey: string, fetchImplementation: typeof fetch = fetch) {
+    if (!apiKey.trim()) throw new Error("Ahrefs API key is required.");
+    this.http = new ProviderHttpClient(`Bearer ${apiKey}`, fetchImplementation);
+  }
+
+  async metrics(
+    targets: readonly { mode: "domain" | "exact"; url: string }[],
+  ): Promise<Map<string, AuthorityMetrics>> {
+    const output = new Map<string, AuthorityMetrics>();
+    for (const group of batches(targets, 100)) {
+      const response = await this.http.json(
+        "https://api.ahrefs.com/v3/batch-analysis/batch-analysis",
+        {
+          body: JSON.stringify({
+            output: "json",
+            select: [
+              "url",
+              "url_rating",
+              "domain_rating",
+              "ahrefs_rank",
+              "refdomains",
+              "backlinks",
+            ],
+            targets: group.map((target) => ({
+              mode: target.mode,
+              protocol: "both",
+              url: target.url,
+            })),
+          }),
+          method: "POST",
+        },
+      );
+      const rows = records(response.targets);
+      group.forEach((target, index) => {
+        const row =
+          rows.find((candidate) => candidate.url === target.url) ??
+          rows[index] ??
+          {};
+        output.set(target.url, {
+          ahrefsRank: numberOrNull(row.ahrefs_rank),
+          backlinks: numberOrNull(row.backlinks),
+          domainRating: numberOrNull(row.domain_rating),
+          referringDomains: numberOrNull(
+            row.refdomains ?? row.referring_domains,
+          ),
+          urlRating: numberOrNull(row.url_rating),
+        });
+      });
+    }
+    return output;
+  }
+}
+
+export class AnthropicSiteArchitectureClient {
+  private readonly http: ProviderHttpClient;
+
+  constructor(apiKey: string, fetchImplementation: typeof fetch = fetch) {
+    if (!apiKey.trim()) throw new Error("Anthropic API key is required.");
+    this.http = new ProviderHttpClient(apiKey, async (input, init) => {
+      const headers = new Headers(init?.headers);
+      headers.delete("authorization");
+      headers.set("x-api-key", apiKey);
+      headers.set("anthropic-version", "2023-06-01");
+      return fetchImplementation(input, { ...init, headers });
+    });
+  }
+
+  async score(
+    rows: readonly { keyword: string; rankingUrl: string }[],
+  ): Promise<Map<string, Omit<SiteArchitectureResult, "keyword" | "matchedUrl">>> {
+    const output = new Map<
+      string,
+      Omit<SiteArchitectureResult, "keyword" | "matchedUrl">
+    >();
+    for (const group of batches(rows, 40)) {
+      const response = await this.http.json(
+        "https://api.anthropic.com/v1/messages",
+        {
+          body: JSON.stringify({
+            max_tokens: 4_000,
+            messages: [
+              {
+                content: JSON.stringify(
+                  group.map((row, index) => ({ index, ...row })),
+                ),
+                role: "user",
+              },
+            ],
+            model: "claude-sonnet-4-6",
+            system:
+              "Return only a JSON array. For each input index return index, relevancyScore from 0 to 100, contentStatus as green/amber/red, and tacticalStatus as no_action_needed/optimise_content/create_content/new_content.",
+          }),
+          method: "POST",
+        },
+      );
+      const text = records(response.content)
+        .map((content) => stringOrNull(content.text))
+        .filter((value): value is string => value !== null)
+        .join("\n")
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/, "");
+      let parsed: unknown = [];
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = [];
+      }
+      for (const value of records(parsed)) {
+        const index = numberOrNull(value.index);
+        const score = numberOrNull(value.relevancyScore);
+        const contentStatus = stringOrNull(value.contentStatus);
+        const tacticalStatus = stringOrNull(value.tacticalStatus);
+        const row = index === null ? null : group[Math.round(index)];
+        if (
+          !row ||
+          score === null ||
+          score > 100 ||
+          !["amber", "green", "red"].includes(contentStatus ?? "") ||
+          ![
+            "create_content",
+            "green",
+            "new_content",
+            "no_action_needed",
+            "optimise_content",
+          ].includes(tacticalStatus ?? "")
+        ) {
+          continue;
+        }
+        output.set(normaliseKeyword(row.keyword), {
+          contentStatus: contentStatus as "amber" | "green" | "red",
+          relevancyScore: score,
+          tacticalStatus: tacticalStatus as SiteArchitectureResult["tacticalStatus"],
+        });
+      }
+    }
+    return output;
+  }
+}
+
+export interface PipelineProviderHydrator {
+  hydrate(
+    pool: DatabasePool,
+    projectId: string,
+    runId: string,
+    stageId: PipelineStageId,
+  ): Promise<void>;
+}
+
+export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
+  constructor(
+    private readonly dataForSeo: DataForSeoClient,
+    private readonly ahrefs: AhrefsClient,
+    private readonly siteArchitecture: AnthropicSiteArchitectureClient,
+    private readonly wait: (milliseconds: number) => Promise<void> = (
+      milliseconds,
+    ) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    private readonly now: () => number = Date.now,
+    private readonly serpWaitMilliseconds = 780_000,
+  ) {}
+
+  async hydrate(
+    pool: DatabasePool,
+    projectId: string,
+    runId: string,
+    stageId: PipelineStageId,
+  ): Promise<void> {
+    switch (stageId) {
+      case "keyword-enrichment":
+        await this.hydrateKeywordMetrics(pool, projectId);
+        return;
+      case "ranking-url":
+        await this.hydrateRankingUrls(pool, projectId);
+        return;
+      case "serp-collection":
+        await this.hydrateSerps(pool, projectId, runId);
+        return;
+      case "authority":
+        await this.hydrateAuthority(pool, projectId);
+        return;
+      case "backlinks":
+        await this.hydrateBacklinks(pool, projectId);
+        return;
+      case "site-architecture":
+        await this.hydrateSiteArchitecture(pool, projectId);
+        return;
+      default:
+        return;
+    }
+  }
+
+  private async project(
+    pool: DatabasePool,
+    projectId: string,
+  ): Promise<ProjectProviderRow> {
+    const result = await pool.query<ProjectProviderRow>(
+      `
+        SELECT project.country, project.language, client.domain
+        FROM navigator_projects AS project
+        JOIN clients AS client ON client.id = project.client_id
+        WHERE project.id = $1
+          AND project.archived_at IS NULL
+          AND client.archived_at IS NULL
+      `,
+      [projectId],
+    );
+    const project = result.rows[0];
+    if (!project) throw new Error(`Project ${projectId} is unavailable.`);
+    return project;
+  }
+
+  private async keywords(
+    pool: DatabasePool,
+    projectId: string,
+  ): Promise<KeywordProviderRow[]> {
+    const result = await pool.query<KeywordProviderRow>(
+      `
+        SELECT keyword, normalised_keyword, avg_monthly_volume, ranking_url
+        FROM keywords
+        WHERE project_id = $1
+          AND detox_status = 'keep'
+        ORDER BY normalised_keyword
+      `,
+      [projectId],
+    );
+    return result.rows;
+  }
+
+  private async hydrateKeywordMetrics(
+    pool: DatabasePool,
+    projectId: string,
+  ): Promise<void> {
+    const [project, keywords] = await Promise.all([
+      this.project(pool, projectId),
+      this.keywords(pool, projectId),
+    ]);
+    const values = await this.dataForSeo.enrichKeywords(
+      keywords.map((keyword) => keyword.keyword),
+      project.country,
+      project.language,
+    );
+    await withTransaction(pool, async (client) => {
+      for (const value of values) {
+        const key = normaliseKeyword(value.keyword);
+        await client.query(
+          `
+            INSERT INTO local_provider_keyword_inputs (
+              project_id,
+              normalised_keyword,
+              keyword,
+              avg_monthly_volume,
+              keyword_difficulty,
+              search_intent
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (project_id, normalised_keyword)
+            DO UPDATE SET
+              keyword = EXCLUDED.keyword,
+              avg_monthly_volume = EXCLUDED.avg_monthly_volume,
+              keyword_difficulty = EXCLUDED.keyword_difficulty,
+              search_intent = EXCLUDED.search_intent
+          `,
+          [
+            projectId,
+            key,
+            value.keyword,
+            value.avgMonthlyVolume,
+            value.keywordDifficulty,
+            value.intent,
+          ],
+        );
+        for (const point of value.monthlyVolumes) {
+          await client.query(
+            `
+              INSERT INTO local_provider_keyword_monthly_volumes (
+                project_id,
+                normalised_keyword,
+                month,
+                volume
+              )
+              VALUES ($1, $2, $3, $4)
+              ON CONFLICT (project_id, normalised_keyword, month)
+              DO UPDATE SET volume = EXCLUDED.volume
+            `,
+            [projectId, key, point.month, point.volume],
+          );
+        }
+      }
+    });
+  }
+
+  private async hydrateRankingUrls(
+    pool: DatabasePool,
+    projectId: string,
+  ): Promise<void> {
+    const [project, keywords] = await Promise.all([
+      this.project(pool, projectId),
+      this.keywords(pool, projectId),
+    ]);
+    const matches = await this.dataForSeo.rankingUrls(
+      project.domain,
+      keywords.map((keyword) => keyword.keyword),
+      project.country,
+      project.language,
+    );
+    const byKeyword = new Map(
+      matches.map((match) => [normaliseKeyword(match.keyword), match]),
+    );
+    await withTransaction(pool, async (client) => {
+      for (const keyword of keywords) {
+        const match = byKeyword.get(keyword.normalised_keyword);
+        await client.query(
+          `
+            INSERT INTO local_provider_keyword_inputs (
+              project_id,
+              normalised_keyword,
+              keyword,
+              ranking_url,
+              rank
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (project_id, normalised_keyword)
+            DO UPDATE SET
+              keyword = EXCLUDED.keyword,
+              ranking_url = EXCLUDED.ranking_url,
+              rank = EXCLUDED.rank
+          `,
+          [
+            projectId,
+            keyword.normalised_keyword,
+            keyword.keyword,
+            match?.url ?? null,
+            match?.rank ?? null,
+          ],
+        );
+      }
+    });
+  }
+
+  private async hydrateSerps(
+    pool: DatabasePool,
+    projectId: string,
+    runId: string,
+  ): Promise<void> {
+    const [project, keywords] = await Promise.all([
+      this.project(pool, projectId),
+      this.keywords(pool, projectId),
+    ]);
+    await pool.query(
+      `
+        INSERT INTO provider_work_items (
+          pipeline_run_id,
+          project_id,
+          stage_id,
+          item_key,
+          provider
+        )
+        SELECT $1, $2, 'serp-collection', input.item_key, 'dataforseo'
+        FROM jsonb_to_recordset($3::jsonb) AS input(item_key text)
+        ON CONFLICT (pipeline_run_id, stage_id, item_key) DO NOTHING
+      `,
+      [
+        runId,
+        projectId,
+        JSON.stringify(
+          keywords.map((keyword) => ({
+            item_key: keyword.normalised_keyword,
+          })),
+        ),
+      ],
+    );
+    let work = await this.serpWork(pool, runId);
+    const byKey = new Map(
+      keywords.map((keyword) => [keyword.normalised_keyword, keyword]),
+    );
+    const unsubmitted = work
+      .filter(
+        (item) => item.state === "pending" && !item.provider_task_id,
+      )
+      .map((item) => ({
+        itemKey: item.item_key,
+        keyword: byKey.get(item.item_key)?.keyword ?? item.item_key,
+      }));
+    if (unsubmitted.length > 0) {
+      const submitted = await this.dataForSeo.submitSerpTasks(
+        unsubmitted,
+        project.country,
+        project.language,
+      );
+      await withTransaction(pool, async (client) => {
+        for (const task of submitted) {
+          await client.query(
+            `
+              UPDATE provider_work_items
+              SET
+                provider_task_id = $4,
+                state = 'submitted',
+                attempt_count = attempt_count + 1,
+                submitted_at = now(),
+                updated_at = now()
+              WHERE pipeline_run_id = $1
+                AND stage_id = 'serp-collection'
+                AND item_key = $2
+                AND project_id = $3
+            `,
+            [runId, task.itemKey, projectId, task.providerTaskId],
+          );
+        }
+      });
+    }
+    const deadline = this.now() + this.serpWaitMilliseconds;
+    while (this.now() < deadline) {
+      work = await this.serpWork(pool, runId);
+      const remaining = work.filter((item) => item.state !== "succeeded");
+      if (remaining.length === 0) return;
+      if (remaining.some((item) => item.state === "failed")) {
+        throw new Error("A DataForSEO SERP work item failed.");
+      }
+      const ready = await this.dataForSeo.readySerpTaskIds();
+      const readyItems = remaining.filter(
+        (item) =>
+          item.provider_task_id && ready.has(item.provider_task_id),
+      );
+      await concurrently(readyItems, 10, async (item) => {
+        const results = await this.dataForSeo.serpTaskResult(
+          item.provider_task_id!,
+        );
+        const keyword = byKey.get(item.item_key);
+        if (!keyword) throw new Error("SERP work item lost its keyword.");
+        await this.persistSerp(
+          pool,
+          projectId,
+          runId,
+          keyword,
+          results,
+        );
+      });
+      if (readyItems.length === 0) await this.wait(3_000);
+    }
+    throw new Error("DataForSEO SERP tasks are still pending.");
+  }
+
+  private async serpWork(
+    pool: DatabasePool,
+    runId: string,
+  ): Promise<ProviderWorkItemRow[]> {
+    const result = await pool.query<ProviderWorkItemRow>(
+      `
+        SELECT item_key, provider_task_id, state
+        FROM provider_work_items
+        WHERE pipeline_run_id = $1
+          AND stage_id = 'serp-collection'
+        ORDER BY item_key
+      `,
+      [runId],
+    );
+    return result.rows;
+  }
+
+  private async persistSerp(
+    pool: DatabasePool,
+    projectId: string,
+    runId: string,
+    keyword: KeywordProviderRow,
+    results: SerpResult[],
+  ): Promise<void> {
+    await withTransaction(pool, async (client) => {
+      await client.query(
+        `
+          INSERT INTO local_provider_serp_keywords (
+            project_id,
+            normalised_keyword,
+            keyword
+          )
+          VALUES ($1, $2, $3)
+          ON CONFLICT (project_id, normalised_keyword)
+          DO UPDATE SET keyword = EXCLUDED.keyword
+        `,
+        [projectId, keyword.normalised_keyword, keyword.keyword],
+      );
+      await client.query(
+        `
+          DELETE FROM local_provider_serp_results
+          WHERE project_id = $1
+            AND normalised_keyword = $2
+        `,
+        [projectId, keyword.normalised_keyword],
+      );
+      for (const result of results) {
+        await client.query(
+          `
+            INSERT INTO local_provider_serp_results (
+              project_id,
+              normalised_keyword,
+              rank_absolute,
+              url,
+              domain
+            )
+            VALUES ($1, $2, $3, $4, $5)
+          `,
+          [
+            projectId,
+            keyword.normalised_keyword,
+            result.rankAbsolute,
+            result.url,
+            result.domain,
+          ],
+        );
+      }
+      await client.query(
+        `
+          UPDATE provider_work_items
+          SET
+            state = 'succeeded',
+            completed_at = now(),
+            updated_at = now(),
+            last_error = NULL
+          WHERE pipeline_run_id = $1
+            AND stage_id = 'serp-collection'
+            AND item_key = $2
+        `,
+        [runId, keyword.normalised_keyword],
+      );
+    });
+  }
+
+  private async hydrateAuthority(
+    pool: DatabasePool,
+    projectId: string,
+  ): Promise<void> {
+    const project = await this.project(pool, projectId);
+    const metrics = await this.ahrefs.metrics([
+      { mode: "domain", url: cleanDomain(project.domain) },
+    ]);
+    const value = metrics.get(cleanDomain(project.domain));
+    if (!value) throw new Error("Ahrefs returned no client-domain record.");
+    await pool.query(
+      `
+        UPDATE navigator_projects
+        SET
+          authority_domain_rating = COALESCE($2, authority_domain_rating),
+          authority_referring_domains = COALESCE($3, authority_referring_domains),
+          authority_backlinks = COALESCE($4, authority_backlinks),
+          updated_at = now()
+        WHERE id = $1
+      `,
+      [
+        projectId,
+        value.domainRating,
+        value.referringDomains,
+        value.backlinks,
+      ],
+    );
+  }
+
+  private async hydrateBacklinks(
+    pool: DatabasePool,
+    projectId: string,
+  ): Promise<void> {
+    const result = await pool.query<{ url: string }>(
+      `
+        SELECT DISTINCT url
+        FROM local_provider_serp_results
+        WHERE project_id = $1
+        ORDER BY url
+      `,
+      [projectId],
+    );
+    const metrics = await this.ahrefs.metrics(
+      result.rows.map((row) => ({ mode: "exact" as const, url: row.url })),
+    );
+    await withTransaction(pool, async (client) => {
+      for (const [url, value] of metrics) {
+        await client.query(
+          `
+            UPDATE local_provider_serp_results
+            SET
+              url_rating = $3,
+              domain_rating = $4,
+              ahrefs_rank = $5,
+              referring_domains = $6,
+              backlinks = $7
+            WHERE project_id = $1
+              AND url = $2
+          `,
+          [
+            projectId,
+            url,
+            value.urlRating,
+            value.domainRating,
+            value.ahrefsRank,
+            value.referringDomains,
+            value.backlinks,
+          ],
+        );
+      }
+    });
+  }
+
+  private async hydrateSiteArchitecture(
+    pool: DatabasePool,
+    projectId: string,
+  ): Promise<void> {
+    const keywords = await this.keywords(pool, projectId);
+    const requiresScoring = keywords.filter(
+      (
+        keyword,
+      ): keyword is KeywordProviderRow & {
+        ranking_url: string;
+      } => Boolean(keyword.ranking_url),
+    );
+    const scores = await this.siteArchitecture.score(
+      requiresScoring.map((keyword) => ({
+        keyword: keyword.keyword,
+        rankingUrl: keyword.ranking_url,
+      })),
+    );
+    const values: SiteArchitectureResult[] = keywords.map((keyword) => {
+      if (!keyword.ranking_url) {
+        return {
+          contentStatus: "red",
+          keyword: keyword.keyword,
+          matchedUrl: null,
+          relevancyScore: 0,
+          tacticalStatus: "create_content",
+        };
+      }
+      const score = scores.get(keyword.normalised_keyword);
+      return {
+        contentStatus: score?.contentStatus ?? "amber",
+        keyword: keyword.keyword,
+        matchedUrl: keyword.ranking_url,
+        relevancyScore: score?.relevancyScore ?? 50,
+        tacticalStatus: score?.tacticalStatus ?? "optimise_content",
+      };
+    });
+    await withTransaction(pool, async (client) => {
+      for (const value of values) {
+        await client.query(
+          `
+            INSERT INTO local_provider_site_architecture_inputs (
+              project_id,
+              normalised_keyword,
+              keyword,
+              matched_url,
+              relevancy_score,
+              content_status,
+              tactical_status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (project_id, normalised_keyword)
+            DO UPDATE SET
+              keyword = EXCLUDED.keyword,
+              matched_url = EXCLUDED.matched_url,
+              relevancy_score = EXCLUDED.relevancy_score,
+              content_status = EXCLUDED.content_status,
+              tactical_status = EXCLUDED.tactical_status
+          `,
+          [
+            projectId,
+            normaliseKeyword(value.keyword),
+            value.keyword,
+            value.matchedUrl,
+            value.relevancyScore,
+            value.contentStatus,
+            value.tacticalStatus,
+          ],
+        );
+      }
+    });
+  }
+}

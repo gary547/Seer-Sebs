@@ -1,0 +1,572 @@
+{
+  "schemaVersion": "1.1",
+  "client": {
+    "id": "31000000-0000-4000-8000-000000000001",
+    "companyName": "Northstar Home",
+    "domain": "northstar-home.test",
+    "industry": "Consumer electronics",
+    "brandTerms": [
+      "northstar",
+      "northstar home"
+    ]
+  },
+  "project": {
+    "id": "32000000-0000-4000-8000-000000000001",
+    "clientId": "31000000-0000-4000-8000-000000000001",
+    "name": "UK Television Growth",
+    "country": "GB",
+    "language": "en",
+    "currency": "GBP",
+    "categoryFocus": "television"
+  },
+  "rules": {
+    "whitelist": [
+      "northstar",
+      "currys tv deals"
+    ],
+    "blacklist": [
+      "casino",
+      "weather"
+    ],
+    "ownBrands": [
+      "northstar"
+    ],
+    "competitorBrands": [
+      "currys"
+    ],
+    "relevantTerms": [
+      "tv",
+      "television",
+      "oled"
+    ]
+  },
+  "keywords": [
+    {
+      "id": "33000000-0000-4000-8000-000000000001",
+      "text": "northstar tv deals",
+      "avgMonthlyVolume": 1600,
+      "keywordDifficulty": 28,
+      "rankingUrl": "https://northstar-home.test/televisions/northstar"
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000002",
+      "text": "currys tv deals",
+      "avgMonthlyVolume": 1900,
+      "keywordDifficulty": 35,
+      "rankingUrl": null
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000003",
+      "text": "buy 55 inch oled tv",
+      "avgMonthlyVolume": 2400,
+      "keywordDifficulty": 42,
+      "rankingUrl": "https://northstar-home.test/televisions/oled/55-inch"
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000004",
+      "text": "best 4k television",
+      "avgMonthlyVolume": 3600,
+      "keywordDifficulty": 48,
+      "rankingUrl": "https://northstar-home.test/guides/best-4k-televisions"
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000005",
+      "text": "lg oled 55 inch tv",
+      "avgMonthlyVolume": 2900,
+      "keywordDifficulty": 39,
+      "rankingUrl": "https://northstar-home.test/televisions/lg/oled"
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000006",
+      "text": "tv repair near me",
+      "avgMonthlyVolume": 880,
+      "keywordDifficulty": 31,
+      "rankingUrl": null
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000007",
+      "text": "television",
+      "avgMonthlyVolume": 12000,
+      "keywordDifficulty": 70,
+      "rankingUrl": "https://northstar-home.test/televisions"
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000008",
+      "text": "cheap tv stand",
+      "avgMonthlyVolume": 1300,
+      "keywordDifficulty": 26,
+      "rankingUrl": "https://northstar-home.test/tv-accessories/stands"
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000009",
+      "text": "how to mount a tv on plasterboard",
+      "avgMonthlyVolume": 720,
+      "keywordDifficulty": 22,
+      "rankingUrl": "https://northstar-home.test/guides/mount-tv-plasterboard"
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000010",
+      "text": "why does my television have no sound",
+      "avgMonthlyVolume": 590,
+      "keywordDifficulty": 18,
+      "rankingUrl": "https://northstar-home.test/guides/television-no-sound"
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000011",
+      "text": "casino bonus no deposit",
+      "avgMonthlyVolume": null,
+      "keywordDifficulty": null,
+      "rankingUrl": null
+    },
+    {
+      "id": "33000000-0000-4000-8000-000000000012",
+      "text": "weather tomorrow",
+      "avgMonthlyVolume": 0,
+      "keywordDifficulty": null,
+      "rankingUrl": null
+    }
+  ],
+  "gscRows": [
+    {
+      "query": "northstar tv deals",
+      "page": "https://northstar-home.test/televisions/northstar",
+      "device": "mobile",
+      "clicks": 82,
+      "impressions": 1240,
+      "ctr": 0.0661,
+      "position": 3.2
+    },
+    {
+      "query": "northstar tv deals",
+      "page": "https://northstar-home.test/televisions/northstar",
+      "device": "desktop",
+      "clicks": 37,
+      "impressions": 510,
+      "ctr": 0.0725,
+      "position": 2.8
+    },
+    {
+      "query": "buy 55 inch oled tv",
+      "page": "https://northstar-home.test/televisions/oled/55-inch",
+      "device": "mobile",
+      "clicks": 64,
+      "impressions": 1810,
+      "ctr": 0.0354,
+      "position": 6.4
+    },
+    {
+      "query": "best 4k television",
+      "page": "https://northstar-home.test/guides/best-4k-televisions",
+      "device": "desktop",
+      "clicks": 41,
+      "impressions": 2200,
+      "ctr": 0.0186,
+      "position": 9.1
+    },
+    {
+      "query": "how to mount a tv on plasterboard",
+      "page": "https://northstar-home.test/guides/mount-tv-plasterboard",
+      "device": "mobile",
+      "clicks": 28,
+      "impressions": 830,
+      "ctr": 0.0337,
+      "position": 5.7
+    },
+    {
+      "query": "lg oled 55 inch tv",
+      "page": "https://northstar-home.test/televisions/lg/oled",
+      "device": "mobile",
+      "clicks": 19,
+      "impressions": 970,
+      "ctr": 0.0196,
+      "position": 11.3
+    },
+    {
+      "query": "tv repair near me",
+      "page": "https://northstar-home.test/services/tv-repair",
+      "device": "mobile",
+      "clicks": 11,
+      "impressions": 340,
+      "ctr": 0.0324,
+      "position": 7.8
+    },
+    {
+      "query": "55 inch smart tv",
+      "page": "https://northstar-home.test/televisions/55-inch",
+      "device": "mobile",
+      "clicks": 14,
+      "impressions": 720,
+      "ctr": 0.0194,
+      "position": 10.2
+    },
+    {
+      "query": "oled tv offers",
+      "page": "https://northstar-home.test/televisions/oled",
+      "device": "desktop",
+      "clicks": 8,
+      "impressions": 410,
+      "ctr": 0.0195,
+      "position": 12.4
+    }
+  ],
+  "authority": {
+    "domainRating": 47,
+    "referringDomains": 1380,
+    "backlinks": 18420
+  },
+  "economics": {
+    "conversionRate": 0.025,
+    "averageOrderValue": 650,
+    "gscWindowDays": 30
+  },
+  "providerInputs": {
+    "keywords": [
+      {
+        "text": "55 inch smart tv",
+        "avgMonthlyVolume": 5400,
+        "keywordDifficulty": 43,
+        "intent": "commercial",
+        "rankingUrl": null,
+        "rank": null,
+        "monthlyVolumes": [
+          { "month": "2025-01-01", "volume": 4300 },
+          { "month": "2025-02-01", "volume": 4400 },
+          { "month": "2025-03-01", "volume": 4500 },
+          { "month": "2025-04-01", "volume": 4600 },
+          { "month": "2025-05-01", "volume": 4700 },
+          { "month": "2025-06-01", "volume": 4800 },
+          { "month": "2025-07-01", "volume": 5000 },
+          { "month": "2025-08-01", "volume": 5200 },
+          { "month": "2025-09-01", "volume": 5400 },
+          { "month": "2025-10-01", "volume": 6500 },
+          { "month": "2025-11-01", "volume": 8100 },
+          { "month": "2025-12-01", "volume": 7200 }
+        ]
+      },
+      {
+        "text": "oled tv offers",
+        "avgMonthlyVolume": 1300,
+        "keywordDifficulty": 35,
+        "intent": "transactional",
+        "rankingUrl": null,
+        "rank": null,
+        "monthlyVolumes": [
+          { "month": "2025-01-01", "volume": 900 },
+          { "month": "2025-02-01", "volume": 950 },
+          { "month": "2025-03-01", "volume": 980 },
+          { "month": "2025-04-01", "volume": 1000 },
+          { "month": "2025-05-01", "volume": 1050 },
+          { "month": "2025-06-01", "volume": 1100 },
+          { "month": "2025-07-01", "volume": 1150 },
+          { "month": "2025-08-01", "volume": 1200 },
+          { "month": "2025-09-01", "volume": 1250 },
+          { "month": "2025-10-01", "volume": 1400 },
+          { "month": "2025-11-01", "volume": 1800 },
+          { "month": "2025-12-01", "volume": 1650 }
+        ]
+      },
+      {
+        "text": "currys tv deals",
+        "avgMonthlyVolume": null,
+        "keywordDifficulty": null,
+        "intent": null,
+        "rankingUrl": "https://northstar-home.test/guides/currys-tv-alternatives",
+        "rank": 14
+      }
+    ],
+    "serpKeywords": [
+      {
+        "text": "northstar tv deals",
+        "results": [
+          {
+            "rankAbsolute": 1,
+            "url": "https://www.techradar.com/televisions/tv-deals",
+            "domain": "techradar.com",
+            "urlRating": 67,
+            "domainRating": 92,
+            "ahrefsRank": 410,
+            "referringDomains": 2140,
+            "backlinks": 8420
+          },
+          {
+            "rankAbsolute": 2,
+            "url": "https://www.currys.co.uk/tv-and-audio/televisions",
+            "domain": "currys.co.uk",
+            "urlRating": 54,
+            "domainRating": 89,
+            "ahrefsRank": 780,
+            "referringDomains": 986,
+            "backlinks": 3210
+          },
+          {
+            "rankAbsolute": 3,
+            "url": "https://northstar-home.test/televisions/northstar",
+            "domain": "northstar-home.test",
+            "urlRating": 41,
+            "domainRating": 47,
+            "ahrefsRank": 18400,
+            "referringDomains": 230,
+            "backlinks": 620
+          }
+        ]
+      },
+      {
+        "text": "currys tv deals",
+        "results": [
+          {
+            "rankAbsolute": 1,
+            "url": "https://www.currys.co.uk/tv-and-audio/televisions",
+            "domain": "currys.co.uk",
+            "urlRating": 58,
+            "domainRating": 89,
+            "ahrefsRank": 780,
+            "referringDomains": 1120,
+            "backlinks": 3890
+          },
+          {
+            "rankAbsolute": 2,
+            "url": "https://ao.com/l/tvs/1-9/107-108",
+            "domain": "ao.com",
+            "urlRating": 55,
+            "domainRating": 86,
+            "ahrefsRank": 980,
+            "referringDomains": 940,
+            "backlinks": 2750
+          },
+          {
+            "rankAbsolute": 14,
+            "url": "https://northstar-home.test/guides/currys-tv-alternatives",
+            "domain": "northstar-home.test",
+            "urlRating": 29,
+            "domainRating": 47,
+            "ahrefsRank": 18400,
+            "referringDomains": 78,
+            "backlinks": 190
+          }
+        ]
+      },
+      {
+        "text": "buy 55 inch oled tv",
+        "results": [
+          {
+            "rankAbsolute": 1,
+            "url": "https://www.amazon.co.uk/55-inch-oled-tv",
+            "domain": "amazon.co.uk",
+            "urlRating": 71,
+            "domainRating": 96,
+            "ahrefsRank": 12,
+            "referringDomains": 3520,
+            "backlinks": 12800
+          },
+          {
+            "rankAbsolute": 2,
+            "url": "https://www.currys.co.uk/tv-and-audio/televisions/oled-tvs",
+            "domain": "currys.co.uk",
+            "urlRating": 60,
+            "domainRating": 89,
+            "ahrefsRank": 780,
+            "referringDomains": 1450,
+            "backlinks": 4980
+          },
+          {
+            "rankAbsolute": 6,
+            "url": "https://northstar-home.test/televisions/oled/55-inch",
+            "domain": "northstar-home.test",
+            "urlRating": 38,
+            "domainRating": 47,
+            "ahrefsRank": 18400,
+            "referringDomains": 184,
+            "backlinks": 460
+          }
+        ]
+      },
+      {
+        "text": "best 4k television",
+        "results": [
+          {
+            "rankAbsolute": 1,
+            "url": "https://www.techradar.com/best/best-tv",
+            "domain": "techradar.com",
+            "urlRating": 74,
+            "domainRating": 92,
+            "ahrefsRank": 410,
+            "referringDomains": 4280,
+            "backlinks": 15600
+          },
+          {
+            "rankAbsolute": 2,
+            "url": "https://www.which.co.uk/reviews/televisions/article/how-to-buy-the-best-tv",
+            "domain": "which.co.uk",
+            "urlRating": 69,
+            "domainRating": 91,
+            "ahrefsRank": 520,
+            "referringDomains": 3180,
+            "backlinks": 9800
+          },
+          {
+            "rankAbsolute": 9,
+            "url": "https://northstar-home.test/guides/best-4k-televisions",
+            "domain": "northstar-home.test",
+            "urlRating": 36,
+            "domainRating": 47,
+            "ahrefsRank": 18400,
+            "referringDomains": 152,
+            "backlinks": 390
+          }
+        ]
+      }
+    ],
+    "siteArchitectureKeywords": [
+      {
+        "text": "northstar tv deals",
+        "matchedUrl": "https://northstar-home.test/televisions/northstar",
+        "relevancyScore": 92,
+        "contentStatus": "green",
+        "tacticalStatus": "no_action_needed"
+      },
+      {
+        "text": "currys tv deals",
+        "matchedUrl": "https://northstar-home.test/guides/currys-tv-alternatives",
+        "relevancyScore": 58,
+        "contentStatus": "amber",
+        "tacticalStatus": "optimise_content"
+      },
+      {
+        "text": "buy 55 inch oled tv",
+        "matchedUrl": "https://northstar-home.test/televisions/oled/55-inch",
+        "relevancyScore": 88,
+        "contentStatus": "green",
+        "tacticalStatus": "no_action_needed"
+      },
+      {
+        "text": "best 4k television",
+        "matchedUrl": "https://northstar-home.test/guides/best-4k-televisions",
+        "relevancyScore": 74,
+        "contentStatus": "amber",
+        "tacticalStatus": "optimise_content"
+      },
+      {
+        "text": "55 inch smart tv",
+        "matchedUrl": null,
+        "relevancyScore": 0,
+        "contentStatus": "red",
+        "tacticalStatus": "create_content"
+      }
+    ]
+  },
+  "expected": {
+    "promotedQueries": [
+      "55 inch smart tv",
+      "oled tv offers"
+    ],
+    "summary": {
+      "processingKeywordCount": 14,
+      "keptKeywordCount": 12,
+      "removedKeywordCount": 2,
+      "reviewKeywordCount": 0,
+      "liveKeywordCount": 10,
+      "deferredKeywordCount": 2,
+      "missingRankingUrlCount": 1
+    },
+    "keywordOutcomes": [
+      {
+        "text": "northstar tv deals",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "Brand",
+        "intent": "navigational"
+      },
+      {
+        "text": "currys tv deals",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "Competitor",
+        "intent": "navigational"
+      },
+      {
+        "text": "buy 55 inch oled tv",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "Electronics",
+        "intent": "transactional"
+      },
+      {
+        "text": "best 4k television",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "Electronics",
+        "intent": "commercial"
+      },
+      {
+        "text": "lg oled 55 inch tv",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "Electronics",
+        "intent": "commercial"
+      },
+      {
+        "text": "tv repair near me",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "TV Repair",
+        "intent": "transactional"
+      },
+      {
+        "text": "television",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "Electronics",
+        "intent": "informational"
+      },
+      {
+        "text": "cheap tv stand",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "TV Accessories",
+        "intent": "transactional"
+      },
+      {
+        "text": "how to mount a tv on plasterboard",
+        "detoxDecision": "keep",
+        "tier": "deferred",
+        "category": "TV Installation",
+        "intent": "informational"
+      },
+      {
+        "text": "why does my television have no sound",
+        "detoxDecision": "keep",
+        "tier": "deferred",
+        "category": "TV Support",
+        "intent": "informational"
+      },
+      {
+        "text": "casino bonus no deposit",
+        "detoxDecision": "remove",
+        "tier": null,
+        "category": null,
+        "intent": null
+      },
+      {
+        "text": "weather tomorrow",
+        "detoxDecision": "remove",
+        "tier": null,
+        "category": null,
+        "intent": null
+      },
+      {
+        "text": "55 inch smart tv",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "Electronics",
+        "intent": "commercial"
+      },
+      {
+        "text": "oled tv offers",
+        "detoxDecision": "keep",
+        "tier": "live",
+        "category": "Electronics",
+        "intent": "transactional"
+      }
+    ]
+  }
+}

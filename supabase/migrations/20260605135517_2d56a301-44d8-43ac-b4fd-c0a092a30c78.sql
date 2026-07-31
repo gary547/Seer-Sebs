@@ -1,0 +1,1 @@
+ALTER TABLE public.detox_jobs ADD COLUMN IF NOT EXISTS block_reason text;

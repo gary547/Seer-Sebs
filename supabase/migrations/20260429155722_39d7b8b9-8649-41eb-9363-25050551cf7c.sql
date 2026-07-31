@@ -1,0 +1,1 @@
+ALTER TABLE public.site_architecture ADD CONSTRAINT site_architecture_keyword_id_key UNIQUE (keyword_id);

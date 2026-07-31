@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "expectedTableCount": 8,
+  "tables": [
+    {
+      "source": "public.clients",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_copy",
+      "runtimeTarget": "public.clients"
+    },
+    {
+      "source": "public.keywords",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_transform",
+      "runtimeTarget": "public.keywords"
+    },
+    {
+      "source": "public.monitor_campaigns",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_copy",
+      "runtimeTarget": "public.monitor_campaigns"
+    },
+    {
+      "source": "public.monitored_urls",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_transform",
+      "runtimeTarget": "public.monitored_urls"
+    },
+    {
+      "source": "public.navigator_projects",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_copy",
+      "runtimeTarget": "public.navigator_projects"
+    },
+    {
+      "source": "public.profiles",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_transform",
+      "runtimeTarget": "public.profiles"
+    },
+    {
+      "source": "public.url_check_snapshots",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_copy",
+      "runtimeTarget": "public.url_check_snapshots"
+    },
+    {
+      "source": "public.url_issues",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_copy",
+      "runtimeTarget": "public.url_issues"
+    }
+  ]
+}

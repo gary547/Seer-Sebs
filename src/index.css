@@ -1,0 +1,397 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Executive Briefing OS — Dual theme
+ *
+ *   Light  (:root)   "Daylight Briefing" — warm off-white canvas, charcoal ink,
+ *                    violet signal accent. Calm, editorial, trustworthy.
+ *   Dark   (.dark)   "Midnight Violet" — deep navy-black canvas with ambient
+ *                    violet glow, raised dark surfaces, vivid violet→magenta
+ *                    accent gradients.
+ *
+ * Components consume semantic tokens only; the toggle in the header swaps
+ * `.dark` on <html>. Both themes share identical layout, type and spacing.
+ */
+
+@layer base {
+  /* ---------------- LIGHT — Daylight Briefing (No Brainer palette) ---------------- */
+  :root {
+    /* Canvas — warm off-white */
+    --background: 40 30% 97%;
+    --foreground: 211 100% 11%;        /* deep navy ink #001B38 */
+
+    --card: 0 0% 100%;
+    --card-foreground: 211 100% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 211 100% 11%;
+
+    /* Single brand accent — teal, deepened slightly for AA on white */
+    --primary: 182 100% 28%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 40 24% 94%;
+    --secondary-foreground: 211 100% 11%;
+
+    --muted: 40 24% 95%;
+    --muted-foreground: 211 22% 32%;
+
+    --accent: 182 100% 28%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 9 73% 50%;           /* coral as destructive */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 36 12% 88%;
+    --input: 36 12% 88%;
+    --ring: 182 100% 28%;
+
+    --radius: 0.875rem;
+
+    /* Editorial extension tokens */
+    --canvas: 40 30% 97%;
+    --surface: 0 0% 100%;
+    --surface-sunk: 40 24% 95%;
+    --surface-raised: 0 0% 100%;
+    --hairline: 36 12% 88%;
+    --hairline-strong: 36 10% 78%;
+
+    --ink: 211 100% 11%;                /* deep navy charcoal */
+    --ink-muted: 211 22% 36%;
+    --ink-subtle: 211 14% 52%;
+
+    /* Signal — No Brainer teal, with coral companion + amber tertiary */
+    --signal: 182 100% 32%;             /* teal — slight darken from #00A2A5 for AA */
+    --signal-2: 9 73% 57%;              /* coral #E15440 */
+    --signal-3: 44 99% 51%;             /* amber #FEBB06 */
+    --signal-soft: 182 60% 94%;
+    --signal-ink: 182 100% 24%;
+
+    /* Obsidian set — deep navy from the No Brainer deck */
+    --obsidian: 211 100% 11%;           /* #001B38 */
+    --obsidian-2: 211 80% 14%;
+    --obsidian-3: 211 60% 18%;
+    --obsidian-line: 211 40% 26%;
+    --obsidian-ink: 0 0% 100%;
+    --obsidian-ink-muted: 211 14% 72%;
+
+    /* Categorical "fourth" colour — deep navy on light, white on dark.
+       Use this in charts/badges where obsidian was used as a *data* colour
+       (e.g. "improve", "commercial"). Never use raw --obsidian for data fills. */
+    --cat-navy: 211 100% 11%;
+    --cat-navy-ink: 0 0% 100%;
+
+    /* Functional data colors — mapped to No Brainer brand palette */
+    --pos: 182 100% 28%;        /* teal */
+    --pos-soft: 182 60% 94%;
+    --neg: 9 73% 50%;           /* coral */
+    --neg-soft: 9 80% 96%;
+    --warn: 44 99% 51%;         /* amber */
+    --warn-soft: 44 99% 94%;
+    --neutral: 211 14% 52%;
+
+    --sidebar-background: 40 28% 96%;
+    --sidebar-foreground: 211 22% 28%;
+    --sidebar-primary: 182 100% 32%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 40 24% 92%;
+    --sidebar-accent-foreground: 211 100% 11%;
+    --sidebar-border: 36 12% 86%;
+    --sidebar-ring: 182 100% 32%;
+
+    --warning: 44 99% 47%;
+    --warning-foreground: 211 100% 11%;
+    --peach: 9 73% 60%;
+    --peach-foreground: 0 0% 100%;
+    --success: 182 100% 28%;
+    --success-foreground: 0 0% 100%;
+
+    --shadow-hairline: 0 0 0 1px hsl(var(--hairline));
+    --shadow-card:
+      0 1px 2px hsl(211 100% 11% / 0.04),
+      0 8px 24px -16px hsl(211 100% 11% / 0.10);
+    --shadow-raised:
+      0 1px 2px hsl(211 100% 11% / 0.05),
+      0 18px 40px -22px hsl(211 100% 11% / 0.18),
+      0 0 0 1px hsl(var(--signal) / 0.10);
+    --shadow-obsidian:
+      0 24px 60px -28px hsl(211 100% 5% / 0.55),
+      0 0 0 1px hsl(var(--obsidian-line));
+    --glow-signal:
+      0 0 0 1px hsl(var(--signal) / 0.25),
+      0 8px 24px -8px hsl(var(--signal) / 0.30);
+    --glow-signal-soft:
+      0 0 24px -8px hsl(var(--signal) / 0.30);
+
+    /* Signature gradients — teal → coral mirrors the deck blobs */
+    --gradient-signal: linear-gradient(135deg, hsl(var(--signal)) 0%, hsl(var(--signal-2)) 100%);
+    --gradient-signal-soft: linear-gradient(135deg, hsl(var(--signal) / 0.10) 0%, hsl(var(--signal-2) / 0.06) 100%);
+    --gradient-canvas:
+      radial-gradient(50% 35% at 0% 0%, hsl(182 70% 88% / 0.55) 0%, transparent 60%),
+      radial-gradient(40% 30% at 100% 0%, hsl(9 80% 92% / 0.45) 0%, transparent 70%),
+      hsl(var(--canvas));
+    --gradient-obsidian:
+      radial-gradient(38% 42% at 92% 8%,  hsl(44 99% 55% / 0.92) 0%, transparent 62%),
+      radial-gradient(46% 50% at 78% 58%, hsl(9 73% 60% / 0.85) 0%, transparent 65%),
+      radial-gradient(34% 36% at 96% 96%, hsl(182 70% 42% / 0.78) 0%, transparent 65%),
+      linear-gradient(180deg, hsl(var(--obsidian-2)) 0%, hsl(var(--obsidian)) 100%);
+  }
+
+  /* ---------------- DARK — Midnight Signal (No Brainer palette) ---------------- */
+  .dark {
+    --background: 211 100% 7%;          /* deep navy canvas */
+    --foreground: 0 0% 98%;
+
+    --card: 211 70% 11%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 211 80% 9%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 182 100% 38%;
+    --primary-foreground: 211 100% 7%;
+
+    --secondary: 211 50% 16%;
+    --secondary-foreground: 211 14% 88%;
+
+    --muted: 211 40% 14%;
+    --muted-foreground: 211 14% 68%;
+
+    --accent: 182 100% 38%;
+    --accent-foreground: 211 100% 7%;
+
+    --destructive: 9 78% 62%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 211 40% 18%;
+    --input: 211 40% 18%;
+    --ring: 182 100% 38%;
+
+    --canvas: 211 100% 7%;
+    --surface: 211 70% 11%;
+    --surface-sunk: 211 80% 9%;
+    --surface-raised: 211 60% 14%;
+    --hairline: 211 40% 18%;
+    --hairline-strong: 211 30% 28%;
+
+    --ink: 0 0% 98%;
+    --ink-muted: 211 14% 72%;
+    --ink-subtle: 211 12% 56%;
+
+    /* Signal — teal accent, coral companion, amber tertiary */
+    --signal: 182 100% 38%;             /* teal lifted for dark */
+    --signal-2: 9 78% 62%;              /* coral lifted */
+    --signal-3: 44 99% 55%;             /* amber */
+    --signal-soft: 182 60% 16%;
+    --signal-ink: 182 80% 70%;
+
+    --obsidian: 211 100% 6%;
+    --obsidian-2: 211 90% 9%;
+    --obsidian-3: 211 70% 13%;
+    --obsidian-line: 211 40% 20%;
+    --obsidian-ink: 0 0% 100%;
+    --obsidian-ink-muted: 211 14% 72%;
+
+    /* Dark-mode override: navy is invisible on the navy canvas, so the
+       categorical "fourth" slot becomes near-white for high contrast. */
+    --cat-navy: 0 0% 96%;
+    --cat-navy-ink: 211 100% 11%;
+
+    --pos: 182 100% 38%;        /* teal */
+    --pos-soft: 182 60% 16%;
+    --neg: 9 78% 62%;           /* coral */
+    --neg-soft: 9 50% 16%;
+    --warn: 44 99% 55%;         /* amber */
+    --warn-soft: 44 60% 14%;
+    --neutral: 211 14% 60%;
+
+    --sidebar-background: 211 100% 6%;
+    --sidebar-foreground: 211 14% 78%;
+    --sidebar-primary: 182 100% 38%;
+    --sidebar-primary-foreground: 211 100% 7%;
+    --sidebar-accent: 211 70% 12%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 211 40% 14%;
+    --sidebar-ring: 182 100% 38%;
+
+    --warning: 44 99% 55%;
+    --warning-foreground: 211 100% 7%;
+    --peach: 9 78% 62%;
+    --peach-foreground: 0 0% 100%;
+    --success: 182 100% 38%;
+    --success-foreground: 211 100% 7%;
+
+    --shadow-hairline: 0 0 0 1px hsl(var(--hairline));
+    --shadow-card:
+      0 1px 0 hsl(211 100% 2% / 0.6),
+      0 12px 32px -18px hsl(211 100% 2% / 0.7);
+    --shadow-raised:
+      0 1px 0 hsl(211 100% 2% / 0.6),
+      0 24px 60px -24px hsl(211 100% 2% / 0.8),
+      0 0 0 1px hsl(var(--signal) / 0.18),
+      0 0 32px -8px hsl(var(--signal) / 0.30);
+    --shadow-obsidian:
+      0 32px 80px -28px hsl(211 100% 2% / 0.9),
+      0 0 0 1px hsl(var(--obsidian-line));
+    --glow-signal:
+      0 0 0 1px hsl(var(--signal) / 0.35),
+      0 8px 32px -6px hsl(var(--signal) / 0.40);
+    --glow-signal-soft:
+      0 0 24px -4px hsl(var(--signal) / 0.40);
+
+    --gradient-signal: linear-gradient(135deg, hsl(var(--signal)) 0%, hsl(var(--signal-2)) 100%);
+    --gradient-signal-soft: linear-gradient(135deg, hsl(var(--signal) / 0.18) 0%, hsl(var(--signal-2) / 0.10) 100%);
+    --gradient-canvas:
+      radial-gradient(55% 38% at 8% 0%,   hsl(182 80% 24% / 0.42) 0%, transparent 60%),
+      radial-gradient(45% 32% at 100% 8%, hsl(9 70% 32% / 0.32) 0%, transparent 70%),
+      radial-gradient(50% 30% at 92% 100%,hsl(44 80% 28% / 0.18) 0%, transparent 70%),
+      hsl(var(--canvas));
+    --gradient-obsidian:
+      radial-gradient(38% 42% at 92% 8%,  hsl(44 99% 55% / 0.95) 0%, transparent 62%),
+      radial-gradient(46% 50% at 76% 56%, hsl(9 78% 60% / 0.88) 0%, transparent 65%),
+      radial-gradient(34% 36% at 96% 96%, hsl(182 80% 42% / 0.82) 0%, transparent 65%),
+      linear-gradient(180deg, hsl(var(--obsidian-2)) 0%, hsl(var(--obsidian)) 100%);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-feature-settings: "ss01", "cv11", "kern";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply text-foreground font-body antialiased;
+    background: var(--gradient-canvas);
+    background-attachment: fixed;
+    font-feature-settings: "kern", "liga", "calt";
+  }
+
+  .tabular-nums,
+  [data-tabular] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum", "kern";
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading text-ink;
+    letter-spacing: -0.01em;
+  }
+  h1 { @apply text-[22px] font-bold tracking-tight; }
+  h2 { @apply text-[17px] font-semibold tracking-tight; }
+  h3 { @apply text-[15px] font-semibold; }
+
+  .type-eyebrow {
+    @apply text-[10.5px] font-heading font-semibold uppercase text-ink-muted;
+    letter-spacing: 0.16em;
+  }
+  .type-display {
+    font-family: "Montserrat", ui-serif, serif;
+    font-weight: 900;
+    font-optical-sizing: auto;
+    letter-spacing: -0.02em;
+  }
+  .type-insight {
+    font-family: "Montserrat", ui-serif, serif;
+    font-weight: 900;
+    font-style: italic;
+    letter-spacing: -0.012em;
+  }
+  .type-numeral {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+  .type-mono {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rule-hairline { @apply border-0 border-t border-hairline; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--hairline-strong));
+    border-radius: 999px;
+    border: 2px solid hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--ink-subtle)); }
+
+  ::selection {
+    background: hsl(var(--signal) / 0.35);
+    color: hsl(var(--ink));
+  }
+}
+
+@layer utilities {
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--muted) / 0.5) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  @keyframes briefing-rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .animate-briefing-rise {
+    animation: briefing-rise 520ms cubic-bezier(0.2, 0.6, 0.2, 1) both;
+  }
+  @keyframes briefing-fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  .animate-briefing-fade { animation: briefing-fade 360ms ease-out both; }
+
+  /* Ambient pulse for hero halos */
+  @keyframes signal-pulse {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50%      { opacity: 0.9;  transform: scale(1.06); }
+  }
+  .animate-signal-pulse { animation: signal-pulse 6s ease-in-out infinite; }
+
+  /* Obsidian panel — violet ambient gradient (intentionally dark in BOTH themes) */
+  .surface-obsidian {
+    background: var(--gradient-obsidian);
+    color: hsl(var(--obsidian-ink));
+  }
+  .surface-obsidian-flat {
+    background: hsl(var(--obsidian-2));
+    color: hsl(var(--obsidian-ink));
+  }
+
+  /* Active state rail — glowing violet */
+  .rail-signal {
+    box-shadow:
+      inset 3px 0 0 0 hsl(var(--signal)),
+      0 0 18px -6px hsl(var(--signal) / 0.55);
+  }
+
+  /* Gradient text utility for hero numerals */
+  .text-gradient-signal {
+    background: var(--gradient-signal);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Signature glow halo */
+  .glow-signal { box-shadow: var(--glow-signal); }
+  .glow-signal-soft { box-shadow: var(--glow-signal-soft); }
+}

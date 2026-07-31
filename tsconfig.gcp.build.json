@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.gcp.json",
+  "compilerOptions": {
+    "declaration": true,
+    "declarationMap": true,
+    "noEmit": false,
+    "outDir": "./dist/gcp",
+    "rootDir": "./gcp",
+    "sourceMap": true,
+    "typeRoots": [
+      "./gcp/node_modules/@types"
+    ],
+    "types": [
+      "node"
+    ]
+  },
+  "exclude": [
+    "gcp/**/*.test.ts"
+  ]
+}

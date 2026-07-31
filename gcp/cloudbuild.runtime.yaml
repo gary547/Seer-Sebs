@@ -1,0 +1,162 @@
+steps:
+  - id: source-metadata
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: bash
+    automapSubstitutions: true
+    script: |
+      set -euo pipefail
+      if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "A trigger-provided full COMMIT_SHA is required." >&2
+        exit 1
+      fi
+
+  - id: install
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args: ["ci", "--ignore-scripts", "--fund=false", "--audit=false"]
+    waitFor: ["source-metadata"]
+
+  - id: validate
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args:
+      - run
+      - check:gcp-boundary
+    waitFor: ["install"]
+
+  - id: workflow-parity
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args: ["run", "check:gcp-workflow"]
+    waitFor: ["install"]
+
+  - id: model-parity
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args: ["run", "check:gcp-model-parity"]
+    waitFor: ["install"]
+
+  - id: typecheck
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args: ["run", "typecheck:gcp"]
+    waitFor: ["install"]
+
+  - id: test
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args: ["run", "test:gcp"]
+    waitFor: ["install"]
+
+  - id: build
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: npm
+    args: ["run", "build:gcp"]
+    waitFor: ["install"]
+
+  - id: runtime-container
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/runtime:${COMMIT_SHA}
+      - --file
+      - gcp/Dockerfile
+      - .
+    waitFor:
+      - validate
+      - workflow-parity
+      - model-parity
+      - typecheck
+      - test
+      - build
+
+  - id: database-container
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}
+      - --file
+      - gcp/database.Dockerfile
+      - .
+    waitFor:
+      - validate
+      - workflow-parity
+      - model-parity
+      - typecheck
+      - test
+      - build
+
+  - id: push-runtime
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/runtime:${COMMIT_SHA}
+    waitFor: ["runtime-container"]
+
+  - id: push-database
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}
+    waitFor: ["database-container"]
+
+  - id: resolve-digests
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    automapSubstitutions: true
+    script: |
+      set -euo pipefail
+      runtime_tagged_image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/runtime:${COMMIT_SHA}"
+      database_tagged_image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}"
+      runtime_digest="$(gcloud artifacts docker images describe "${runtime_tagged_image}" --format='value(image_summary.digest)')"
+      database_digest="$(gcloud artifacts docker images describe "${database_tagged_image}" --format='value(image_summary.digest)')"
+      case "${runtime_digest}" in
+        sha256:[0-9a-f][0-9a-f]*) ;;
+        *) echo "Artifact Registry returned an invalid runtime digest." >&2; exit 1 ;;
+      esac
+      case "${database_digest}" in
+        sha256:[0-9a-f][0-9a-f]*) ;;
+        *) echo "Artifact Registry returned an invalid database migration digest." >&2; exit 1 ;;
+      esac
+      mkdir -p /workspace/release
+      printf 'SEER_RELEASE_IMAGE=%s\n' "${runtime_tagged_image%:*}@${runtime_digest}" > /workspace/release/image.env
+      printf 'SEER_RELEASE_DATABASE_IMAGE=%s\n' "${database_tagged_image%:*}@${database_digest}" >> /workspace/release/image.env
+      printf 'SEER_RELEASE_BUILD_ID=%s\n' "${BUILD_ID}" >> /workspace/release/image.env
+      printf 'SEER_RELEASE_COMMIT_SHA=%s\n' "${COMMIT_SHA}" >> /workspace/release/image.env
+      chmod 600 /workspace/release/image.env
+    waitFor: ["push-runtime", "push-database"]
+
+  - id: release-manifest
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    entrypoint: bash
+    script: |
+      set -euo pipefail
+      set -a
+      source /workspace/release/image.env
+      set +a
+      export SEER_RELEASE_OUTPUT_DIRECTORY="/workspace/release"
+      node gcp/scripts/write-release-manifest.mjs
+    waitFor: ["resolve-digests"]
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/runtime:${COMMIT_SHA}
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}
+
+artifacts:
+  objects:
+    location: gs://${_RELEASE_BUCKET}/${BUILD_ID}/
+    paths:
+      - release/release-manifest.json
+      - release/runtime-images.auto.tfvars.json
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _REGION: europe-west2
+  _REPOSITORY: seer-runtime
+  _RELEASE_BUCKET: replace-with-release-metadata-bucket
+
+timeout: 1800s

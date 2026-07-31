@@ -1,0 +1,169 @@
+name: seer-gcp-local
+
+x-runtime: &runtime
+  image: seer-gcp-runtime:local
+  init: true
+  read_only: true
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp
+
+x-healthcheck: &node-healthcheck
+  interval: 2s
+  timeout: 2s
+  retries: 30
+  start_period: 5s
+
+services:
+  postgres:
+    image: seer-gcp-postgres:local
+    build:
+      context: ..
+      dockerfile: gcp/database.local.Dockerfile
+    environment:
+      POSTGRES_DB: seer
+      POSTGRES_PASSWORD: local-owner-only
+      POSTGRES_USER: seer_owner
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seer_owner -d seer"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:25432:5432"
+    volumes:
+      - seer_database:/var/lib/postgresql/data
+
+  object-store:
+    <<: *runtime
+    command: ["node", "dist/gcp/apps/object-store/src/index.js"]
+    environment:
+      INTERNAL_SERVICE_TOKEN: seer-local-internal-token
+      OBJECT_DATA_DIRECTORY: /data/objects
+      PORT: "8080"
+    healthcheck:
+      <<: *node-healthcheck
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+    ports:
+      - "127.0.0.1:18081:8080"
+    volumes:
+      - seer_objects:/data
+
+  api:
+    <<: *runtime
+    build:
+      context: ..
+      dockerfile: gcp/Dockerfile
+    command: ["node", "dist/gcp/apps/api/src/index.js"]
+    depends_on:
+      object-store:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://seer_api_local:local-api-only@postgres:5432/seer
+      INTERNAL_SERVICE_TOKEN: seer-local-internal-token
+      OBJECT_STORE_URL: http://object-store:8080
+      PORT: "8080"
+      SEER_ENVIRONMENT: local
+      SLIDES_MOCK_ENABLED: "true"
+      GOOGLE_SLIDES_TEMPLATE_ID: local-template
+    healthcheck:
+      <<: *node-healthcheck
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+    ports:
+      - "127.0.0.1:18080:8080"
+
+  worker:
+    <<: *runtime
+    command: ["node", "dist/gcp/apps/worker/src/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://seer_worker_local:local-worker-only@postgres:5432/seer
+      INTERNAL_SERVICE_TOKEN: seer-local-internal-token
+      PORT: "8080"
+      SEER_ENVIRONMENT: local
+    healthcheck:
+      <<: *node-healthcheck
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+    ports:
+      - "127.0.0.1:18082:8080"
+
+  dispatcher:
+    <<: *runtime
+    command: ["node", "dist/gcp/apps/dispatcher/src/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://seer_dispatcher_local:local-dispatcher-only@postgres:5432/seer
+      INTERNAL_SERVICE_TOKEN: seer-local-internal-token
+      POLL_MILLISECONDS: "100"
+      PORT: "8080"
+      WORKER_URL: http://worker:8080
+    healthcheck:
+      <<: *node-healthcheck
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+    ports:
+      - "127.0.0.1:18083:8080"
+
+  events:
+    <<: *runtime
+    command: ["node", "dist/gcp/apps/events/src/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://seer_events_local:local-events-only@postgres:5432/seer
+      POLL_MILLISECONDS: "100"
+      PORT: "8080"
+      SEER_ENVIRONMENT: local
+    healthcheck:
+      <<: *node-healthcheck
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+    ports:
+      - "127.0.0.1:18084:8080"
+
+volumes:
+  seer_database:
+  seer_objects:

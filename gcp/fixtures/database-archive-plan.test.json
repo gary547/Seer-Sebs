@@ -1,0 +1,14 @@
+{
+  "approved": true,
+  "sequences": [],
+  "tables": [
+    {
+      "id": "archive-integration-source-items",
+      "keyColumns": ["tenant_id", "id"],
+      "mode": "archive_json",
+      "source": "migration_transfer_test.source_items",
+      "target": "migration.source_rows"
+    }
+  ],
+  "version": 2
+}

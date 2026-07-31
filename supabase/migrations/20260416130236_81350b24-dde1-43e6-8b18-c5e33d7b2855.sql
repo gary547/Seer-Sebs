@@ -1,0 +1,1 @@
+ALTER TABLE public.navigator_projects ADD COLUMN har_status text NOT NULL DEFAULT 'idle';

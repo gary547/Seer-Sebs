@@ -1,0 +1,3 @@
+ALTER TABLE public.navigator_projects
+  ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMP WITH TIME ZONE,
+  ADD COLUMN IF NOT EXISTS last_dirty_at TIMESTAMP WITH TIME ZONE;

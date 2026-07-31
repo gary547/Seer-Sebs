@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "source": "public.profiles",
+      "target": "public.profiles",
+      "loadOrder": 10,
+      "columns": [
+        { "source": "id", "target": "user_id" },
+        {
+          "source": "email",
+          "target": "email",
+          "fallback": "pending-identity-sync@invalid.local"
+        },
+        {
+          "source": null,
+          "target": "identity_provider",
+          "constant": "identity-platform"
+        }
+      ]
+    },
+    {
+      "source": "public.clients",
+      "target": "public.clients",
+      "loadOrder": 20,
+      "columns": [
+        { "source": "brand_terms", "target": "brand_terms", "fallback": [] }
+      ]
+    },
+    {
+      "source": "public.navigator_projects",
+      "target": "public.navigator_projects",
+      "loadOrder": 30
+    },
+    {
+      "source": "public.keywords",
+      "target": "public.keywords",
+      "loadOrder": 40,
+      "columns": [
+        {
+          "source": "keyword",
+          "target": "normalised_keyword",
+          "transform": "normalise_text"
+        },
+        {
+          "source": "source",
+          "target": "sources",
+          "transform": "singleton_text_array",
+          "fallback": "legacy_supabase"
+        },
+        { "source": "kw_cluster", "target": "category" }
+      ]
+    },
+    {
+      "source": "public.monitor_campaigns",
+      "target": "public.monitor_campaigns",
+      "loadOrder": 50
+    },
+    {
+      "source": "public.monitored_urls",
+      "target": "public.monitored_urls",
+      "loadOrder": 60,
+      "columns": [
+        {
+          "source": "url",
+          "target": "normalized_url",
+          "transform": "normalise_url"
+        }
+      ]
+    },
+    {
+      "source": "public.url_check_snapshots",
+      "target": "public.url_check_snapshots",
+      "loadOrder": 70,
+      "disableUserTriggers": true,
+      "columns": [
+        {
+          "source": "redirect_chain",
+          "target": "redirect_chain",
+          "transform": "json_array_or_empty"
+        }
+      ]
+    },
+    {
+      "source": "public.url_issues",
+      "target": "public.url_issues",
+      "loadOrder": 80
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+ALTER TABLE public.ctr_curve_metadata ADD COLUMN IF NOT EXISTS raw_ctr_percentage numeric NULL;

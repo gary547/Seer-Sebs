@@ -1,0 +1,184 @@
+main:
+  params: [args]
+  steps:
+    - validate:
+        switch:
+          - condition: $${not("runId" in args)}
+            raise: "runId is required"
+    - accessInternalToken:
+        call: googleapis.secretmanager.v1.projects.secrets.versions.accessString
+        args:
+          project_id: "${project_id}"
+          secret_id: "${internal_secret_id}"
+          version: "latest"
+        result: internalToken
+    - intake:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "intake"
+    - gscPromotion:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "gsc-promotion"
+    - detox:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "detox"
+    - categorisation:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "categorisation"
+    - brandClassification:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "brand-classification"
+    - keywordEnrichment:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "keyword-enrichment"
+    - rankingUrl:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "ranking-url"
+    - gscIntent:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "gsc-intent"
+    - serpCollection:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "serp-collection"
+    - authority:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "authority"
+    - backlinks:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "backlinks"
+    - siteArchitecture:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "site-architecture"
+    - linkPowerScore:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "link-power-score"
+    - demandSignals:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "demand-signals"
+    - ctrCurves:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "ctr-curves"
+    - clustering:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "clustering"
+    - harV2:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "har-v2"
+    - revenueV2:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "revenue-v2"
+    - calibration:
+        call: runStage
+        args:
+          internalToken: $${internalToken}
+          runId: $${args.runId}
+          stageId: "calibration"
+    - complete:
+        return:
+          runId: $${args.runId}
+          stageCount: 19
+          status: "succeeded"
+
+runStage:
+  params: [internalToken, runId, stageId]
+  steps:
+    - deliver:
+        try:
+          call: http.post
+          args:
+            url: "${worker_url}/internal/tasks"
+            timeout: 900
+            auth:
+              type: OIDC
+              audience: "${worker_url}"
+            headers:
+              Content-Type: "application/json"
+              X-Seer-Internal-Token: $${internalToken}
+            body:
+              runId: $${runId}
+              stageId: $${stageId}
+              taskId: $${runId + ":" + stageId}
+          result: stageResponse
+        retry:
+          predicate: $${http.default_retry_predicate}
+          max_retries: 5
+          backoff:
+            initial_delay: 1
+            max_delay: 60
+            multiplier: 2
+        except:
+          as: stageError
+          steps:
+            - recordFailure:
+                try:
+                  call: http.post
+                  args:
+                    url: "${worker_url}/internal/failures"
+                    timeout: 30
+                    auth:
+                      type: OIDC
+                      audience: "${worker_url}"
+                    headers:
+                      Content-Type: "application/json"
+                      X-Seer-Internal-Token: $${internalToken}
+                    body:
+                      reason: $${json.encode_to_string(stageError)}
+                      runId: $${runId}
+                      stageId: $${stageId}
+            - raiseFailure:
+                raise: $${stageError}
+    - complete:
+        return: $${stageResponse.body}

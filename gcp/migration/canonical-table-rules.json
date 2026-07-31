@@ -1,0 +1,237 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "source": "public.profiles",
+      "target": "public.profiles",
+      "loadOrder": 10,
+      "columns": [
+        { "source": "id", "target": "user_id" },
+        {
+          "source": "email",
+          "target": "email",
+          "fallback": "pending-identity-sync@invalid.local"
+        },
+        {
+          "source": "theme_preference",
+          "target": "theme_preference",
+          "fallback": "dark"
+        },
+        {
+          "source": null,
+          "target": "identity_provider",
+          "constant": "identity-platform"
+        }
+      ]
+    },
+    {
+      "source": "public.user_roles",
+      "target": "public.user_roles",
+      "loadOrder": 20
+    },
+    {
+      "source": "public.clients",
+      "target": "public.clients",
+      "loadOrder": 30,
+      "columns": [
+        { "source": "brand_terms", "target": "brand_terms", "fallback": [] }
+      ]
+    },
+    {
+      "source": "public.user_client_access",
+      "target": "public.user_client_access",
+      "loadOrder": 40
+    },
+    {
+      "source": "public.competitors",
+      "target": "public.competitors",
+      "loadOrder": 50
+    },
+    {
+      "source": "public.keyword_rules",
+      "target": "public.keyword_rules",
+      "loadOrder": 60
+    },
+    {
+      "source": "public.navigator_projects",
+      "target": "public.navigator_projects",
+      "loadOrder": 70
+    },
+    {
+      "source": "public.keywords",
+      "target": "public.keywords",
+      "loadOrder": 80,
+      "columns": [
+        {
+          "source": "keyword",
+          "target": "normalised_keyword",
+          "transform": "normalise_text"
+        },
+        {
+          "source": "source",
+          "target": "sources",
+          "transform": "singleton_text_array",
+          "fallback": "legacy_supabase"
+        },
+        { "source": "kw_cluster", "target": "category" }
+      ]
+    },
+    {
+      "source": "public.keyword_monthly_volumes",
+      "target": "public.keyword_monthly_volumes",
+      "loadOrder": 90
+    },
+    {
+      "source": "public.gsc_uploads",
+      "target": "public.gsc_uploads",
+      "loadOrder": 100,
+      "columns": [
+        { "source": "source", "target": "source_name" },
+        { "source": "uploaded_at", "target": "created_at" }
+      ]
+    },
+    {
+      "source": "public.gsc_upload_keywords",
+      "target": "public.gsc_upload_keywords",
+      "loadOrder": 110,
+      "columns": [
+        { "source": "keyword", "target": "query" },
+        {
+          "source": "keyword",
+          "target": "normalised_query",
+          "transform": "normalise_text"
+        },
+        { "source": null, "target": "page", "constant": "" },
+        { "source": "device", "target": "device", "fallback": "all" }
+      ]
+    },
+    {
+      "source": "public.gsc_upload_pages",
+      "target": "public.gsc_upload_pages",
+      "loadOrder": 120,
+      "columns": [
+        { "source": "device", "target": "device", "fallback": "all" },
+        { "source": "clicks", "target": "clicks", "fallback": 0 },
+        { "source": "impressions", "target": "impressions", "fallback": 0 },
+        { "source": "ctr", "target": "ctr", "fallback": 0 },
+        { "source": "position", "target": "position", "fallback": 0 }
+      ]
+    },
+    {
+      "source": "public.serp_results",
+      "target": "public.serp_results",
+      "loadOrder": 130,
+      "columns": [
+        {
+          "source": "fetched_at",
+          "target": "fetched_at",
+          "fallback": "1970-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "source": "public.client_domain_metrics",
+      "target": "public.client_domain_metrics",
+      "loadOrder": 140,
+      "columns": [
+        {
+          "source": null,
+          "target": "metric_source",
+          "constant": "legacy_supabase"
+        },
+        {
+          "source": "fetched_at",
+          "target": "fetched_at",
+          "fallback": "1970-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "source": "public.project_conversion_overrides",
+      "target": "public.project_conversion_overrides",
+      "loadOrder": 150
+    },
+    {
+      "source": "public.project_roadmaps",
+      "target": "public.project_roadmaps",
+      "loadOrder": 160,
+      "columns": [
+        {
+          "source": null,
+          "target": "generation_source",
+          "constant": "deterministic"
+        },
+        {
+          "source": null,
+          "target": "model_version",
+          "constant": "legacy_supabase"
+        }
+      ]
+    },
+    {
+      "source": "public.content_plans",
+      "target": "public.content_plans",
+      "loadOrder": 170
+    },
+    {
+      "source": "public.content_plan_items",
+      "target": "public.content_plan_items",
+      "loadOrder": 180
+    },
+    {
+      "source": "public.content_plan_jobs",
+      "target": "public.content_plan_jobs",
+      "loadOrder": 190
+    },
+    {
+      "source": "public.serp_top3_cache",
+      "target": "public.serp_top3_cache",
+      "loadOrder": 200
+    },
+    {
+      "source": "public.monitor_campaigns",
+      "target": "public.monitor_campaigns",
+      "loadOrder": 210
+    },
+    {
+      "source": "public.monitored_urls",
+      "target": "public.monitored_urls",
+      "loadOrder": 220,
+      "columns": [
+        {
+          "source": "url",
+          "target": "normalized_url",
+          "transform": "normalise_url"
+        }
+      ]
+    },
+    {
+      "source": "public.url_check_snapshots",
+      "target": "public.url_check_snapshots",
+      "loadOrder": 230,
+      "disableUserTriggers": true,
+      "columns": [
+        {
+          "source": "redirect_chain",
+          "target": "redirect_chain",
+          "transform": "json_array_or_empty"
+        }
+      ]
+    },
+    {
+      "source": "public.url_issues",
+      "target": "public.url_issues",
+      "loadOrder": 240
+    },
+    {
+      "source": "public.monitor_alert_settings",
+      "target": "public.monitor_alert_settings",
+      "loadOrder": 250
+    },
+    {
+      "source": "public.archive_audit",
+      "target": "public.archive_audit",
+      "loadOrder": 260
+    }
+  ]
+}

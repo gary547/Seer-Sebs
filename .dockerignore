@@ -1,0 +1,7 @@
+*
+!gcp/
+!gcp/**
+!tsconfig.gcp.json
+!tsconfig.gcp.build.json
+gcp/node_modules
+gcp/infra/.terraform

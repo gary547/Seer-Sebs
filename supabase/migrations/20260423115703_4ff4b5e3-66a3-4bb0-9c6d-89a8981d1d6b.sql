@@ -1,0 +1,4 @@
+ALTER TABLE public.navigator_projects
+  ADD COLUMN IF NOT EXISTS keywords_dirty BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS serp_dirty BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS inputs_dirty BOOLEAN NOT NULL DEFAULT false;

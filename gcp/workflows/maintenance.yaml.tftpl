@@ -1,0 +1,40 @@
+main:
+  params: [args]
+  steps:
+    - validate:
+        switch:
+          - condition: $${not("operation" in args)}
+            raise: "operation is required"
+          - condition: $${args.operation != "tick" and args.operation != "prune"}
+            raise: "operation must be tick or prune"
+    - accessInternalToken:
+        call: googleapis.secretmanager.v1.projects.secrets.versions.accessString
+        args:
+          project_id: "${project_id}"
+          secret_id: "${internal_secret_id}"
+          version: "latest"
+        result: internalToken
+    - invoke:
+        try:
+          call: http.post
+          args:
+            url: "${api_url}/internal/maintenance/url-monitor"
+            timeout: 900
+            auth:
+              type: OIDC
+              audience: "${api_url}"
+            headers:
+              Content-Type: "application/json"
+              X-Seer-Internal-Token: $${internalToken}
+            body:
+              operation: $${args.operation}
+          result: maintenanceResponse
+        retry:
+          predicate: $${http.default_retry_predicate}
+          max_retries: 3
+          backoff:
+            initial_delay: 2
+            max_delay: 60
+            multiplier: 2
+    - complete:
+        return: $${maintenanceResponse.body}

@@ -1,0 +1,31 @@
+{
+  "buckets": [
+    {
+      "id": "client-logos",
+      "name": "client-logos",
+      "public": false
+    },
+    {
+      "id": "slide-exports",
+      "name": "slide-exports",
+      "public": false
+    }
+  ],
+  "capturedAt": "2026-07-30T00:00:00.000Z",
+  "objects": [
+    {
+      "bucketId": "client-logos",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "id": "fixture-logo",
+      "metadata": {
+        "mimetype": "image/svg+xml",
+        "size": "128"
+      },
+      "name": "fixtures/logo.svg",
+      "owner": null,
+      "recordedBytes": 128,
+      "sha256": null,
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}

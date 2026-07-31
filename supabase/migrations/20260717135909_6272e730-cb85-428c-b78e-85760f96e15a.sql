@@ -1,0 +1,1 @@
+ALTER TABLE public.site_architecture ADD COLUMN IF NOT EXISTS last_evaluated_at timestamptz;
