@@ -101,6 +101,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Run source database transfer only through the managed archive and canonical
   Cloud Run jobs. Plans are checksum-pinned, executions are generation-locked,
   and checkpoints live in the private versioned migration-evidence bucket.
+- Completed checkpoint entries are reverified against current source and
+  target counts on every managed rerun; a checkpoint never bypasses database
+  reconciliation.
 - Restore the approved source dump into the isolated `seer_source_snapshot`
   Cloud SQL database and connect through migrator IAM authentication. Never
   place a source database password in Cloud Run configuration or Terraform.

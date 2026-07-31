@@ -187,6 +187,14 @@ async function archivedRowCount(client, planEntryId) {
   return Number(result.rows[0]?.count ?? "0");
 }
 
+function completedRowCount(value, label) {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || result < 0) {
+    throw new Error(`${label} is invalid in the database transfer checkpoint.`);
+  }
+  return result;
+}
+
 const planPath = resolve(
   argument("--plan", "migration-evidence/database-transfer-plan.json"),
 );
@@ -239,7 +247,33 @@ try {
   await source.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
   for (let tableIndex = 0; tableIndex < plan.tables.length; tableIndex += 1) {
     const table = plan.tables[tableIndex];
-    if (state.completedTables[table.id]?.status === "verified") continue;
+    const completed = state.completedTables[table.id];
+    if (completed?.status === "verified") {
+      await assertTableContract(source, target, table);
+      const [sourceRows, targetRows] = await Promise.all([
+        rowCount(source, table.source),
+        table.mode === "copy"
+          ? rowCount(target, table.target)
+          : archivedRowCount(target, table.id),
+      ]);
+      const expectedTargetRows = completedRowCount(
+        completed.rowCount,
+        `${table.id}.rowCount`,
+      );
+      const expectedSourceRows = completedRowCount(
+        completed.sourceRowCount ?? completed.rowCount,
+        `${table.id}.sourceRowCount`,
+      );
+      if (
+        sourceRows !== expectedSourceRows ||
+        targetRows !== expectedTargetRows
+      ) {
+        throw new Error(
+          `${table.id} checkpoint verification failed: source ${sourceRows}/${expectedSourceRows}, target ${targetRows}/${expectedTargetRows}.`,
+        );
+      }
+      continue;
+    }
     await assertTableContract(source, target, table);
     const sourceRows = await rowCount(source, table.source);
     const existingTargetRows =

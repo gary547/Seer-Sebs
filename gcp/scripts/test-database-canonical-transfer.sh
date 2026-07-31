@@ -408,6 +408,13 @@ SEER_TARGET_DATABASE_URL="$target_url" \
   --batch-size 1 \
   --checkpoint "$test_directory/canonical-checkpoint.json" \
   --plan "$test_directory/canonical-plan.json" >/dev/null
+SEER_SOURCE_DATABASE_URL="$source_url" \
+SEER_TARGET_DATABASE_URL="$target_url" \
+  node gcp/scripts/migrate-database.mjs \
+  --apply \
+  --batch-size 1 \
+  --checkpoint "$test_directory/canonical-checkpoint.json" \
+  --plan "$test_directory/canonical-plan.json" >/dev/null
 
 SEER_TARGET_DATABASE_URL="$target_url" \
   node gcp/scripts/sync-identity-profiles.mjs \
