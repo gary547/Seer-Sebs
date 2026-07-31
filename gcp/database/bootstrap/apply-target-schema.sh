@@ -86,10 +86,10 @@ psql \
   --file=/bootstrap/010_bind_runtime_iam.sql
 
 psql --no-password --set=ON_ERROR_STOP=1 --command="
-  SELECT role_name, member
+  SELECT role_name, grantee
   FROM information_schema.applicable_roles
   WHERE role_name IN ('seer_api', 'seer_worker', 'seer_dispatcher', 'seer_events')
-  ORDER BY role_name, member;
+  ORDER BY role_name, grantee;
 "
 
 echo "Target schema and IAM role bindings are ready."

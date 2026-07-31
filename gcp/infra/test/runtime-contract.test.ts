@@ -200,7 +200,8 @@ describe("managed database runtime contract", () => {
   });
 
   it("pins the proxy and gates runtime deployment on schema evidence", async () => {
-    const [migrationJob, runtime, variables] = await Promise.all([
+    const [bootstrap, migrationJob, runtime, variables] = await Promise.all([
+      read("gcp/database/bootstrap/apply-target-schema.sh"),
       read("gcp/infra/database-migration.tf"),
       read("gcp/infra/runtime.tf"),
       read("gcp/infra/variables.tf"),
@@ -214,6 +215,9 @@ describe("managed database runtime contract", () => {
     );
     expect(migrationJob).toContain("max_retries     = 0");
     expect(runtime).toContain("condition     = var.database_schema_ready");
+    expect(bootstrap).toContain("SELECT role_name, grantee");
+    expect(bootstrap).toContain("ORDER BY role_name, grantee");
+    expect(bootstrap).not.toContain("SELECT role_name, member");
   });
 
   it("schedules leased URL checks and retention through a private workflow", async () => {

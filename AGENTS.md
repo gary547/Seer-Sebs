@@ -78,6 +78,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
   `seer-build-source` bucket; the build identity has read-only access there.
 - Cloud Build steps that use `script` must carry their own Bash shebang and
   must not also declare `entrypoint`, which the Cloud Build API rejects.
+- Managed schema bootstrap verifies IAM role membership through
+  `information_schema.applicable_roles.grantee`; PostgreSQL exposes no
+  `member` column in that view.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.
