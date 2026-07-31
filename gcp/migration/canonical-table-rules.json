@@ -27,7 +27,14 @@
     {
       "source": "public.user_roles",
       "target": "public.user_roles",
-      "loadOrder": 20
+      "loadOrder": 20,
+      "columns": [
+        {
+          "source": "role",
+          "target": "role",
+          "transform": "normalise_text"
+        }
+      ]
     },
     {
       "source": "public.clients",
@@ -45,7 +52,8 @@
     {
       "source": "public.competitors",
       "target": "public.competitors",
-      "loadOrder": 50
+      "loadOrder": 50,
+      "excludeColumns": ["added_by"]
     },
     {
       "source": "public.keyword_rules",

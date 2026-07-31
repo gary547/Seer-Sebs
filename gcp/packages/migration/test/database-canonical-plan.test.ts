@@ -193,6 +193,24 @@ describe("canonical database plan", () => {
     expect(ruleSources).toHaveLength(26);
     expect(new Set(loadOrders).size).toBe(loadOrders.length);
     expect(
+      productionRules.tables.find(
+        (table: { source: string }) => table.source === "public.user_roles",
+      ),
+    ).toMatchObject({
+      columns: [
+        {
+          source: "role",
+          target: "role",
+          transform: "normalise_text",
+        },
+      ],
+    });
+    expect(
+      productionRules.tables.find(
+        (table: { source: string }) => table.source === "public.competitors",
+      ),
+    ).toMatchObject({ excludeColumns: ["added_by"] });
+    expect(
       productionCatalog.tables
         .filter(
           (table: { runtimeDisposition: string }) =>

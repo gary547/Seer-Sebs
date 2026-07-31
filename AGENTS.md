@@ -81,6 +81,10 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Managed schema bootstrap verifies IAM role membership through
   `information_schema.applicable_roles.grantee`; PostgreSQL exposes no
   `member` column in that view.
+- Canonical migration maps the source `app_role` enum through an explicit
+  `normalise_text` transform into the target checked-text role contract.
+- Source `competitors.added_by` is provenance text, not a user UUID; retain it
+  in the lossless archive and leave the nullable canonical UUID unset.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.
