@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aggregateGscKeywordRows,
   archiveInsertBatchStatement,
   archiveRowValues,
   copyRowValues,
   insertBatchStatement,
+  latestSerpSnapshotRows,
   normaliseDatabaseTransferPlan,
 } from "../src/database-transfer.js";
 
@@ -172,6 +174,148 @@ describe("database transfer plan", () => {
     expect(() =>
       copyRowValues(plan.tables[0]!, { detox_status: "unknown" }),
     ).toThrow("unsupported status unknown");
+  });
+
+  it("aggregates duplicate legacy GSC keyword metrics deterministically", () => {
+    const plan = normaliseDatabaseTransferPlan({
+      approved: true,
+      sequences: [],
+      tables: [
+        {
+          columns: [
+            "id",
+            "upload_id",
+            { source: "keyword", target: "query" },
+            {
+              source: "keyword",
+              target: "normalised_query",
+              transform: "normalise_text",
+            },
+            { target: "page", constant: "" },
+            { source: "device", target: "device", fallback: "all" },
+            "clicks",
+            "impressions",
+            "ctr",
+            "position",
+          ],
+          id: "canonical-gsc-upload-keywords",
+          mode: "copy",
+          rowTransform: "aggregate_gsc_keywords",
+          source: "public.gsc_upload_keywords",
+          target: "public.gsc_upload_keywords",
+        },
+      ],
+      version: 2,
+    });
+    const table = plan.tables[0];
+    if (!table || table.mode !== "copy") throw new Error("Expected copy table.");
+
+    expect(
+      aggregateGscKeywordRows(table, [
+        {
+          clicks: 5,
+          ctr: "0.1",
+          device: "desktop",
+          id: "00000000-0000-4000-8000-000000000002",
+          impressions: 50,
+          normalised_query: "summer   shoes",
+          position: "4",
+          query: "summer   shoes",
+          upload_id: "10000000-0000-4000-8000-000000000001",
+        },
+        {
+          clicks: 10,
+          ctr: "0.1",
+          device: "desktop",
+          id: "00000000-0000-4000-8000-000000000001",
+          impressions: 100,
+          normalised_query: " Summer Shoes ",
+          position: "2",
+          query: " Summer Shoes ",
+          upload_id: "10000000-0000-4000-8000-000000000001",
+        },
+      ]),
+    ).toEqual([
+      [
+        "00000000-0000-4000-8000-000000000001",
+        "10000000-0000-4000-8000-000000000001",
+        " Summer Shoes ",
+        "summer shoes",
+        "",
+        "desktop",
+        15,
+        150,
+        0.1,
+        8 / 3,
+      ],
+    ]);
+  });
+
+  it("keeps the best URL rank from each latest SERP snapshot", () => {
+    const plan = normaliseDatabaseTransferPlan({
+      approved: true,
+      sequences: [],
+      tables: [
+        {
+          columns: [
+            "id",
+            "project_id",
+            "keyword_id",
+            "rank_absolute",
+            "url",
+            "domain",
+            {
+              source: "fetched_at",
+              target: "fetched_at",
+              fallback: "1970-01-01T00:00:00Z",
+            },
+          ],
+          id: "canonical-serp-results",
+          mode: "copy",
+          rowTransform: "latest_serp_snapshot",
+          source: "public.serp_results",
+          target: "public.serp_results",
+        },
+      ],
+      version: 2,
+    });
+    const table = plan.tables[0];
+    if (!table || table.mode !== "copy") throw new Error("Expected copy table.");
+    const row = (
+      id: string,
+      rank: number,
+      url: string,
+      fetchedAt: string,
+    ) => ({
+      domain: new URL(url).hostname,
+      fetched_at: new Date(fetchedAt),
+      id,
+      keyword_id: "10000000-0000-4000-8000-000000000001",
+      project_id: "20000000-0000-4000-8000-000000000001",
+      rank_absolute: rank,
+      url,
+    });
+
+    const rows = latestSerpSnapshotRows(table, [
+      row("30000000-0000-4000-8000-000000000001", 1, "https://old.test", "2026-01-01T00:00:00Z"),
+      row("30000000-0000-4000-8000-000000000002", 2, "https://same.test", "2026-02-01T00:00:00Z"),
+      row("30000000-0000-4000-8000-000000000003", 1, "https://same.test", "2026-02-01T00:00:00Z"),
+      row("30000000-0000-4000-8000-000000000004", 3, "https://other.test", "2026-02-01T00:00:00Z"),
+    ]);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((result) => [result[0], result[3], result[4]])).toEqual([
+      [
+        "30000000-0000-4000-8000-000000000003",
+        1,
+        "https://same.test",
+      ],
+      [
+        "30000000-0000-4000-8000-000000000004",
+        3,
+        "https://other.test",
+      ],
+    ]);
   });
 
   it("rejects unapproved plans and unsafe identifiers", () => {

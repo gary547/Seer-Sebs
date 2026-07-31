@@ -13,6 +13,7 @@ import {
   normaliseDatabaseTransferPlan,
   quotedIdentifier,
   quotedRelation,
+  transformCopyRows,
 } from "../../dist/gcp/packages/migration/src/database-transfer.js";
 
 const { Client } = pg;
@@ -279,20 +280,28 @@ try {
           `ALTER TABLE ${quotedRelation(table.target)} DISABLE TRIGGER USER`,
         );
       }
+      let fetchedRows = 0;
       let insertedRows = 0;
+      const transformedSourceRows = [];
       while (true) {
         const result = await source.query(
           `FETCH FORWARD ${batchSize} FROM ${quotedIdentifier(cursor)}`,
         );
         if (result.rows.length === 0) break;
+        fetchedRows += result.rows.length;
         if (table.mode === "copy") {
-          const values = result.rows.flatMap((row) =>
-            copyRowValues(table, row),
-          );
-          await target.query(
-            insertBatchStatement(table, result.rows.length),
-            values,
-          );
+          if (table.rowTransform) {
+            transformedSourceRows.push(...result.rows);
+          } else {
+            const values = result.rows.flatMap((row) =>
+              copyRowValues(table, row),
+            );
+            await target.query(
+              insertBatchStatement(table, result.rows.length),
+              values,
+            );
+            insertedRows += result.rows.length;
+          }
         } else {
           const values = result.rows.flatMap((row) =>
             archiveRowValues(table, row.source_row),
@@ -301,21 +310,32 @@ try {
             archiveInsertBatchStatement(result.rows.length),
             values,
           );
+          insertedRows += result.rows.length;
         }
-        insertedRows += result.rows.length;
       }
-      if (insertedRows !== sourceRows) {
+      if (fetchedRows !== sourceRows) {
         throw new Error(
-          `${table.source} returned ${insertedRows} of ${sourceRows} rows.`,
+          `${table.source} returned ${fetchedRows} of ${sourceRows} rows.`,
         );
+      }
+      if (table.mode === "copy" && table.rowTransform) {
+        const transformedRows = transformCopyRows(table, transformedSourceRows);
+        for (let offset = 0; offset < transformedRows.length; offset += batchSize) {
+          const batch = transformedRows.slice(offset, offset + batchSize);
+          await target.query(
+            insertBatchStatement(table, batch.length),
+            batch.flat(),
+          );
+          insertedRows += batch.length;
+        }
       }
       const targetRows =
         table.mode === "copy"
           ? await rowCount(target, table.target)
           : await archivedRowCount(target, table.id);
-      if (targetRows !== sourceRows) {
+      if (targetRows !== insertedRows) {
         throw new Error(
-          `${table.target} contains ${targetRows} rows after importing ${sourceRows}.`,
+          `${table.target} contains ${targetRows} rows after importing ${sourceRows} source rows into ${insertedRows} canonical rows.`,
         );
       }
       if (table.mode === "copy" && table.disableUserTriggers) {
@@ -328,6 +348,7 @@ try {
       state.completedTables[table.id] = {
         mode: table.mode,
         rowCount: targetRows,
+        sourceRowCount: sourceRows,
         source: table.source,
         status: "verified",
       };

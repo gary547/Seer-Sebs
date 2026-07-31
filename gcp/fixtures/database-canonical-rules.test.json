@@ -57,14 +57,52 @@
       ]
     },
     {
+      "source": "public.gsc_uploads",
+      "target": "public.gsc_uploads",
+      "loadOrder": 50,
+      "columns": [
+        { "source": "source", "target": "source_name" },
+        { "source": "uploaded_at", "target": "created_at" }
+      ]
+    },
+    {
+      "source": "public.gsc_upload_keywords",
+      "target": "public.gsc_upload_keywords",
+      "loadOrder": 60,
+      "rowTransform": "aggregate_gsc_keywords",
+      "columns": [
+        { "source": "keyword", "target": "query" },
+        {
+          "source": "keyword",
+          "target": "normalised_query",
+          "transform": "normalise_text"
+        },
+        { "source": null, "target": "page", "constant": "" },
+        { "source": "device", "target": "device", "fallback": "all" }
+      ]
+    },
+    {
+      "source": "public.serp_results",
+      "target": "public.serp_results",
+      "loadOrder": 65,
+      "rowTransform": "latest_serp_snapshot",
+      "columns": [
+        {
+          "source": "fetched_at",
+          "target": "fetched_at",
+          "fallback": "1970-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
       "source": "public.monitor_campaigns",
       "target": "public.monitor_campaigns",
-      "loadOrder": 50
+      "loadOrder": 70
     },
     {
       "source": "public.monitored_urls",
       "target": "public.monitored_urls",
-      "loadOrder": 60,
+      "loadOrder": 80,
       "columns": [
         {
           "source": "url",
@@ -76,7 +114,7 @@
     {
       "source": "public.url_check_snapshots",
       "target": "public.url_check_snapshots",
-      "loadOrder": 70,
+      "loadOrder": 90,
       "disableUserTriggers": true,
       "columns": [
         {
@@ -89,7 +127,7 @@
     {
       "source": "public.url_issues",
       "target": "public.url_issues",
-      "loadOrder": 80
+      "loadOrder": 100
     }
   ]
 }

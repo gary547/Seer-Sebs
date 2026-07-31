@@ -69,6 +69,43 @@ psql "$source_url" -v ON_ERROR_STOP=1 -c "
     device text NOT NULL,
     created_at timestamptz NOT NULL
   );
+  CREATE TABLE gsc_uploads (
+    id uuid PRIMARY KEY,
+    project_id uuid NOT NULL,
+    uploaded_at timestamptz NOT NULL,
+    device text NOT NULL,
+    row_count integer NOT NULL,
+    date_range_start date,
+    date_range_end date,
+    source text NOT NULL
+  );
+  CREATE TABLE gsc_upload_keywords (
+    id uuid PRIMARY KEY,
+    upload_id uuid NOT NULL,
+    keyword text NOT NULL,
+    clicks integer NOT NULL,
+    impressions integer NOT NULL,
+    ctr numeric NOT NULL,
+    position numeric NOT NULL,
+    search_intent text,
+    device text,
+    is_branded boolean,
+    brand_confidence numeric
+  );
+  CREATE TABLE serp_results (
+    id uuid PRIMARY KEY,
+    project_id uuid NOT NULL,
+    keyword_id uuid NOT NULL,
+    rank_absolute integer NOT NULL,
+    url text NOT NULL,
+    domain text NOT NULL,
+    url_rating numeric,
+    domain_rating numeric,
+    ahrefs_rank integer,
+    referring_domains integer,
+    backlinks bigint,
+    fetched_at timestamptz
+  );
   CREATE TABLE monitor_campaigns (
     id uuid PRIMARY KEY,
     client_id uuid NOT NULL,
@@ -186,6 +223,90 @@ psql "$source_url" -v ON_ERROR_STOP=1 -c "
       'flagged_remove',
       'mobile',
       '2026-07-30T08:22:00Z'
+    );
+  INSERT INTO gsc_uploads
+    (id, project_id, uploaded_at, device, row_count, date_range_start, date_range_end, source)
+  VALUES (
+    '41000000-0000-4000-8000-000000000001',
+    '30000000-0000-4000-8000-000000000002',
+    '2026-07-30T08:25:00Z',
+    'mixed',
+    3,
+    '2026-06-01',
+    '2026-06-30',
+    'search-console'
+  );
+  INSERT INTO gsc_upload_keywords
+    (id, upload_id, keyword, clicks, impressions, ctr, position, device)
+  VALUES
+    (
+      '42000000-0000-4000-8000-000000000001',
+      '41000000-0000-4000-8000-000000000001',
+      ' Summer Shoes ',
+      10,
+      100,
+      0.1,
+      2,
+      'desktop'
+    ),
+    (
+      '42000000-0000-4000-8000-000000000002',
+      '41000000-0000-4000-8000-000000000001',
+      'summer   shoes',
+      5,
+      50,
+      0.1,
+      4,
+      'desktop'
+    ),
+    (
+      '42000000-0000-4000-8000-000000000003',
+      '41000000-0000-4000-8000-000000000001',
+      'Winter boots',
+      3,
+      30,
+      0.1,
+      5,
+      NULL
+    );
+  INSERT INTO serp_results
+    (id, project_id, keyword_id, rank_absolute, url, domain, fetched_at)
+  VALUES
+    (
+      '43000000-0000-4000-8000-000000000001',
+      '30000000-0000-4000-8000-000000000002',
+      '40000000-0000-4000-8000-000000000001',
+      1,
+      'https://old.example.test',
+      'old.example.test',
+      '2026-06-01T00:00:00Z'
+    ),
+    (
+      '43000000-0000-4000-8000-000000000002',
+      '30000000-0000-4000-8000-000000000002',
+      '40000000-0000-4000-8000-000000000001',
+      2,
+      'https://same.example.test',
+      'same.example.test',
+      '2026-07-01T00:00:00Z'
+    ),
+    (
+      '43000000-0000-4000-8000-000000000003',
+      '30000000-0000-4000-8000-000000000002',
+      '40000000-0000-4000-8000-000000000001',
+      1,
+      'https://same.example.test',
+      'same.example.test',
+      '2026-07-01T00:00:00Z'
+    ),
+    (
+      '43000000-0000-4000-8000-000000000004',
+      '30000000-0000-4000-8000-000000000002',
+      '40000000-0000-4000-8000-000000000001',
+      3,
+      'https://other.example.test',
+      'other.example.test',
+      '2026-07-01T00:00:00Z'
     );
   INSERT INTO monitor_campaigns
     (id, client_id, navigator_project_id, name, status, check_frequency, daily_check_time, created_at, updated_at)
@@ -306,6 +427,21 @@ result="$(
           AND category = 'Footwear'),
       (SELECT count(*) FROM keywords WHERE detox_status = 'remove'),
       (SELECT count(*) FROM keywords WHERE detox_status = 'review'),
+      (SELECT count(*) FROM gsc_upload_keywords),
+      (SELECT count(*) FROM gsc_upload_keywords
+        WHERE id = '42000000-0000-4000-8000-000000000001'
+          AND normalised_query = 'summer shoes'
+          AND page = ''
+          AND device = 'desktop'
+          AND clicks = 15
+          AND impressions = 150
+          AND ctr = 0.1
+          AND position = 2.6667),
+      (SELECT count(*) FROM serp_results),
+      (SELECT count(*) FROM serp_results
+        WHERE id = '43000000-0000-4000-8000-000000000003'
+          AND rank_absolute = 1
+          AND url = 'https://same.example.test'),
       (SELECT count(*) FROM monitored_urls
         WHERE normalized_url = 'https://example.com/path'),
       (SELECT count(*) FROM url_check_snapshots),
@@ -319,7 +455,7 @@ result="$(
   "
 )"
 
-if [[ "$result" != "12|8|2|1|1|1|1|2|1|1|1" ]]; then
+if [[ "$result" != "20|11|2|1|1|1|2|1|2|1|1|2|1|1|1" ]]; then
   echo "Unexpected canonical migration result: $result" >&2
   exit 1
 fi

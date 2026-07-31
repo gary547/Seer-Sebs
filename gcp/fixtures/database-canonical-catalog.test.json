@@ -1,12 +1,24 @@
 {
   "version": 1,
-  "expectedTableCount": 8,
+  "expectedTableCount": 11,
   "tables": [
     {
       "source": "public.clients",
       "archiveKeyColumns": ["id"],
       "runtimeDisposition": "canonical_copy",
       "runtimeTarget": "public.clients"
+    },
+    {
+      "source": "public.gsc_upload_keywords",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_transform",
+      "runtimeTarget": "public.gsc_upload_keywords"
+    },
+    {
+      "source": "public.gsc_uploads",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_transform",
+      "runtimeTarget": "public.gsc_uploads"
     },
     {
       "source": "public.keywords",
@@ -37,6 +49,12 @@
       "archiveKeyColumns": ["id"],
       "runtimeDisposition": "canonical_transform",
       "runtimeTarget": "public.profiles"
+    },
+    {
+      "source": "public.serp_results",
+      "archiveKeyColumns": ["id"],
+      "runtimeDisposition": "canonical_transform",
+      "runtimeTarget": "public.serp_results"
     },
     {
       "source": "public.url_check_snapshots",

@@ -107,6 +107,7 @@
       "source": "public.gsc_upload_keywords",
       "target": "public.gsc_upload_keywords",
       "loadOrder": 110,
+      "rowTransform": "aggregate_gsc_keywords",
       "columns": [
         { "source": "keyword", "target": "query" },
         {
@@ -134,6 +135,7 @@
       "source": "public.serp_results",
       "target": "public.serp_results",
       "loadOrder": 130,
+      "rowTransform": "latest_serp_snapshot",
       "columns": [
         {
           "source": "fetched_at",

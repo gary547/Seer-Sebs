@@ -39,6 +39,7 @@ interface CanonicalRule {
   disableUserTriggers?: boolean;
   excludeColumns?: string[];
   loadOrder: number;
+  rowTransform?: "aggregate_gsc_keywords" | "latest_serp_snapshot";
   source: string;
   target: string;
 }
@@ -318,6 +319,7 @@ export function buildDatabaseCanonicalPlan(
         id: `canonical-${rule.source.slice(rule.source.indexOf(".") + 1).replaceAll("_", "-")}`,
         keyColumns: [] as [],
         mode: "copy" as const,
+        ...(rule.rowTransform ? { rowTransform: rule.rowTransform } : {}),
         source: rule.source,
         target: rule.target,
       };

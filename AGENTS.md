@@ -89,6 +89,13 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Canonical migration maps legacy keyword detox states explicitly: `removed`
   becomes `remove`, and `flagged_remove` becomes `review`. Unknown values must
   fail closed instead of bypassing the target check constraint.
+- Canonical migration aggregates duplicate legacy GSC keyword rows by upload,
+  normalised query, page, and device, then recomputes CTR and
+  impression-weighted position. It keeps every original row in the lossless
+  archive.
+- Canonical migration retains only each keyword's latest SERP snapshot and the
+  best rank for repeated URLs. Duplicate ranks in a selected snapshot fail
+  closed; complete SERP history remains in the lossless archive.
 - Source `competitors.added_by` is provenance text, not a user UUID; retain it
   in the lossless archive and leave the nullable canonical UUID unset.
 - Run source database transfer only through the managed archive and canonical

@@ -6,6 +6,10 @@ export type TransferTransform =
   | "normalise_url"
   | "singleton_text_array";
 
+export type CopyRowTransform =
+  | "aggregate_gsc_keywords"
+  | "latest_serp_snapshot";
+
 export type TransferValue = boolean | number | string | string[];
 
 export interface TransferColumn {
@@ -22,6 +26,7 @@ export interface CopyTransferTable {
   id: string;
   keyColumns: [];
   mode: "copy";
+  rowTransform?: CopyRowTransform;
   source: string;
   target: string;
 }
@@ -248,6 +253,256 @@ export function copyRowValues(
   });
 }
 
+function requiredTargetIndex(table: CopyTransferTable, target: string): number {
+  const index = table.columns.findIndex((column) => column.target === target);
+  if (index < 0) {
+    throw new Error(`${table.id} must map target column ${target}.`);
+  }
+  return index;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} must be a string.`);
+  return value;
+}
+
+function nonNegativeNumber(value: unknown, label: string): number {
+  const result = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(result) || result < 0) {
+    throw new Error(`${label} must be a non-negative number.`);
+  }
+  return result;
+}
+
+function nonNegativeInteger(value: unknown, label: string): number {
+  const result = nonNegativeNumber(value, label);
+  if (!Number.isSafeInteger(result)) {
+    throw new Error(`${label} must be a safe integer.`);
+  }
+  return result;
+}
+
+export function aggregateGscKeywordRows(
+  table: CopyTransferTable,
+  sourceRows: Record<string, unknown>[],
+): unknown[][] {
+  if (table.rowTransform !== "aggregate_gsc_keywords") {
+    throw new Error("aggregateGscKeywordRows requires its matching row transform.");
+  }
+  const indexes = {
+    clicks: requiredTargetIndex(table, "clicks"),
+    ctr: requiredTargetIndex(table, "ctr"),
+    device: requiredTargetIndex(table, "device"),
+    id: requiredTargetIndex(table, "id"),
+    impressions: requiredTargetIndex(table, "impressions"),
+    normalisedQuery: requiredTargetIndex(table, "normalised_query"),
+    page: requiredTargetIndex(table, "page"),
+    position: requiredTargetIndex(table, "position"),
+    query: requiredTargetIndex(table, "query"),
+    uploadId: requiredTargetIndex(table, "upload_id"),
+  };
+  const groups = new Map<
+    string,
+    {
+      clicks: number;
+      impressions: number;
+      positionRows: number;
+      positionTotal: number;
+      values: unknown[];
+      weightedPositionTotal: number;
+    }
+  >();
+
+  for (const sourceRow of sourceRows) {
+    const values = copyRowValues(table, sourceRow);
+    const id = requiredString(values[indexes.id], `${table.id}.id`);
+    const uploadId = requiredString(
+      values[indexes.uploadId],
+      `${table.id}.upload_id`,
+    );
+    const query = requiredString(values[indexes.query], `${table.id}.query`);
+    const normalisedQuery = requiredString(
+      values[indexes.normalisedQuery],
+      `${table.id}.normalised_query`,
+    );
+    const page = requiredString(values[indexes.page], `${table.id}.page`);
+    const device = requiredString(values[indexes.device], `${table.id}.device`);
+    const clicks = nonNegativeInteger(
+      values[indexes.clicks],
+      `${table.id}.clicks`,
+    );
+    const impressions = nonNegativeInteger(
+      values[indexes.impressions],
+      `${table.id}.impressions`,
+    );
+    const position = nonNegativeNumber(
+      values[indexes.position],
+      `${table.id}.position`,
+    );
+    const key = JSON.stringify([uploadId, normalisedQuery, page, device]);
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, {
+        clicks,
+        impressions,
+        positionRows: 1,
+        positionTotal: position,
+        values: [...values],
+        weightedPositionTotal: position * impressions,
+      });
+      continue;
+    }
+    existing.clicks += clicks;
+    existing.impressions += impressions;
+    existing.positionRows += 1;
+    existing.positionTotal += position;
+    existing.weightedPositionTotal += position * impressions;
+    if (id < requiredString(existing.values[indexes.id], `${table.id}.id`)) {
+      existing.values[indexes.id] = id;
+    }
+    if (
+      query <
+      requiredString(existing.values[indexes.query], `${table.id}.query`)
+    ) {
+      existing.values[indexes.query] = query;
+    }
+  }
+
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, group]) => {
+      if (
+        group.clicks > 2_147_483_647 ||
+        group.impressions > 2_147_483_647
+      ) {
+        throw new Error(`${table.id} aggregated metrics exceed PostgreSQL integer limits.`);
+      }
+      const ctr = group.impressions === 0 ? 0 : group.clicks / group.impressions;
+      if (ctr > 1) {
+        throw new Error(`${table.id} aggregated CTR exceeds one.`);
+      }
+      group.values[indexes.clicks] = group.clicks;
+      group.values[indexes.impressions] = group.impressions;
+      group.values[indexes.ctr] = ctr;
+      group.values[indexes.position] =
+        group.impressions === 0
+          ? group.positionTotal / group.positionRows
+          : group.weightedPositionTotal / group.impressions;
+      return group.values;
+    });
+}
+
+function timestampValue(value: unknown, label: string): number {
+  const result = value instanceof Date ? value.getTime() : Date.parse(String(value));
+  if (!Number.isFinite(result)) throw new Error(`${label} must be a timestamp.`);
+  return result;
+}
+
+export function latestSerpSnapshotRows(
+  table: CopyTransferTable,
+  sourceRows: Record<string, unknown>[],
+): unknown[][] {
+  if (table.rowTransform !== "latest_serp_snapshot") {
+    throw new Error("latestSerpSnapshotRows requires its matching row transform.");
+  }
+  const indexes = {
+    fetchedAt: requiredTargetIndex(table, "fetched_at"),
+    id: requiredTargetIndex(table, "id"),
+    keywordId: requiredTargetIndex(table, "keyword_id"),
+    rank: requiredTargetIndex(table, "rank_absolute"),
+    url: requiredTargetIndex(table, "url"),
+  };
+  const keywords = new Map<
+    string,
+    { fetchedAt: number; rowsByUrl: Map<string, unknown[]> }
+  >();
+
+  for (const sourceRow of sourceRows) {
+    const values = copyRowValues(table, sourceRow);
+    const id = requiredString(values[indexes.id], `${table.id}.id`);
+    const keywordId = requiredString(
+      values[indexes.keywordId],
+      `${table.id}.keyword_id`,
+    );
+    const url = requiredString(values[indexes.url], `${table.id}.url`);
+    const rank = nonNegativeInteger(
+      values[indexes.rank],
+      `${table.id}.rank_absolute`,
+    );
+    if (rank < 1 || rank > 100) {
+      throw new Error(`${table.id}.rank_absolute must be between 1 and 100.`);
+    }
+    const fetchedAt = timestampValue(
+      values[indexes.fetchedAt],
+      `${table.id}.fetched_at`,
+    );
+    const existing = keywords.get(keywordId);
+    if (!existing || fetchedAt > existing.fetchedAt) {
+      keywords.set(keywordId, {
+        fetchedAt,
+        rowsByUrl: new Map([[url, values]]),
+      });
+      continue;
+    }
+    if (fetchedAt < existing.fetchedAt) continue;
+    const duplicateUrl = existing.rowsByUrl.get(url);
+    if (!duplicateUrl) {
+      existing.rowsByUrl.set(url, values);
+      continue;
+    }
+    const duplicateRank = nonNegativeInteger(
+      duplicateUrl[indexes.rank],
+      `${table.id}.rank_absolute`,
+    );
+    const duplicateId = requiredString(
+      duplicateUrl[indexes.id],
+      `${table.id}.id`,
+    );
+    if (rank < duplicateRank || (rank === duplicateRank && id < duplicateId)) {
+      existing.rowsByUrl.set(url, values);
+    }
+  }
+
+  return [...keywords.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([keywordId, snapshot]) => {
+      const rows = [...snapshot.rowsByUrl.values()].sort((left, right) => {
+        const rankDifference =
+          Number(left[indexes.rank]) - Number(right[indexes.rank]);
+        return (
+          rankDifference ||
+          requiredString(left[indexes.url], `${table.id}.url`).localeCompare(
+            requiredString(right[indexes.url], `${table.id}.url`),
+          )
+        );
+      });
+      const ranks = new Set<number>();
+      for (const row of rows) {
+        const rank = Number(row[indexes.rank]);
+        if (ranks.has(rank)) {
+          throw new Error(
+            `${table.id} latest snapshot for ${keywordId} contains duplicate rank ${rank}.`,
+          );
+        }
+        ranks.add(rank);
+      }
+      return rows;
+    });
+}
+
+export function transformCopyRows(
+  table: CopyTransferTable,
+  sourceRows: Record<string, unknown>[],
+): unknown[][] {
+  if (table.rowTransform === "aggregate_gsc_keywords") {
+    return aggregateGscKeywordRows(table, sourceRows);
+  }
+  if (table.rowTransform === "latest_serp_snapshot") {
+    return latestSerpSnapshotRows(table, sourceRows);
+  }
+  throw new Error(`${table.id} has no supported row transform.`);
+}
+
 function planEntryId(value: unknown, label: string): string {
   if (
     typeof value !== "string" ||
@@ -321,7 +576,32 @@ export function normaliseDatabaseTransferPlan(
     ) {
       throw new Error(`tables[${index}].disableUserTriggers is invalid.`);
     }
-    return {
+    const rowTransform = item.rowTransform;
+    if (
+      rowTransform !== undefined &&
+      rowTransform !== "aggregate_gsc_keywords" &&
+      rowTransform !== "latest_serp_snapshot"
+    ) {
+      throw new Error(`tables[${index}].rowTransform is invalid.`);
+    }
+    if (
+      rowTransform === "aggregate_gsc_keywords" &&
+      (source !== "public.gsc_upload_keywords" ||
+        target !== "public.gsc_upload_keywords")
+    ) {
+      throw new Error(
+        `tables[${index}].rowTransform is only valid for canonical GSC keywords.`,
+      );
+    }
+    if (
+      rowTransform === "latest_serp_snapshot" &&
+      (source !== "public.serp_results" || target !== "public.serp_results")
+    ) {
+      throw new Error(
+        `tables[${index}].rowTransform is only valid for canonical SERP results.`,
+      );
+    }
+    const result: CopyTransferTable = {
       columns: columns(item.columns, `tables[${index}].columns`),
       disableUserTriggers:
         record.version === 2 && item.disableUserTriggers === true,
@@ -334,6 +614,8 @@ export function normaliseDatabaseTransferPlan(
       source,
       target,
     };
+    if (rowTransform !== undefined) result.rowTransform = rowTransform;
+    return result;
   });
   if (new Set(tables.map((table) => table.id)).size !== tables.length) {
     throw new Error("The database transfer plan contains duplicate entry IDs.");
