@@ -126,6 +126,16 @@ function compatibleTypes(
   return source.udt_name === "json" && target.udt_name === "jsonb";
 }
 
+function isJsonMapping(
+  source: InventoryColumn,
+  target: InventoryColumn,
+): boolean {
+  return (
+    (source.udt_name === "json" || source.udt_name === "jsonb") &&
+    (target.udt_name === "json" || target.udt_name === "jsonb")
+  );
+}
+
 function normaliseRuleColumn(
   column: TransferColumn,
   label: string,
@@ -253,6 +263,9 @@ export function buildDatabaseCanonicalPlan(
               `${rule.source}.${column.source} is incompatible with ${rule.target}.${column.target}.`,
             );
           }
+          if (!column.transform && isJsonMapping(source, target)) {
+            column.transform = "json_value";
+          }
         }
       }
 
@@ -273,7 +286,13 @@ export function buildDatabaseCanonicalPlan(
             `${rule.source}.${source.name} is incompatible with ${rule.target}.${target.name}.`,
           );
         }
-        implicit.push({ source: source.name, target: target.name });
+        implicit.push({
+          source: source.name,
+          target: target.name,
+          ...(isJsonMapping(source, target)
+            ? { transform: "json_value" as const }
+            : {}),
+        });
       }
       const columns = [...implicit, ...explicit];
       const mappedTargets = new Set(columns.map((column) => column.target));

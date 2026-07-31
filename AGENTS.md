@@ -83,6 +83,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
   `member` column in that view.
 - Canonical migration maps the source `app_role` enum through an explicit
   `normalise_text` transform into the target checked-text role contract.
+- Canonical migration serializes every JSON/JSONB mapping through the explicit
+  `json_value` transform so node-postgres cannot reinterpret JSON arrays as
+  PostgreSQL arrays.
 - Source `competitors.added_by` is provenance text, not a user UUID; retain it
   in the lossless archive and leave the nullable canonical UUID unset.
 - Run source database transfer only through the managed archive and canonical

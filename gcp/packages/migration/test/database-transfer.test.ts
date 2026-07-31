@@ -108,6 +108,11 @@ describe("database transfer plan", () => {
               target: "normalized_url",
               transform: "normalise_url",
             },
+            {
+              source: "metadata",
+              target: "metadata",
+              transform: "json_value",
+            },
             { target: "generation_source", constant: "deterministic" },
           ],
           id: "copy-transformed",
@@ -123,12 +128,14 @@ describe("database transfer plan", () => {
       copyRowValues(plan.tables[0]!, {
         normalised_keyword: "  Summer   SHOES ",
         normalized_url: "HTTPS://Example.COM/path#fragment",
+        metadata: [{ email: "member@example.com", name: "Member" }],
         sources: null,
       }),
     ).toEqual([
       "summer shoes",
       ["legacy_supabase"],
       "https://example.com/path",
+      '[{"email":"member@example.com","name":"Member"}]',
       "deterministic",
     ]);
   });

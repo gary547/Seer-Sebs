@@ -1,5 +1,6 @@
 export type TransferTransform =
   | "json_array_or_empty"
+  | "json_value"
   | "normalise_text"
   | "normalise_url"
   | "singleton_text_array";
@@ -104,6 +105,7 @@ function columns(value: unknown, label: string): TransferColumn[] {
     if (
       transform !== undefined &&
       transform !== "json_array_or_empty" &&
+      transform !== "json_value" &&
       transform !== "normalise_text" &&
       transform !== "normalise_url" &&
       transform !== "singleton_text_array"
@@ -188,6 +190,16 @@ export function copyRowValues(
         );
       }
       return JSON.stringify(value ?? []);
+    }
+    if (column.transform === "json_value") {
+      if (value === null || value === undefined) return value;
+      const encoded = JSON.stringify(value);
+      if (encoded === undefined) {
+        throw new Error(
+          `${table.source}.${column.source} for ${column.target} is not JSON serializable.`,
+        );
+      }
+      return encoded;
     }
     if (!column.transform || value === null || value === undefined) {
       return value;

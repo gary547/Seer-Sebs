@@ -76,6 +76,7 @@ describe("canonical database plan", () => {
     columns: [
       column("profiles", "id", "NO", null, "uuid"),
       column("profiles", "email", "YES"),
+      column("profiles", "settings", "YES", null, "jsonb"),
       column("keywords", "id", "NO", null, "uuid"),
       column("keywords", "project_id", "NO", null, "uuid"),
       column("keywords", "keyword", "NO"),
@@ -91,6 +92,7 @@ describe("canonical database plan", () => {
       column("profiles", "user_id", "NO", null, "uuid"),
       column("profiles", "email", "NO"),
       column("profiles", "identity_provider", "NO", "'firebase'::text"),
+      column("profiles", "settings", "YES", null, "jsonb"),
       column("keywords", "id", "NO", null, "uuid"),
       column("keywords", "project_id", "NO", null, "uuid"),
       column("keywords", "keyword", "NO"),
@@ -115,6 +117,13 @@ describe("canonical database plan", () => {
 
     expect(plan.tables).toHaveLength(2);
     expect(plan.tables[0]).toMatchObject({
+      columns: expect.arrayContaining([
+        {
+          source: "settings",
+          target: "settings",
+          transform: "json_value",
+        },
+      ]),
       id: "canonical-profiles",
       source: "public.profiles",
       target: "public.profiles",
