@@ -122,6 +122,17 @@ variable "runtime_enabled" {
   default     = false
 }
 
+variable "runtime_secret_revision" {
+  description = "Monotonic revision incremented after rotating runtime secrets."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.runtime_secret_revision >= 1 && floor(var.runtime_secret_revision) == var.runtime_secret_revision
+    error_message = "runtime_secret_revision must be a positive integer."
+  }
+}
+
 variable "compatibility_dispatcher_enabled" {
   description = "Keep the local leased-queue dispatcher during a controlled compatibility rehearsal."
   type        = bool

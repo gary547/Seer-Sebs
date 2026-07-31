@@ -80,6 +80,43 @@ describe("managed database runtime contract", () => {
     );
   });
 
+  it("grants the API bucket metadata access before its readiness probe starts", async () => {
+    const [main, runtime, variables] = await Promise.all([
+      read("gcp/infra/main.tf"),
+      read("gcp/infra/runtime.tf"),
+      read("gcp/infra/variables.tf"),
+    ]);
+
+    expect(main).toMatch(
+      /resource "google_storage_bucket_iam_member" "api_assets_metadata"[\s\S]*role\s+= "roles\/storage\.legacyBucketReader"/,
+    );
+    expect(runtime).toContain(
+      "google_storage_bucket_iam_member.api_assets_metadata",
+    );
+    expect(runtime).toContain('"seer-image-sha"');
+    expect(runtime).toContain('"seer-secret-rev"');
+    expect(runtime).toContain("tostring(var.runtime_secret_revision)");
+    expect(variables).toContain('variable "runtime_secret_revision"');
+  });
+
+  it("preserves the original pipeline error when failure recording also fails", async () => {
+    const workflow = await read("gcp/workflows/pipeline.yaml.tftpl");
+
+    expect(workflow).toContain("as: failureRecordError");
+    expect(workflow).toContain("logFailureRecordError:");
+    expect(workflow).toContain("raise: $${stageError}");
+  });
+
+  it("exposes the API without an allUsers IAM binding blocked by domain policy", async () => {
+    const runtime = await read("gcp/infra/runtime.tf");
+
+    expect(runtime).toContain('invoker_iam_disabled = each.key == "api"');
+    expect(runtime).not.toContain(
+      'resource "google_cloud_run_v2_service_iam_member" "public_api"',
+    );
+    expect(runtime).not.toContain('member   = "allUsers"');
+  });
+
   it("installs both locked dependency trees before validating the GCP runtime", async () => {
     const runtimeBuild = await read("gcp/cloudbuild.runtime.yaml");
 

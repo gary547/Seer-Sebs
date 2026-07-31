@@ -418,6 +418,12 @@ resource "google_storage_bucket_iam_member" "api_assets" {
   member = google_service_account.runtime["api"].member
 }
 
+resource "google_storage_bucket_iam_member" "api_assets_metadata" {
+  bucket = google_storage_bucket.assets.name
+  role   = "roles/storage.legacyBucketReader"
+  member = google_service_account.runtime["api"].member
+}
+
 resource "google_storage_bucket_iam_member" "worker_assets" {
   bucket = google_storage_bucket.assets.name
   role   = "roles/storage.objectViewer"

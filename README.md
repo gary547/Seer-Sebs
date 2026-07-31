@@ -39,7 +39,9 @@ PostgreSQL, Cloud Storage, Identity Platform, Cloud Tasks, Secret Manager,
 Artifact Registry, Cloud Build, and Cloud Monitoring.
 
 Infrastructure and deployment assets live in [`gcp/`](./gcp/). Migration
-documentation lives in [`docs/migration/`](./docs/migration/).
+documentation lives in [`docs/migration/`](./docs/migration/). Staging
+deployment, secret rotation, OAuth, and live verification are recorded in the
+[`GCP staging runbook`](./docs/operations/GCP_STAGING_RUNBOOK.md).
 
 ## Legacy source reference
 

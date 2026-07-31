@@ -178,6 +178,14 @@ runStage:
                       reason: $${json.encode_to_string(stageError)}
                       runId: $${runId}
                       stageId: $${stageId}
+                except:
+                  as: failureRecordError
+                  steps:
+                    - logFailureRecordError:
+                        call: sys.log
+                        args:
+                          severity: "ERROR"
+                          text: '$${"Could not persist pipeline failure: " + json.encode_to_string(failureRecordError)}'
             - raiseFailure:
                 raise: $${stageError}
     - complete:

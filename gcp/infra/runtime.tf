@@ -63,12 +63,13 @@ locals {
 resource "google_cloud_run_v2_service" "request_runtime" {
   for_each = var.runtime_enabled ? local.request_runtime_services : {}
 
-  project             = var.project_id
-  name                = "${var.name_prefix}-${each.key}"
-  location            = var.region
-  ingress             = each.value.ingress
-  deletion_protection = var.deletion_protection
-  labels              = local.labels
+  project              = var.project_id
+  name                 = "${var.name_prefix}-${each.key}"
+  location             = var.region
+  ingress              = each.value.ingress
+  invoker_iam_disabled = each.key == "api"
+  deletion_protection  = var.deletion_protection
+  labels               = local.labels
 
   lifecycle {
     precondition {
@@ -78,6 +79,11 @@ resource "google_cloud_run_v2_service" "request_runtime" {
   }
 
   template {
+    labels = {
+      "seer-image-sha"  = substr(split("@sha256:", each.value.image)[1], 0, 12)
+      "seer-secret-rev" = tostring(var.runtime_secret_revision)
+    }
+
     service_account = each.value.service_account
     timeout         = "900s"
 
@@ -187,6 +193,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
   depends_on = [
     google_project_service.services,
     google_service_networking_connection.private_services,
+    google_storage_bucket_iam_member.api_assets_metadata,
     google_sql_database.application,
     google_sql_user.runtime,
   ]
@@ -210,6 +217,10 @@ resource "google_cloud_run_v2_service" "dispatcher" {
   }
 
   template {
+    labels = {
+      "seer-secret-rev" = tostring(var.runtime_secret_revision)
+    }
+
     service_account = google_service_account.runtime["dispatcher"].email
     timeout         = "900s"
 
@@ -356,6 +367,10 @@ resource "google_cloud_run_v2_service" "events" {
   }
 
   template {
+    labels = {
+      "seer-secret-rev" = tostring(var.runtime_secret_revision)
+    }
+
     service_account = google_service_account.runtime["events"].email
     timeout         = "900s"
 
@@ -472,16 +487,6 @@ resource "google_cloud_run_v2_service" "events" {
     google_sql_database.application,
     google_sql_user.runtime,
   ]
-}
-
-resource "google_cloud_run_v2_service_iam_member" "public_api" {
-  count = var.runtime_enabled ? 1 : 0
-
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.request_runtime["api"].name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
 }
 
 resource "google_cloud_run_v2_service_iam_member" "dispatcher_worker" {
