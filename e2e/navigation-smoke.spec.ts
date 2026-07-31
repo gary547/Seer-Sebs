@@ -43,9 +43,22 @@ async function signIn(page: Page, email: string, password: string) {
   await page.getByLabel(/password/i).fill(password);
   await page.getByRole("button", { name: /sign in|log in/i }).click();
   await page.waitForURL(/\/dashboard/, { timeout: 15_000 });
+  await page.getByRole("heading", { level: 1 }).waitFor({
+    state: "visible",
+    timeout: 15_000,
+  });
 }
 
+const clientHomeLink = (page: Page) =>
+  page
+    .locator('a[href^="/clients/"]:not([href="/clients/new"]):not([href*="/projects/"])')
+    .first();
+
+const projectHomeLink = (page: Page) =>
+  page.locator('a[href*="/projects/"]:not([href$="/projects/new"])').first();
+
 test.describe("Navigation smoke — approved user", () => {
+  test.describe.configure({ mode: "serial" });
   test.skip(!EMAIL || !PASSWORD, "E2E_USER_EMAIL / E2E_USER_PASSWORD not set");
 
   test.beforeEach(async ({ page }) => {
@@ -60,26 +73,26 @@ test.describe("Navigation smoke — approved user", () => {
 
   test("2-5. dashboard → client → project drill-down", async ({ page }) => {
     // Client Portfolio section renders client links of shape /clients/:id.
-    const clientLink = page.locator('a[href^="/clients/"]').first();
+    const clientLink = clientHomeLink(page);
     await expect(clientLink).toBeVisible();
     await clientLink.click();
     await expect(page).toHaveURL(CLIENT_PATH_RE);
 
     // Client dashboard lists project links.
-    const projectLink = page.locator('a[href*="/projects/"]').first();
+    const projectLink = projectHomeLink(page);
     await expect(projectLink).toBeVisible();
     await projectLink.click();
     await expect(page).toHaveURL(PROJECT_PATH_RE);
   });
 
   test("6-7. project sub-nav routes + history hygiene", async ({ page }) => {
-    // Reach a project via the dashboard so prior history = /dashboard.
-    await page.locator('a[href^="/clients/"]').first().click();
+    // Reach a project overview via the dashboard.
+    await clientHomeLink(page).click();
     await expect(page).toHaveURL(CLIENT_PATH_RE);
-    const clientUrl = page.url();
 
-    await page.locator('a[href*="/projects/"]').first().click();
+    await projectHomeLink(page).click();
     await expect(page).toHaveURL(PROJECT_PATH_RE);
+    const projectUrl = page.url();
 
     // Navigate to /forecast via sub-nav. The sub-nav uses role=tab or link.
     const forecastNav = page
@@ -90,24 +103,21 @@ test.describe("Navigation smoke — approved user", () => {
     await expect(page).toHaveURL(/\/forecast$/);
 
     // Switch to /setup.
-    const setupNav = page
-      .getByRole("link", { name: /^setup$/i })
-      .or(page.getByRole("tab", { name: /^setup$/i }))
-      .first();
+    const setupNav = page.getByRole("tab", { name: /^setup$/i });
     await setupNav.click();
     await expect(page).toHaveURL(/\/setup$/);
 
     // History hygiene: in-project view switches use replace(), so one
-    // browser back should land on the prior non-tab page (client dashboard).
+    // browser back should land on the project overview rather than a prior tab.
     await page.goBack();
-    await expect(page).toHaveURL(clientUrl);
+    await expect(page).toHaveURL(projectUrl);
   });
 
   test("8. header ClientProjectSwitcher exposes client + project menus", async ({
     page,
   }) => {
-    await page.locator('a[href^="/clients/"]').first().click();
-    await page.locator('a[href*="/projects/"]').first().click();
+    await clientHomeLink(page).click();
+    await projectHomeLink(page).click();
     await expect(page).toHaveURL(PROJECT_PATH_RE);
 
     // Switcher lives in the sticky AppLayout header. We don't assume exact
@@ -115,22 +125,18 @@ test.describe("Navigation smoke — approved user", () => {
     // "client" or "switch".
     const switcher = page
       .getByRole("banner")
-      .getByRole("button", { name: /client|switch|project/i })
-      .first();
+      .getByRole("combobox", { name: "Select client" });
     await expect(switcher).toBeVisible();
     await switcher.click();
-    // Menu/dialog opens — assert at least one option is rendered.
-    await expect(
-      page.getByRole("menu").or(page.getByRole("dialog")).first(),
-    ).toBeVisible();
+    await expect(page.getByRole("listbox")).toBeVisible();
   });
 
   test("9. legacy /navigator/:id redirects to canonical project URL", async ({
     page,
   }) => {
     // Discover a real project id first.
-    await page.locator('a[href^="/clients/"]').first().click();
-    const projectAnchor = page.locator('a[href*="/projects/"]').first();
+    await clientHomeLink(page).click();
+    const projectAnchor = projectHomeLink(page);
     const href = await projectAnchor.getAttribute("href");
     expect(href).toBeTruthy();
     const projectId = href!.match(/\/projects\/([0-9a-f-]+)/i)?.[1];
@@ -143,8 +149,8 @@ test.describe("Navigation smoke — approved user", () => {
   // ── Phase G regressions ──────────────────────────────────────────────────
 
   test("11. project overview KPIs show real numeric text", async ({ page }) => {
-    await page.locator('a[href^="/clients/"]').first().click();
-    await page.locator('a[href*="/projects/"]').first().click();
+    await clientHomeLink(page).click();
+    await projectHomeLink(page).click();
     await expect(page).toHaveURL(PROJECT_PATH_RE);
 
     const labels = [
@@ -169,8 +175,8 @@ test.describe("Navigation smoke — approved user", () => {
   test("12. project sub-nav lists all 7 first-class views + active aria-current", async ({
     page,
   }) => {
-    await page.locator('a[href^="/clients/"]').first().click();
-    await page.locator('a[href*="/projects/"]').first().click();
+    await clientHomeLink(page).click();
+    await projectHomeLink(page).click();
     await expect(page).toHaveURL(PROJECT_PATH_RE);
 
     const expected = [
@@ -200,23 +206,23 @@ test.describe("Navigation smoke — approved user", () => {
   }) => {
     // No project context on /dashboard.
     await expect(page).toHaveURL(/\/dashboard$/);
-    const nav = page.getByRole("navigation").first();
+    const nav = page.getByRole("navigation", { name: "Primary" });
     await expect(nav).toBeVisible();
     await expect(nav.getByText(/in context/i)).toHaveCount(0);
 
     // Drill into a project, then assert the scoped group appears.
-    await page.locator('a[href^="/clients/"]').first().click();
-    await page.locator('a[href*="/projects/"]').first().click();
+    await clientHomeLink(page).click();
+    await projectHomeLink(page).click();
     await expect(page).toHaveURL(PROJECT_PATH_RE);
 
     await expect(
-      page.getByRole("navigation").first().getByText(/in context/i),
+      page.getByRole("navigation", { name: "Primary" }).getByText(/in context/i),
     ).toBeVisible({ timeout: 10_000 });
   });
 
   test("14. legacy 'Seer® Projects' sidebar item is gone", async ({ page }) => {
     await expect(page).toHaveURL(/\/dashboard$/);
-    const nav = page.getByRole("navigation").first();
+    const nav = page.getByRole("navigation", { name: "Primary" });
     await expect(nav).toBeVisible();
     await expect(
       nav.getByRole("link", { name: /seer.*projects?/i }),
@@ -236,7 +242,7 @@ test.describe("Navigation smoke — approved user", () => {
   test("16. scope chips render on Capture Window and Audience Insights", async ({
     page,
   }) => {
-    const clientLink = page.locator('a[href^="/clients/"]').first();
+    const clientLink = clientHomeLink(page);
     const href = await clientLink.getAttribute("href");
     const clientId = href?.match(/\/clients\/([0-9a-f-]+)/i)?.[1];
     expect(clientId, "could not discover a clientId from dashboard").toBeTruthy();

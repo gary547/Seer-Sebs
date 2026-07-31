@@ -634,7 +634,11 @@ export default function NavigatorProjectDetailPage() {
         {/* Layer 2: Workflow Stepper — per-tab stale dots mirror the global sync state.
             On first run, steps 2–5 are dimmed with a tooltip until the first build
             completes; the Keywords step (step 1) stays fully interactive. */}
-        <div className="mt-4 flex gap-0 border-b border-border">
+        <div
+          className="mt-4 flex gap-0 border-b border-border"
+          role="tablist"
+          aria-label="Project views"
+        >
           {STEPS.map((step, idx) => {
             const isStale = step.dirtyDomain && (syncState as any)?.[step.dirtyDomain] === true;
             const isLockedFirstRun = isFirstRun && idx > 0;
@@ -646,6 +650,8 @@ export default function NavigatorProjectDetailPage() {
                 disabled={isLockedFirstRun}
                 aria-disabled={isLockedFirstRun}
                 aria-current={isActive ? "page" : undefined}
+                aria-selected={isActive}
+                role="tab"
                 className={cn(
                   "relative px-4 py-2.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm",
                   isActive
@@ -660,7 +666,7 @@ export default function NavigatorProjectDetailPage() {
                     activeStep === step.key
                       ? "bg-primary text-primary-foreground"
                       : "bg-muted text-muted-foreground"
-                  )}>
+                  )} aria-hidden="true">
                     {idx + 1}
                   </span>
                   {step.label}

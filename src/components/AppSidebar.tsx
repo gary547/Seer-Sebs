@@ -221,7 +221,11 @@ export function AppSidebar() {
         )}
       </div>
 
-      <SidebarContent className="px-2 pr-3">
+      <SidebarContent
+        className="px-2 pr-3"
+        role="navigation"
+        aria-label="Primary"
+      >
         <SidebarGroup>
           {!collapsed && (
             <SidebarGroupLabel className="px-2 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/40">

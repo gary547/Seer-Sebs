@@ -91,6 +91,45 @@ export async function listCaptureWindowRows(
           LIMIT 1
         ) AS run ON true
       ),
+      seasonal_demand AS MATERIALIZED (
+        SELECT
+          latest.project_id,
+          latest.run_id,
+          demand.keyword_id,
+          demand.seasonality_strength,
+          peak.peak_month,
+          (
+            (
+              peak.peak_month
+              - extract(month FROM current_date)::integer
+              + 12
+            ) % 12
+          )::integer AS months_to_peak
+        FROM latest_runs AS latest
+        JOIN keyword_demand_signals AS demand
+          ON demand.project_id = latest.project_id
+         AND demand.pipeline_run_id = latest.run_id
+        JOIN LATERAL (
+          SELECT candidate AS peak_month
+          FROM unnest(demand.peak_months) AS candidate
+          ORDER BY
+            (
+              candidate
+              - extract(month FROM current_date)::integer
+              + 12
+            ) % 12
+          LIMIT 1
+        ) AS peak ON true
+        WHERE
+          NOT $3::boolean
+          OR (
+            (
+              peak.peak_month
+              - extract(month FROM current_date)::integer
+              + 12
+            ) % 12
+          ) BETWEEN 2 AND 4
+      ),
       seasonal_keywords AS (
         SELECT
           keyword.id AS keyword_id,
@@ -105,41 +144,21 @@ export async function listCaptureWindowRows(
           revenue.target_incremental_revenue_annual::text
             AS revenue_at_rank_1,
           revenue.expected_incremental_annual::text AS har_revenue_gain,
-          peak.peak_month,
-          (
-            (
-              peak.peak_month
-              - extract(month FROM current_date)::integer
-              + 12
-            ) % 12
-          )::integer AS months_to_peak,
+          demand.peak_month,
+          demand.months_to_peak,
           demand.seasonality_strength
-        FROM latest_runs AS latest
-        JOIN accessible_projects AS project ON project.id = latest.project_id
+        FROM seasonal_demand AS demand
+        JOIN accessible_projects AS project ON project.id = demand.project_id
         JOIN clients AS client ON client.id = project.client_id
-        JOIN keyword_demand_signals AS demand
-          ON demand.project_id = latest.project_id
-         AND demand.pipeline_run_id = latest.run_id
         JOIN keywords AS keyword ON keyword.id = demand.keyword_id
         JOIN revenue_forecasts AS revenue
-          ON revenue.pipeline_run_id = latest.run_id
+          ON revenue.pipeline_run_id = demand.run_id
          AND revenue.keyword_id = keyword.id
          AND revenue.scenario = 'realistic'
         JOIN har_forecasts AS har
           ON har.pipeline_run_id = revenue.pipeline_run_id
          AND har.keyword_id = revenue.keyword_id
          AND har.scenario = revenue.scenario
-        JOIN LATERAL (
-          SELECT candidate AS peak_month
-          FROM unnest(demand.peak_months) AS candidate
-          ORDER BY
-            (
-              candidate
-              - extract(month FROM current_date)::integer
-              + 12
-            ) % 12
-          LIMIT 1
-        ) AS peak ON true
       )
       SELECT
         keyword_id,
@@ -165,7 +184,6 @@ export async function listCaptureWindowRows(
             END
         )::text AS seasonal_urgency
       FROM seasonal_keywords
-      WHERE NOT $3::boolean OR months_to_peak BETWEEN 2 AND 4
       ORDER BY
         15 DESC,
         revenue_at_rank_1::numeric DESC NULLS LAST,

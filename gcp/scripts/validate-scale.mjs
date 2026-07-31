@@ -157,6 +157,12 @@ const persisted = await jsonRequest(
   `${apiBaseUrl}/v1/projects/${project.id}`,
   authenticated(identity.token),
 );
+const portfolioStartedAt = Date.now();
+const portfolio = await jsonRequest(
+  `${apiBaseUrl}/v1/portfolio`,
+  authenticated(identity.token),
+);
+const portfolioElapsedMs = Date.now() - portfolioStartedAt;
 const expectedScenarioCount = keywordCount * 3;
 if (
   persisted.keywordCount !== keywordCount ||
@@ -171,11 +177,20 @@ if (
     `Scale persistence counts are incorrect: ${JSON.stringify(persisted.calculationCounts)}`,
   );
 }
+if (
+  portfolioElapsedMs >= 5_000 ||
+  !portfolio.projectForecasts?.some((forecast) => forecast.projectId === project.id)
+) {
+  throw new Error(
+    `Scale portfolio validation failed after ${portfolioElapsedMs}ms.`,
+  );
+}
 process.stdout.write(
   `${JSON.stringify({
     calculationCounts: persisted.calculationCounts,
     elapsedMs: Date.now() - startedAt,
     keywordCount,
+    portfolioElapsedMs,
     runId: run.id,
     scaleValidation: true,
   })}\n`,
