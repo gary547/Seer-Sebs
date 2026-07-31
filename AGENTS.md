@@ -91,6 +91,8 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Restore the approved source dump into the isolated `seer_source_snapshot`
   Cloud SQL database and connect through migrator IAM authentication. Never
   place a source database password in Cloud Run configuration or Terraform.
+- Keep the system CA certificate bundle in the database-transfer runtime; the
+  embedded Cloud SQL Auth Proxy requires it to verify Google API endpoints.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.

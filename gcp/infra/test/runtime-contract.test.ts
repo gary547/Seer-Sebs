@@ -232,6 +232,9 @@ describe("managed database runtime contract", () => {
     expect(build).toContain("database-transfer:${COMMIT_SHA}");
     expect(build).toContain("SEER_RELEASE_DATABASE_TRANSFER_IMAGE");
     expect(dockerfile).toContain("managed-migrate-database.mjs");
+    expect(dockerfile).toContain(
+      "COPY --from=ca-certificates /etc/ssl/certs/ca-certificates.crt",
+    );
     expect(dockerfile).toMatch(
       /cloud-sql-proxy@sha256:[0-9a-f]{64}/,
     );
