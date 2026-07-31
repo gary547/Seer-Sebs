@@ -156,16 +156,37 @@ psql "$source_url" -v ON_ERROR_STOP=1 -c "
     );
   INSERT INTO keywords
     (id, project_id, keyword, source, kw_cluster, detox_status, device, created_at)
-  VALUES (
-    '40000000-0000-4000-8000-000000000001',
-    '30000000-0000-4000-8000-000000000002',
-    '  Summer   SHOES ',
-    NULL,
-    'Footwear',
-    'keep',
-    'mobile',
-    '2026-07-30T08:20:00Z'
-  );
+  VALUES
+    (
+      '40000000-0000-4000-8000-000000000001',
+      '30000000-0000-4000-8000-000000000002',
+      '  Summer   SHOES ',
+      NULL,
+      'Footwear',
+      'keep',
+      'mobile',
+      '2026-07-30T08:20:00Z'
+    ),
+    (
+      '40000000-0000-4000-8000-000000000002',
+      '30000000-0000-4000-8000-000000000002',
+      'Winter boots',
+      'manual',
+      'Footwear',
+      'removed',
+      'desktop',
+      '2026-07-30T08:21:00Z'
+    ),
+    (
+      '40000000-0000-4000-8000-000000000003',
+      '30000000-0000-4000-8000-000000000002',
+      'Running socks',
+      'manual',
+      'Footwear',
+      'flagged_remove',
+      'mobile',
+      '2026-07-30T08:22:00Z'
+    );
   INSERT INTO monitor_campaigns
     (id, client_id, navigator_project_id, name, status, check_frequency, daily_check_time, created_at, updated_at)
   VALUES (
@@ -283,6 +304,8 @@ result="$(
         WHERE normalised_keyword = 'summer shoes'
           AND sources = ARRAY['legacy_supabase']::text[]
           AND category = 'Footwear'),
+      (SELECT count(*) FROM keywords WHERE detox_status = 'remove'),
+      (SELECT count(*) FROM keywords WHERE detox_status = 'review'),
       (SELECT count(*) FROM monitored_urls
         WHERE normalized_url = 'https://example.com/path'),
       (SELECT count(*) FROM url_check_snapshots),
@@ -296,7 +319,7 @@ result="$(
   "
 )"
 
-if [[ "$result" != "10|8|2|1|1|2|1|1|1" ]]; then
+if [[ "$result" != "12|8|2|1|1|1|1|2|1|1|1" ]]; then
   echo "Unexpected canonical migration result: $result" >&2
   exit 1
 fi

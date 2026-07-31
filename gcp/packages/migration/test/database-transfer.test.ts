@@ -113,6 +113,11 @@ describe("database transfer plan", () => {
               target: "metadata",
               transform: "json_value",
             },
+            {
+              source: "detox_status",
+              target: "detox_status",
+              transform: "legacy_detox_status",
+            },
             { target: "generation_source", constant: "deterministic" },
           ],
           id: "copy-transformed",
@@ -129,6 +134,7 @@ describe("database transfer plan", () => {
         normalised_keyword: "  Summer   SHOES ",
         normalized_url: "HTTPS://Example.COM/path#fragment",
         metadata: [{ email: "member@example.com", name: "Member" }],
+        detox_status: "removed",
         sources: null,
       }),
     ).toEqual([
@@ -136,8 +142,36 @@ describe("database transfer plan", () => {
       ["legacy_supabase"],
       "https://example.com/path",
       '[{"email":"member@example.com","name":"Member"}]',
+      "remove",
       "deterministic",
     ]);
+  });
+
+  it("rejects unknown legacy detox statuses", () => {
+    const plan = normaliseDatabaseTransferPlan({
+      approved: true,
+      sequences: [],
+      tables: [
+        {
+          columns: [
+            {
+              source: "detox_status",
+              target: "detox_status",
+              transform: "legacy_detox_status",
+            },
+          ],
+          id: "copy-keywords",
+          mode: "copy",
+          source: "public.keywords",
+          target: "public.keywords",
+        },
+      ],
+      version: 2,
+    });
+
+    expect(() =>
+      copyRowValues(plan.tables[0]!, { detox_status: "unknown" }),
+    ).toThrow("unsupported status unknown");
   });
 
   it("rejects unapproved plans and unsafe identifiers", () => {

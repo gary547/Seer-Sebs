@@ -81,6 +81,11 @@
           "transform": "singleton_text_array",
           "fallback": "legacy_supabase"
         },
+        {
+          "source": "detox_status",
+          "target": "detox_status",
+          "transform": "legacy_detox_status"
+        },
         { "source": "kw_cluster", "target": "category" }
       ]
     },

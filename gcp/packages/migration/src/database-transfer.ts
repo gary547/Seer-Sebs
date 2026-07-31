@@ -1,6 +1,7 @@
 export type TransferTransform =
   | "json_array_or_empty"
   | "json_value"
+  | "legacy_detox_status"
   | "normalise_text"
   | "normalise_url"
   | "singleton_text_array";
@@ -106,6 +107,7 @@ function columns(value: unknown, label: string): TransferColumn[] {
       transform !== undefined &&
       transform !== "json_array_or_empty" &&
       transform !== "json_value" &&
+      transform !== "legacy_detox_status" &&
       transform !== "normalise_text" &&
       transform !== "normalise_url" &&
       transform !== "singleton_text_array"
@@ -200,6 +202,27 @@ export function copyRowValues(
         );
       }
       return encoded;
+    }
+    if (column.transform === "legacy_detox_status") {
+      if (typeof value !== "string") {
+        throw new Error(
+          `${table.source}.${column.source} for ${column.target} must be a string.`,
+        );
+      }
+      const status = {
+        flagged_remove: "review",
+        keep: "keep",
+        pending: "pending",
+        remove: "remove",
+        removed: "remove",
+        review: "review",
+      }[value];
+      if (!status) {
+        throw new Error(
+          `${table.source}.${column.source} for ${column.target} has unsupported status ${value}.`,
+        );
+      }
+      return status;
     }
     if (!column.transform || value === null || value === undefined) {
       return value;

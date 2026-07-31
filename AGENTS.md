@@ -86,6 +86,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Canonical migration serializes every JSON/JSONB mapping through the explicit
   `json_value` transform so node-postgres cannot reinterpret JSON arrays as
   PostgreSQL arrays.
+- Canonical migration maps legacy keyword detox states explicitly: `removed`
+  becomes `remove`, and `flagged_remove` becomes `review`. Unknown values must
+  fail closed instead of bypassing the target check constraint.
 - Source `competitors.added_by` is provenance text, not a user UUID; retain it
   in the lossless archive and leave the nullable canonical UUID unset.
 - Run source database transfer only through the managed archive and canonical
