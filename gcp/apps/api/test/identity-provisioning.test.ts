@@ -29,6 +29,16 @@ describe("Identity Platform account provisioning", () => {
       if (url.includes("accounts:delete")) {
         return new Response("{}", { status: 200 });
       }
+      if (url.includes("accounts:signInWithPassword")) {
+        return new Response(
+          JSON.stringify({
+            email: "user@example.com",
+            idToken: "identity-id-token",
+            localId: "00000000-0000-4000-8000-000000000001",
+          }),
+          { status: 200 },
+        );
+      }
       return new Response(
         JSON.stringify({
           email: "user@example.com",
@@ -48,7 +58,7 @@ describe("Identity Platform account provisioning", () => {
       fetchImplementation,
     );
 
-    await client.createAccount({
+    const account = await client.createAccount({
       displayName: "Test User",
       email: "user@example.com",
       localId: "00000000-0000-4000-8000-000000000001",
@@ -57,16 +67,27 @@ describe("Identity Platform account provisioning", () => {
     await client.sendVerificationEmail(
       "user@example.com",
       "https://seer.example.com/auth",
+      account.idToken!,
     );
     await client.deleteAccount("00000000-0000-4000-8000-000000000001");
 
-    expect(fetchImplementation).toHaveBeenCalledTimes(3);
-    for (const call of fetchMock.mock.calls) {
-      expect(String(call[0])).toContain("key=web-api-key");
-      expect(call[1]?.headers).toMatchObject({
-        authorization: "Bearer oauth-access-token",
-      });
-    }
+    expect(fetchImplementation).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/v1/projects/seer-staging/accounts",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      authorization: "Bearer oauth-access-token",
+    });
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/v1/accounts:signInWithPassword",
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty("authorization");
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/v1/accounts:sendOobCode");
+    expect(fetchMock.mock.calls[2]?.[1]?.headers).not.toHaveProperty("authorization");
+    expect(String(fetchMock.mock.calls[3]?.[0])).toContain("key=web-api-key");
+    expect(fetchMock.mock.calls[3]?.[1]?.headers).toMatchObject({
+      authorization: "Bearer oauth-access-token",
+    });
   });
 
   it("creates the database profile and safe default role before sending verification", async () => {
@@ -75,7 +96,10 @@ describe("Identity Platform account provisioning", () => {
       rows: [],
     }));
     const identity: IdentityAccountAdmin = {
-      createAccount: vi.fn(async () => undefined),
+      createAccount: vi.fn(async () => ({
+        idToken: "identity-id-token",
+        localId: "00000000-0000-4000-8000-000000000001",
+      })),
       deleteAccount: vi.fn(async () => undefined),
       sendPasswordResetEmail: vi.fn(async () => undefined),
       sendVerificationEmail: vi.fn(async () => undefined),
@@ -101,6 +125,7 @@ describe("Identity Platform account provisioning", () => {
     expect(identity.sendVerificationEmail).toHaveBeenCalledWith(
       "external@example.com",
       "https://seer.example.com/auth",
+      "identity-id-token",
     );
     expect(query.mock.calls.some((call) => call[0].includes("INSERT INTO profiles"))).toBe(true);
     expect(
@@ -118,7 +143,10 @@ describe("Identity Platform account provisioning", () => {
       return { rowCount: 1, rows: [] };
     });
     const identity: IdentityAccountAdmin = {
-      createAccount: vi.fn(async () => undefined),
+      createAccount: vi.fn(async () => ({
+        idToken: "identity-id-token",
+        localId: "00000000-0000-4000-8000-000000000001",
+      })),
       deleteAccount: vi.fn(async () => undefined),
       sendPasswordResetEmail: vi.fn(async () => undefined),
       sendVerificationEmail: vi.fn(async () => undefined),

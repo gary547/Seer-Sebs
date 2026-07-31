@@ -13,7 +13,13 @@ interface IdentityErrorBody {
 
 interface IdentityAccountResponse {
   email?: string;
+  idToken?: string;
   localId?: string;
+}
+
+interface CreatedIdentityAccount {
+  idToken?: string;
+  localId: string;
 }
 
 export interface IdentityAccountAdmin {
@@ -22,10 +28,10 @@ export interface IdentityAccountAdmin {
     email: string;
     localId: string;
     password?: string;
-  }): Promise<void>;
+  }): Promise<CreatedIdentityAccount>;
   deleteAccount(localId: string): Promise<void>;
   sendPasswordResetEmail(email: string, continueUrl: string): Promise<void>;
-  sendVerificationEmail(email: string, continueUrl: string): Promise<void>;
+  sendVerificationEmail(email: string, continueUrl: string, idToken: string): Promise<void>;
 }
 
 export class IdentityPlatformAdminClient implements IdentityAccountAdmin {
@@ -40,16 +46,22 @@ export class IdentityPlatformAdminClient implements IdentityAccountAdmin {
     }
   }
 
-  private async request(path: string, body: Record<string, unknown>): Promise<unknown> {
-    const accessToken = await this.accessTokens.getAccessToken();
+  private async request(
+    path: string,
+    body: Record<string, unknown>,
+    admin = true,
+  ): Promise<unknown> {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (admin) {
+      headers.authorization = `Bearer ${await this.accessTokens.getAccessToken()}`;
+    }
     const response = await this.fetchImplementation(
       `https://identitytoolkit.googleapis.com/v1/${path}?key=${encodeURIComponent(this.apiKey)}`,
       {
         body: JSON.stringify(body),
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          "content-type": "application/json",
-        },
+        headers,
         method: "POST",
         signal: AbortSignal.timeout(10_000),
       },
@@ -73,7 +85,7 @@ export class IdentityPlatformAdminClient implements IdentityAccountAdmin {
     email: string;
     localId: string;
     password?: string;
-  }): Promise<void> {
+  }): Promise<CreatedIdentityAccount> {
     const result = (await this.request(`projects/${this.projectId}/accounts`, {
       disabled: false,
       displayName: input.displayName,
@@ -82,8 +94,32 @@ export class IdentityPlatformAdminClient implements IdentityAccountAdmin {
       localId: input.localId,
       ...(input.password ? { password: input.password } : {}),
     })) as IdentityAccountResponse;
-    if (result.localId !== input.localId || result.email?.toLowerCase() !== input.email) {
+    if (
+      !result.localId ||
+      result.localId !== input.localId ||
+      result.email?.toLowerCase() !== input.email
+    ) {
       throw new Error("Identity Platform created an unexpected account.");
+    }
+    if (!input.password) return { localId: result.localId };
+
+    try {
+      const signIn = (await this.request(
+        "accounts:signInWithPassword",
+        {
+          email: input.email,
+          password: input.password,
+          returnSecureToken: true,
+        },
+        false,
+      )) as IdentityAccountResponse;
+      if (signIn.localId !== result.localId || !signIn.idToken) {
+        throw new Error("Identity Platform returned an unexpected registration session.");
+      }
+      return { idToken: signIn.idToken, localId: result.localId };
+    } catch (error) {
+      await this.deleteAccount(result.localId).catch(() => undefined);
+      throw error;
     }
   }
 
@@ -91,22 +127,33 @@ export class IdentityPlatformAdminClient implements IdentityAccountAdmin {
     await this.request(`projects/${this.projectId}/accounts:delete`, { localId });
   }
 
-  async sendVerificationEmail(email: string, continueUrl: string): Promise<void> {
-    await this.request("accounts:sendOobCode", {
-      continueUrl,
-      email,
-      requestType: "VERIFY_EMAIL",
-      targetProjectId: this.projectId,
-    });
+  async sendVerificationEmail(
+    email: string,
+    continueUrl: string,
+    idToken: string,
+  ): Promise<void> {
+    await this.request(
+      "accounts:sendOobCode",
+      {
+        continueUrl,
+        email,
+        idToken,
+        requestType: "VERIFY_EMAIL",
+      },
+      false,
+    );
   }
 
   async sendPasswordResetEmail(email: string, continueUrl: string): Promise<void> {
-    await this.request("accounts:sendOobCode", {
-      continueUrl,
-      email,
-      requestType: "PASSWORD_RESET",
-      targetProjectId: this.projectId,
-    });
+    await this.request(
+      "accounts:sendOobCode",
+      {
+        continueUrl,
+        email,
+        requestType: "PASSWORD_RESET",
+      },
+      false,
+    );
   }
 }
 
@@ -138,8 +185,16 @@ export async function registerIdentityUser(
     );
   }
 
-  const localId = randomUUID();
-  await identity.createAccount({ displayName: fullName, email, localId, password });
+  const account = await identity.createAccount({
+    displayName: fullName,
+    email,
+    localId: randomUUID(),
+    password,
+  });
+  if (!account.idToken) {
+    await identity.deleteAccount(account.localId).catch(() => undefined);
+    throw new Error("Identity Platform did not return a registration token.");
+  }
 
   try {
     await withTransaction(pool, async (client) => {
@@ -155,28 +210,28 @@ export async function registerIdentityUser(
           )
           VALUES ($1, $2, $3, 'identity-platform', false, 'pending')
         `,
-        [localId, email, fullName],
+        [account.localId, email, fullName],
       );
       await client.query(
         `
           INSERT INTO user_roles (user_id, role)
           VALUES ($1, $2)
         `,
-        [localId, email.endsWith("@nobraineragency.com") ? "user" : "view_only"],
+        [account.localId, email.endsWith("@nobraineragency.com") ? "user" : "view_only"],
       );
     });
   } catch (error) {
-    await identity.deleteAccount(localId).catch(() => undefined);
+    await identity.deleteAccount(account.localId).catch(() => undefined);
     throw error;
   }
 
   try {
-    await identity.sendVerificationEmail(email, continueUrl);
+    await identity.sendVerificationEmail(email, continueUrl, account.idToken);
   } catch (error) {
     await withTransaction(pool, async (client) => {
-      await client.query("DELETE FROM profiles WHERE user_id = $1", [localId]);
+      await client.query("DELETE FROM profiles WHERE user_id = $1", [account.localId]);
     }).catch(() => undefined);
-    await identity.deleteAccount(localId).catch(() => undefined);
+    await identity.deleteAccount(account.localId).catch(() => undefined);
     throw error;
   }
 
