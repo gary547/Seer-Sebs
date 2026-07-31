@@ -38,6 +38,21 @@ describe("managed database runtime contract", () => {
     expect(providers.match(/user_project_override\s+= true/g)).toHaveLength(2);
   });
 
+  it("authorizes the Firebase web app auth domain alongside the hosting domains", async () => {
+    const main = await read("gcp/infra/main.tf");
+
+    expect(main).toContain(
+      "data.google_firebase_web_app_config.web.auth_domain",
+    );
+    expect(main).toContain(
+      '"${coalesce(var.firebase_site_id, var.project_id)}.web.app"',
+    );
+    expect(main).toContain(
+      '"${coalesce(var.firebase_site_id, var.project_id)}.firebaseapp.com"',
+    );
+    expect(main).toMatch(/phone_number\s*\{\s*enabled\s*= false\s*\}/);
+  });
+
   it("pins the proxy and gates runtime deployment on schema evidence", async () => {
     const [migrationJob, runtime, variables] = await Promise.all([
       read("gcp/infra/database-migration.tf"),

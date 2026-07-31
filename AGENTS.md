@@ -63,6 +63,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
 
 - Keep production code free of Supabase runtime imports and environment
   variables. `npm run check:gcp-boundary` enforces the deployable boundary.
+- Identity Platform authorized domains must include the Firebase web app
+  `authDomain` and both domains of the selected Hosting site. Keep the disabled
+  phone sign-in block explicit to avoid provider drift.
 - Use static imports in production code.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.

@@ -562,6 +562,7 @@ resource "google_identity_platform_config" "main" {
     concat(
       var.authorized_domains,
       [
+        data.google_firebase_web_app_config.web.auth_domain,
         "${coalesce(var.firebase_site_id, var.project_id)}.web.app",
         "${coalesce(var.firebase_site_id, var.project_id)}.firebaseapp.com",
       ],
@@ -572,6 +573,10 @@ resource "google_identity_platform_config" "main" {
     email {
       enabled           = true
       password_required = true
+    }
+
+    phone_number {
+      enabled = false
     }
   }
 
