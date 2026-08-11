@@ -110,6 +110,27 @@ describe("GSC workbook parsing", () => {
     ]);
   });
 
+  it("skips oversized SAFS queries without rejecting the complete import", () => {
+    const parsed = parseGscWorkbookImport({
+      csvText: [
+        "Query,Clicks,Impressions,CTR,Position",
+        "television offers,25,1000,2.5%,8.2",
+        `${"x".repeat(201)},1,10,10%,20`,
+      ].join("\n"),
+      dateRangeEnd: "2026-04-01",
+      dateRangeStart: "2026-01-01",
+      device: "mobile",
+      filename: "Pilltime SAFS Export.csv",
+      format: "csv_text",
+    });
+
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]?.query).toBe("television offers");
+    expect(parsed.warnings).toContain(
+      "1 query was skipped because it exceeded 200 characters.",
+    );
+  });
+
   it("parses Chart, Queries and Pages from an XLSX archive", () => {
     const parsed = parseGscWorkbookImport({
       fileBase64: workbookBase64(),

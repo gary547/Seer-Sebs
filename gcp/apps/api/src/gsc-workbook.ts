@@ -6,6 +6,7 @@ const MINIMUM_SPAN_DAYS = 28;
 const MAXIMUM_SPAN_DAYS = 550;
 const SHORT_WINDOW_DAYS = 90;
 const MAXIMUM_UNCOMPRESSED_BYTES = 50 * 1_024 * 1_024;
+const MAXIMUM_QUERY_LENGTH = 200;
 
 type Device = "all" | "desktop" | "mobile" | "tablet";
 
@@ -284,7 +285,11 @@ function metricColumns(headers: string[]) {
   };
 }
 
-function queryRows(rows: unknown[][]): { hasDevice: boolean; rows: QueryRow[] } {
+function queryRows(rows: unknown[][]): {
+  hasDevice: boolean;
+  rows: QueryRow[];
+  skippedLongQueries: number;
+} {
   const found = findHeaderRow(rows, [
     ["top queries", "query", "keyword"],
     ["position"],
@@ -299,10 +304,15 @@ function queryRows(rows: unknown[][]): { hasDevice: boolean; rows: QueryRow[] } 
   const columns = metricColumns(found.headers);
   const query = findColumn(found.headers, ["top queries", "query", "keyword"]);
   const output: QueryRow[] = [];
+  let skippedLongQueries = 0;
   for (const row of rows.slice(found.index + 1)) {
     const value = String(row[query] ?? "").trim();
     const position = parseNumber(row[columns.position]);
     if (!value || position <= 0) continue;
+    if (value.length > MAXIMUM_QUERY_LENGTH) {
+      skippedLongQueries += 1;
+      continue;
+    }
     output.push({
       clicks: columns.clicks >= 0 ? parseInteger(row[columns.clicks]) : 0,
       ctr: columns.ctr >= 0 ? parseCtr(row[columns.ctr]) : 0,
@@ -321,7 +331,11 @@ function queryRows(rows: unknown[][]): { hasDevice: boolean; rows: QueryRow[] } 
       "The Queries input has no valid rows.",
     );
   }
-  return { hasDevice: columns.device >= 0, rows: output };
+  return {
+    hasDevice: columns.device >= 0,
+    rows: output,
+    skippedLongQueries,
+  };
 }
 
 function pageRows(rows: unknown[][]): { hasDevice: boolean; rows: PageRow[] } {
@@ -449,7 +463,7 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
   let pages: PageRow[] = [];
   let dateRangeStart: string;
   let dateRangeEnd: string;
-  let hasPerRowDevice = false;
+  let hasPerRowDevice: boolean;
   let sheetsSeen: string[] = [];
   const warnings: string[] = [];
   const sourceName =
@@ -461,6 +475,11 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
     );
     rows = parsed.rows;
     hasPerRowDevice = parsed.hasDevice;
+    if (parsed.skippedLongQueries > 0) {
+      warnings.push(
+        `${parsed.skippedLongQueries} quer${parsed.skippedLongQueries === 1 ? "y was" : "ies were"} skipped because it exceeded ${MAXIMUM_QUERY_LENGTH} characters.`,
+      );
+    }
     dateRangeStart = strictIsoDate(record.dateRangeStart, "dateRangeStart");
     dateRangeEnd = strictIsoDate(record.dateRangeEnd, "dateRangeEnd");
   } else {
@@ -489,6 +508,11 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
     const parsedQueries = queryRows(queries.rows);
     rows = parsedQueries.rows;
     hasPerRowDevice = parsedQueries.hasDevice;
+    if (parsedQueries.skippedLongQueries > 0) {
+      warnings.push(
+        `${parsedQueries.skippedLongQueries} quer${parsedQueries.skippedLongQueries === 1 ? "y was" : "ies were"} skipped because it exceeded ${MAXIMUM_QUERY_LENGTH} characters.`,
+      );
+    }
     const pageSheet = byName.get("pages");
     if (pageSheet) {
       const parsedPages = pageRows(pageSheet.rows);
