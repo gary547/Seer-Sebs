@@ -93,8 +93,17 @@ export function createWorkerServer(config: WorkerServerConfig): Server {
         return;
       }
 
-      const result = await config.processTask(parseStageTask(body));
-      sendJson(response, 200, result);
+      const task = parseStageTask(body);
+      const result = await config.processTask(task);
+      sendJson(response, 200, {
+        ...(typeof result.idempotent === "boolean"
+          ? { idempotent: result.idempotent }
+          : {}),
+        runId: task.runId,
+        stageId: task.stageId,
+        status:
+          typeof result.status === "string" ? result.status : "succeeded",
+      });
     } catch (error) {
       sendError(response, error);
     }

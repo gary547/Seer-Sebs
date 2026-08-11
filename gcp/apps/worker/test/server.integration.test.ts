@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createWorkerServer } from "../src/server.js";
 
-const processTask = vi.fn(async () => ({
+const processTask = vi.fn(async (): Promise<Record<string, unknown>> => ({
   status: "succeeded",
 }));
 const failRun = vi.fn(async () => ({
@@ -78,6 +78,38 @@ describe("seer-worker integration", () => {
       stageId: "intake",
       taskId: "1",
     });
+  });
+
+  it("returns a bounded acknowledgement instead of persisted stage output", async () => {
+    processTask.mockResolvedValueOnce({
+      output: {
+        keywords: Array.from({ length: 10_000 }, (_, index) => ({
+          keyword: `keyword-${index}`,
+        })),
+      },
+      status: "succeeded",
+    });
+
+    const response = await fetch(`${baseUrl}/internal/tasks`, {
+      body: JSON.stringify({
+        runId: "00000000-0000-4000-8000-000000000001",
+        stageId: "gsc-promotion",
+        taskId: "1",
+      }),
+      headers: {
+        authorization: "Bearer integration-token",
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      runId: "00000000-0000-4000-8000-000000000001",
+      stageId: "gsc-promotion",
+      status: "succeeded",
+    });
+    expect(Number(response.headers.get("content-length"))).toBeLessThan(256);
   });
 
   it("accepts a private Cloud Run delivery with the internal service header", async () => {
