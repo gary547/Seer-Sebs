@@ -89,6 +89,13 @@ worker workflows, event delivery, object persistence, and restart persistence.
   revenue, and HAR forecast tables. Migration `026_portfolio_query_indexes`
   supplies the latest-successful-run lookup index, and the 18,000-keyword
   scale gate requires `/v1/portfolio` to complete in under five seconds.
+- Worker task HTTP responses are bounded acknowledgements containing only the
+  run, stage, status, and optional idempotency flag. Stage outputs are persisted
+  in PostgreSQL and must never be echoed through Workflows or dispatcher HTTP
+  responses.
+- GSC CSV and XLSX imports skip individual queries longer than 200 characters
+  and report the skipped count as an import warning. One malformed SAFS row
+  must not reject an otherwise valid upload.
 - Canonical migration maps the source `app_role` enum through an explicit
   `normalise_text` transform into the target checked-text role contract.
 - Canonical migration serializes every JSON/JSONB mapping through the explicit
