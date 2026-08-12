@@ -189,6 +189,24 @@ test.describe("GSC upload and calculation inspection", () => {
       if (path === `/v1/projects/${projectId}/ctr-curves`) {
         return json({ completedAt, curves: [], projectId, runId });
       }
+      if (path === `/v1/projects/${projectId}/calculation-control`) {
+        return json({
+          archived: false,
+          baseRank: { missing: 0, sources: { gsc: 23_787 }, total: 23_787, withRank: 23_787 },
+          brandClassification: { brandTerms: ["pilltime"], branded: 850, total: 23_787, unbranded: 22_937, unclassified: 0 },
+          clustering: { canonicalBases: { volume: 23_787 }, clusterCount: 23_787, largestCluster: 1, memberCount: 23_787, multiMemberCount: 0, topClusters: [] },
+          comparisons: { averageHarDelta: null, comparableHarCount: 0, comparableRevenueCount: 0, items: [], keywordCount: 23_787 },
+          contentFit: { averageScore: 72, matched: 23_500, missing: 287, scored: 23_500, total: 23_787, zero: 0, zeroRows: [] },
+          demand: { averageCoverageMonths: 24, categories: [], signals: 23_787, trendDirections: { stable: 23_787 }, warnings: 0 },
+          generatedAt: completedAt,
+          gscReadiness: { uploads: [] },
+          latestSuccessfulRun: { completedAt, id: runId },
+          projectId,
+          recentRuns: [{ completedAt, createdAt: completedAt, failureStage: null, id: runId, startedAt: completedAt, status: "succeeded" }],
+          serpVisibility: { averageMultiplier: 0.92, featureCount: 0, featureTypes: [], keywordCount: 0, ownedCount: 0 },
+          volumeHistory: { earliestMonth: "2024-01-01", historyRows: 570_888, keptKeywords: 23_787, latestMonth: "2025-12-01", maximumMonths: 24, medianMonths: 24, minimumMonths: 24, sample: [], with12Months: 23_787, with24Months: 23_787, withHistory: 23_787 },
+        });
+      }
       if (path === `/v1/projects/${projectId}/pipeline-runs`) {
         return json({
           projectId,
@@ -328,10 +346,10 @@ test.describe("GSC upload and calculation inspection", () => {
     await page.goto(`/admin/calculations?projectId=${projectId}`, {
       waitUntil: "networkidle",
     });
-    await expect(page.getByRole("heading", { name: "Calculation control room" })).toBeVisible();
-    await expect(page.getByText("HAR scenario inspector")).toBeVisible();
-    await expect(page.getByText("Revenue forecast inspector")).toBeVisible();
-    await expect(page.getByText("Link Power Score inspector")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Calculation Runs (v2)" })).toBeVisible();
+    await expect(page.getByText("GSC data readiness")).toBeVisible();
+    await expect(page.getByText("CTR curves (v2)")).toBeVisible();
+    await expect(page.getByText("Link Power Score", { exact: true })).toBeVisible();
 
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles(csvPath as string);
@@ -350,9 +368,9 @@ test.describe("GSC upload and calculation inspection", () => {
       "15 queries were skipped because it exceeded 200 characters.",
     );
 
-    await page.getByText("Revenue forecast inspector").click();
-    await expect(page.getByText("£480,000").last()).toBeVisible();
-    await page.getByText("Link Power Score inspector").click();
+    await page.getByText("Calibration (modelled vs actual)").click();
+    await expect(page.getByText("Promotion eligible")).toBeVisible();
+    await page.getByText("Link Power Score", { exact: true }).click();
     await expect(page.getByText("pilltime.co.uk", { exact: true }).last()).toBeVisible();
 
     if (artifactDirectory) {

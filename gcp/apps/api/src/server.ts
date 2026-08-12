@@ -49,6 +49,10 @@ import {
   getPipelineRun,
 } from "./pipeline-runs.js";
 import {
+  deleteProjectGscUpload,
+  getProjectCalculationControl,
+} from "./calculation-control.js";
+import {
   assertApprovedUser,
   getCurrentProfile,
   updateCurrentProfile,
@@ -276,6 +280,18 @@ function clientUserPath(
     : null;
 }
 
+function projectGscUploadPath(
+  pathname: string,
+): { projectId: string; uploadId: string } | null {
+  const match = pathname.match(
+    /^\/v1\/projects\/([0-9a-f-]{36})\/gsc-uploads\/([0-9a-f-]{36})$/i,
+  );
+  if (!match?.[1] || !match[2]) return null;
+  return UUID_PATTERN.test(match[1]) && UUID_PATTERN.test(match[2])
+    ? { projectId: match[1], uploadId: match[2] }
+    : null;
+}
+
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -469,6 +485,12 @@ async function handleRequest(
     "/v1/projects/",
     "/link-power-inspector",
   );
+  const calculationControlProjectId = uuidSubresourcePath(
+    url.pathname,
+    "/v1/projects/",
+    "/calculation-control",
+  );
+  const projectGscUpload = projectGscUploadPath(url.pathname);
   const forecastRowsProjectId = uuidSubresourcePath(
     url.pathname,
     "/v1/projects/",
@@ -651,6 +673,8 @@ async function handleRequest(
     calculationsProjectId !== null ||
     calculationInspectorProjectId !== null ||
     linkPowerInspectorProjectId !== null ||
+    calculationControlProjectId !== null ||
+    projectGscUpload !== null ||
     forecastRowsProjectId !== null ||
     siteArchitectureProjectId !== null ||
     ctrCurvesProjectId !== null ||
@@ -1767,6 +1791,39 @@ async function handleRequest(
         runtime.pool,
         user,
         calculationsProjectId,
+      ),
+    );
+    return;
+  }
+
+  if (calculationControlProjectId) {
+    if (method !== "GET") {
+      methodNotAllowed(response, ["GET"]);
+    }
+    sendJson(
+      response,
+      200,
+      await getProjectCalculationControl(
+        runtime.pool,
+        user,
+        calculationControlProjectId,
+      ),
+    );
+    return;
+  }
+
+  if (projectGscUpload) {
+    if (method !== "DELETE") {
+      methodNotAllowed(response, ["DELETE"]);
+    }
+    sendJson(
+      response,
+      200,
+      await deleteProjectGscUpload(
+        runtime.pool,
+        user,
+        projectGscUpload.projectId,
+        projectGscUpload.uploadId,
       ),
     );
     return;
