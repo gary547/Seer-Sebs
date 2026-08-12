@@ -33,7 +33,9 @@ The managed runtime covers client and project administration, keyword
 management, GSC workbook import, SERP ingestion, the ordered 19-stage
 calculation pipeline, forecasting and calibration, archive workflows, URL
 monitoring, reference data, content planning, slide export, and admin-only
-inspection of HAR, revenue, and Link Power calculation outputs.
+inspection and control of GSC readiness, CTR, calibration, rank provenance,
+clustering, volume history, demand, SERP visibility, Link Power, content fit,
+HAR/Revenue comparisons, brand classification, and recent calculation runs.
 
 HTTP route registration is centralised in `gcp/apps/api/src/server.ts`.
 Database changes must be additive, ordered SQL contracts in
@@ -106,6 +108,23 @@ worker workflows, event delivery, object persistence, and restart persistence.
   `GET /v1/projects/:projectId/link-power-inspector`. Both routes require an
   administrator and project access, and they inspect the latest successful
   pipeline run without mutating calculation data.
+- `GET /v1/projects/:projectId/calculation-control` is the bounded aggregate
+  contract for every panel in the admin Calculations page. Keep uploads and
+  recent runs capped at 20, comparison rows capped at 50, and detail samples
+  capped at 20. The route is administrator-only and may inspect archived
+  projects; archived UI state must remain read-only.
+- `DELETE /v1/projects/:projectId/gsc-uploads/:uploadId` is an
+  administrator-only, project-scoped mutation. It must reject archived
+  projects, rely on cascading child-row deletion, and mark calculation inputs
+  and keywords dirty after a successful deletion.
+- Calculation panel actions run the canonical dependency-safe 19-stage GCP
+  pipeline. Do not reintroduce standalone Supabase edge-function calls for
+  individual legacy buttons.
+- Migration `027_calculation_control_contract` materializes legacy v1 forecast
+  values from the lossless migration archive into
+  `legacy_keyword_forecasts` for read-only HAR/Revenue comparison and adds the
+  general project/run history index. Keep the backfill idempotent and do not
+  treat the legacy table as a calculation source.
 - Canonical migration maps the source `app_role` enum through an explicit
   `normalise_text` transform into the target checked-text role contract.
 - Canonical migration serializes every JSON/JSONB mapping through the explicit
