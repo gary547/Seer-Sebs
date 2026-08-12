@@ -23,11 +23,13 @@ import {
 import {
   addProjectKeywords,
   assertProjectAccess,
+  getProjectCalculationInspector,
   getProjectCtrCurves,
   getProject,
   getProjectCalculations,
   getProjectForecastRows,
   getProjectKeywords,
+  getProjectLinkPowerInspector,
   getProjectSerpResults,
   getProjectSiteArchitecture,
   importProjectGscRows,
@@ -457,6 +459,16 @@ async function handleRequest(
     "/v1/projects/",
     "/calculations",
   );
+  const calculationInspectorProjectId = uuidSubresourcePath(
+    url.pathname,
+    "/v1/projects/",
+    "/calculation-inspector",
+  );
+  const linkPowerInspectorProjectId = uuidSubresourcePath(
+    url.pathname,
+    "/v1/projects/",
+    "/link-power-inspector",
+  );
   const forecastRowsProjectId = uuidSubresourcePath(
     url.pathname,
     "/v1/projects/",
@@ -637,6 +649,8 @@ async function handleRequest(
     serpImportProjectId !== null ||
     serpFeaturesProjectId !== null ||
     calculationsProjectId !== null ||
+    calculationInspectorProjectId !== null ||
+    linkPowerInspectorProjectId !== null ||
     forecastRowsProjectId !== null ||
     siteArchitectureProjectId !== null ||
     ctrCurvesProjectId !== null ||
@@ -1754,6 +1768,51 @@ async function handleRequest(
         user,
         calculationsProjectId,
       ),
+    );
+    return;
+  }
+
+  if (calculationInspectorProjectId || linkPowerInspectorProjectId) {
+    if (method !== "GET") {
+      methodNotAllowed(response, ["GET"]);
+    }
+    const rawLimit = Number(url.searchParams.get("limit") ?? "50");
+    const rawOffset = Number(url.searchParams.get("offset") ?? "0");
+    const search = (url.searchParams.get("search") ?? "").trim();
+    if (
+      !Number.isInteger(rawLimit) ||
+      rawLimit < 1 ||
+      rawLimit > 200 ||
+      !Number.isInteger(rawOffset) ||
+      rawOffset < 0 ||
+      search.length > 200
+    ) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        "Inspector parameters are invalid.",
+      );
+    }
+    sendJson(
+      response,
+      200,
+      calculationInspectorProjectId
+        ? await getProjectCalculationInspector(
+            runtime.pool,
+            user,
+            calculationInspectorProjectId,
+            rawLimit,
+            rawOffset,
+            search,
+          )
+        : await getProjectLinkPowerInspector(
+            runtime.pool,
+            user,
+            linkPowerInspectorProjectId as string,
+            rawLimit,
+            rawOffset,
+            search,
+          ),
     );
     return;
   }

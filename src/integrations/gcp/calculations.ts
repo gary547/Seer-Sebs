@@ -133,6 +133,84 @@ export interface ProjectCalculationSummary {
   siteActions: Array<{ count: number; tacticalStatus: string | null }>;
 }
 
+export interface CalculationInspectorScenario {
+  averageOrderValueOverrideId: string | null;
+  contentFitScore: number | null;
+  conversionRateOverrideId: string | null;
+  ctrNow: number | null;
+  ctrTarget: number | null;
+  currentRevenueAnnual: number | null;
+  expectedIncrementalAnnual: number | null;
+  explanation: Record<string, unknown>;
+  harConfidence: number;
+  harPosition: number | null;
+  linkPowerScore: number | null;
+  rankAttainmentProbability: number | null;
+  targetAbsoluteRevenueAnnual: number | null;
+  targetIncrementalRevenueAnnual: number | null;
+}
+
+export interface CalculationInspectorRow {
+  baseRank: number | null;
+  device: string;
+  keyword: string;
+  keywordId: string;
+  scenarios: Partial<
+    Record<ForecastScenario, CalculationInspectorScenario>
+  >;
+}
+
+export interface CalculationInspectorPage {
+  completedAt: string | null;
+  items: CalculationInspectorRow[];
+  limit: number;
+  offset: number;
+  projectId: string;
+  runId: string | null;
+  search: string;
+  total: number;
+}
+
+export interface LinkPowerInspectorPage {
+  completedAt: string | null;
+  domains: Array<{
+    appearances: number;
+    bestRank: number;
+    domain: string;
+    isClientDomain: boolean;
+    meanScore: number;
+  }>;
+  items: Array<{
+    backlinks: number | null;
+    confidence: string;
+    domain: string;
+    domainRating: number | null;
+    isClientDomain: boolean;
+    keyword: string;
+    keywordId: string;
+    rank: number;
+    referringDomains: number | null;
+    score: number;
+    url: string;
+    urlRating: number | null;
+  }>;
+  limit: number;
+  offset: number;
+  projectId: string;
+  runId: string | null;
+  search: string;
+  summary: {
+    averageScore: number | null;
+    confidence: { high: number; low: number; medium: number };
+    keywordCount: number;
+    p10: number | null;
+    p50: number | null;
+    p90: number | null;
+    scoredCount: number;
+  } | null;
+  total: number;
+}
+
 async function request<T>(path: string): Promise<T> {
   const token = await getAccessToken();
   if (!token) throw new Error("Authentication is required.");
@@ -152,6 +230,34 @@ export function getProjectCalculationSummary(
   projectId: string,
 ): Promise<ProjectCalculationSummary> {
   return request(`/v1/projects/${projectId}/calculations`);
+}
+
+export function getProjectCalculationInspector(
+  projectId: string,
+  input: { limit?: number; offset?: number; search?: string } = {},
+): Promise<CalculationInspectorPage> {
+  const query = new URLSearchParams({
+    limit: String(input.limit ?? 50),
+    offset: String(input.offset ?? 0),
+    search: input.search ?? "",
+  });
+  return request(
+    `/v1/projects/${projectId}/calculation-inspector?${query.toString()}`,
+  );
+}
+
+export function getProjectLinkPowerInspector(
+  projectId: string,
+  input: { limit?: number; offset?: number; search?: string } = {},
+): Promise<LinkPowerInspectorPage> {
+  const query = new URLSearchParams({
+    limit: String(input.limit ?? 50),
+    offset: String(input.offset ?? 0),
+    search: input.search ?? "",
+  });
+  return request(
+    `/v1/projects/${projectId}/link-power-inspector?${query.toString()}`,
+  );
 }
 
 export function listProjectForecastRows(

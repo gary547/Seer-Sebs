@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 
 import GscUploadPanel from "@/components/GscUploadPanel";
+import CalculationInspectors from "@/components/admin/CalculationInspectors";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -154,6 +155,12 @@ export default function CalculationsPage() {
       }),
       queryClient.invalidateQueries({
         queryKey: ["admin", "calculation-pipeline", projectId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "calculation-inspector", projectId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "link-power-inspector", projectId],
       }),
     ]);
   };
@@ -479,6 +486,11 @@ export default function CalculationsPage() {
               <GscUploadPanel projectId={projectId} />
             </CardContent>
           </Card>
+
+          <CalculationInspectors
+            projectId={projectId}
+            summary={calculationSummary}
+          />
 
           <Card className="border-hairline shadow-card">
             <CardHeader>

@@ -131,6 +131,52 @@ describe("GSC workbook parsing", () => {
     );
   });
 
+  it("merges duplicate SAFS rows using Search Console metric semantics", () => {
+    const parsed = parseGscWorkbookImport({
+      csvText: [
+        "Query,Device,Clicks,Impressions,CTR,Position",
+        "Television Offers,MOBILE,10,100,10%,4",
+        " television   offers ,mobile,15,300,5%,8",
+        "Television Offers,DESKTOP,2,20,10%,3",
+        "Zero impressions,MOBILE,0,0,0%,12",
+        "zero   impressions,mobile,0,0,0%,18",
+      ].join("\n"),
+      dateRangeEnd: "2026-04-01",
+      dateRangeStart: "2026-01-01",
+      filename: "Pilltime SAFS Export.csv",
+      format: "csv_text",
+    });
+
+    expect(parsed.device).toBe("mixed");
+    expect(parsed.rows).toHaveLength(3);
+    expect(parsed.rows).toContainEqual({
+      clicks: 25,
+      ctr: 0.0625,
+      device: "mobile",
+      impressions: 400,
+      page: "",
+      position: 7,
+      query: "Television Offers",
+    });
+    expect(parsed.rows).toContainEqual(
+      expect.objectContaining({
+        device: "desktop",
+        impressions: 20,
+        query: "Television Offers",
+      }),
+    );
+    expect(parsed.rows).toContainEqual(
+      expect.objectContaining({
+        device: "mobile",
+        position: 15,
+        query: "Zero impressions",
+      }),
+    );
+    expect(parsed.warnings).toContain(
+      "2 duplicate rows were merged into 3 unique GSC entries.",
+    );
+  });
+
   it("parses Chart, Queries and Pages from an XLSX archive", () => {
     const parsed = parseGscWorkbookImport({
       fileBase64: workbookBase64(),

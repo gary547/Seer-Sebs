@@ -1,5 +1,6 @@
 import { unzipSync } from "fflate";
 
+import { normaliseKeyword } from "../../../packages/fixtures/src/representative-project.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 
 const MINIMUM_SPAN_DAYS = 28;
@@ -452,6 +453,75 @@ function applyDevice<T extends GscMetricRow>(
   return rows.map((row) => ({ ...row, device: row.device ?? fallback }));
 }
 
+function aggregateQueryRows(rows: QueryRow[]): {
+  duplicateCount: number;
+  rows: QueryRow[];
+} {
+  interface Aggregate {
+    clicks: number;
+    device: Device;
+    impressions: number;
+    page: string;
+    positionCount: number;
+    positionSum: number;
+    query: string;
+    weightedPositionSum: number;
+  }
+
+  const aggregates = new Map<string, Aggregate>();
+  for (const row of rows) {
+    const device = row.device ?? "all";
+    const key = `${normaliseKeyword(row.query)}\u0000${row.page}\u0000${device}`;
+    const existing = aggregates.get(key);
+    if (!existing) {
+      aggregates.set(key, {
+        clicks: row.clicks,
+        device,
+        impressions: row.impressions,
+        page: row.page,
+        positionCount: 1,
+        positionSum: row.position,
+        query: row.query,
+        weightedPositionSum: row.position * row.impressions,
+      });
+      continue;
+    }
+    existing.clicks += row.clicks;
+    existing.impressions += row.impressions;
+    existing.positionCount += 1;
+    existing.positionSum += row.position;
+    existing.weightedPositionSum += row.position * row.impressions;
+    if (row.query < existing.query) {
+      existing.query = row.query;
+    }
+  }
+
+  return {
+    duplicateCount: rows.length - aggregates.size,
+    rows: [...aggregates.values()]
+      .map((aggregate) => ({
+        clicks: aggregate.clicks,
+        ctr:
+          aggregate.impressions === 0
+            ? 0
+            : Math.min(1, aggregate.clicks / aggregate.impressions),
+        device: aggregate.device,
+        impressions: aggregate.impressions,
+        page: aggregate.page,
+        position:
+          aggregate.impressions === 0
+            ? aggregate.positionSum / aggregate.positionCount
+            : aggregate.weightedPositionSum / aggregate.impressions,
+        query: aggregate.query,
+      }))
+      .sort((left, right) =>
+        `${normaliseKeyword(left.query)}\u0000${left.page}\u0000${left.device}`.localeCompare(
+          `${normaliseKeyword(right.query)}\u0000${right.page}\u0000${right.device}`,
+        ),
+      ),
+  };
+}
+
 export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
   const record = bodyRecord(body);
   const format = requiredString(record.format, "format", 32);
@@ -552,13 +622,20 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
     warnings.push("Per-row Device column detected; upload marked mixed.");
   }
 
+  const aggregated = aggregateQueryRows(applyDevice(rows, fallbackDevice));
+  if (aggregated.duplicateCount > 0) {
+    warnings.push(
+      `${aggregated.duplicateCount.toLocaleString("en-GB")} duplicate ${aggregated.duplicateCount === 1 ? "row was" : "rows were"} merged into ${aggregated.rows.length.toLocaleString("en-GB")} unique GSC entries.`,
+    );
+  }
+
   return {
     dateRangeEnd,
     dateRangeStart,
     device,
     originalFilename,
     pages: applyDevice(pages, fallbackDevice),
-    rows: applyDevice(rows, fallbackDevice),
+    rows: aggregated.rows,
     sheetsSeen,
     sourceName,
     warnings,

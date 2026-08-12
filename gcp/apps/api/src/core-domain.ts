@@ -8,6 +8,7 @@ import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError, requireString } from "../../../packages/runtime/src/http.js";
 import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth.js";
 import {
+  assertAdministrator,
   assertClientAccess,
   assertProjectAccessByRole,
 } from "./authorization.js";
@@ -259,6 +260,63 @@ interface ForecastDetailRow {
   target_absolute_revenue_annual: string | null;
   target_incremental_revenue_annual: string | null;
   volume_forward: string | null;
+}
+
+interface CalculationInspectorSourceRow {
+  average_order_value_override_id: string | null;
+  base_rank: number | null;
+  content_fit_score: string | null;
+  conversion_rate_override_id: string | null;
+  ctr_now: string | null;
+  ctr_target: string | null;
+  current_revenue_annual: string | null;
+  device: string;
+  expected_incremental_annual: string | null;
+  explanation_json: Record<string, unknown>;
+  har_confidence: string;
+  har_position: number | null;
+  keyword: string;
+  keyword_id: string;
+  link_power_score: string | null;
+  rank_attainment_probability: string | null;
+  scenario: string;
+  target_absolute_revenue_annual: string | null;
+  target_incremental_revenue_annual: string | null;
+}
+
+interface LinkPowerSummaryRow {
+  average_score: string | null;
+  high_confidence_count: string;
+  keyword_count: string;
+  low_confidence_count: string;
+  medium_confidence_count: string;
+  p10_score: string | null;
+  p50_score: string | null;
+  p90_score: string | null;
+  scored_count: string;
+}
+
+interface LinkPowerDetailRow {
+  backlinks: string | null;
+  confidence: string;
+  domain: string;
+  domain_rating: string | null;
+  is_client_domain: boolean;
+  keyword: string;
+  keyword_id: string;
+  rank_absolute: number;
+  referring_domains: string | null;
+  score: string;
+  url: string;
+  url_rating: string | null;
+}
+
+interface LinkPowerDomainRow {
+  appearance_count: string;
+  best_rank: number;
+  domain: string;
+  is_client_domain: boolean;
+  mean_score: string;
 }
 
 interface SiteArchitectureDetailRow {
@@ -2669,6 +2727,373 @@ export async function getProjectCalculations(
       count: Number(row.count),
       tacticalStatus: row.tactical_status,
     })),
+  };
+}
+
+export async function getProjectCalculationInspector(
+  pool: DatabasePool,
+  user: AuthenticatedUser,
+  projectId: string,
+  limit: number,
+  offset: number,
+  search: string,
+): Promise<Record<string, unknown>> {
+  await assertAdministrator(pool, user.id);
+  await assertProjectAccess(pool, user.id, projectId);
+  const runResult = await pool.query<LatestCalculationRunRow>(
+    `
+      SELECT id, completed_at
+      FROM pipeline_runs
+      WHERE input->>'projectId' = $1
+        AND status = 'succeeded'
+      ORDER BY completed_at DESC, id DESC
+      LIMIT 1
+    `,
+    [projectId],
+  );
+  const run = runResult.rows[0];
+  if (!run) {
+    return {
+      completedAt: null,
+      items: [],
+      limit,
+      offset,
+      projectId,
+      runId: null,
+      search,
+      total: 0,
+    };
+  }
+
+  const [sourceRows, count] = await Promise.all([
+    pool.query<CalculationInspectorSourceRow>(
+      `
+        WITH keyword_page AS (
+          SELECT
+            keyword.id AS keyword_id,
+            keyword.keyword,
+            keyword.normalised_keyword,
+            keyword.device,
+            max(har.base_rank) AS base_rank,
+            max(revenue.expected_incremental_annual)
+              FILTER (WHERE har.scenario = 'realistic') AS realistic_uplift
+          FROM har_forecasts AS har
+          JOIN keywords AS keyword ON keyword.id = har.keyword_id
+          LEFT JOIN revenue_forecasts AS revenue
+            ON revenue.pipeline_run_id = har.pipeline_run_id
+           AND revenue.keyword_id = har.keyword_id
+           AND revenue.scenario = har.scenario
+          WHERE har.project_id = $1
+            AND har.pipeline_run_id = $2
+            AND (
+              $3 = ''
+              OR keyword.normalised_keyword LIKE '%' || $3 || '%'
+            )
+          GROUP BY
+            keyword.id,
+            keyword.keyword,
+            keyword.normalised_keyword,
+            keyword.device
+          ORDER BY realistic_uplift DESC NULLS LAST, keyword.normalised_keyword
+          LIMIT $4 OFFSET $5
+        )
+        SELECT
+          page.keyword_id,
+          page.keyword,
+          page.device,
+          page.base_rank,
+          har.scenario,
+          har.har_position,
+          har.har_confidence::text,
+          har.rank_attainment_probability::text,
+          har.link_power_score::text,
+          har.content_fit_score::text,
+          har.explanation_json,
+          revenue.ctr_now::text,
+          revenue.ctr_target::text,
+          revenue.current_revenue_annual::text,
+          revenue.target_absolute_revenue_annual::text,
+          revenue.target_incremental_revenue_annual::text,
+          revenue.expected_incremental_annual::text,
+          revenue.conversion_rate_override_id,
+          revenue.average_order_value_override_id
+        FROM keyword_page AS page
+        JOIN har_forecasts AS har
+          ON har.pipeline_run_id = $2
+         AND har.keyword_id = page.keyword_id
+        LEFT JOIN revenue_forecasts AS revenue
+          ON revenue.pipeline_run_id = har.pipeline_run_id
+         AND revenue.keyword_id = har.keyword_id
+         AND revenue.scenario = har.scenario
+        ORDER BY
+          page.realistic_uplift DESC NULLS LAST,
+          page.normalised_keyword,
+          CASE har.scenario
+            WHEN 'conservative' THEN 1
+            WHEN 'realistic' THEN 2
+            ELSE 3
+          END
+      `,
+      [projectId, run.id, normaliseKeyword(search), limit, offset],
+    ),
+    pool.query<CountRow>(
+      `
+        SELECT count(DISTINCT har.keyword_id)::text AS count
+        FROM har_forecasts AS har
+        JOIN keywords AS keyword ON keyword.id = har.keyword_id
+        WHERE har.project_id = $1
+          AND har.pipeline_run_id = $2
+          AND (
+            $3 = ''
+            OR keyword.normalised_keyword LIKE '%' || $3 || '%'
+          )
+      `,
+      [projectId, run.id, normaliseKeyword(search)],
+    ),
+  ]);
+
+  const items = new Map<
+    string,
+    {
+      baseRank: number | null;
+      device: string;
+      keyword: string;
+      keywordId: string;
+      scenarios: Record<string, Record<string, unknown>>;
+    }
+  >();
+  for (const row of sourceRows.rows) {
+    const item = items.get(row.keyword_id) ?? {
+      baseRank: row.base_rank,
+      device: row.device,
+      keyword: row.keyword,
+      keywordId: row.keyword_id,
+      scenarios: {},
+    };
+    item.scenarios[row.scenario] = {
+      averageOrderValueOverrideId: row.average_order_value_override_id,
+      contentFitScore:
+        row.content_fit_score === null ? null : Number(row.content_fit_score),
+      conversionRateOverrideId: row.conversion_rate_override_id,
+      ctrNow: row.ctr_now === null ? null : Number(row.ctr_now),
+      ctrTarget: row.ctr_target === null ? null : Number(row.ctr_target),
+      currentRevenueAnnual:
+        row.current_revenue_annual === null
+          ? null
+          : Number(row.current_revenue_annual),
+      expectedIncrementalAnnual:
+        row.expected_incremental_annual === null
+          ? null
+          : Number(row.expected_incremental_annual),
+      explanation: row.explanation_json,
+      harConfidence: Number(row.har_confidence),
+      harPosition: row.har_position,
+      linkPowerScore:
+        row.link_power_score === null ? null : Number(row.link_power_score),
+      rankAttainmentProbability:
+        row.rank_attainment_probability === null
+          ? null
+          : Number(row.rank_attainment_probability),
+      targetAbsoluteRevenueAnnual:
+        row.target_absolute_revenue_annual === null
+          ? null
+          : Number(row.target_absolute_revenue_annual),
+      targetIncrementalRevenueAnnual:
+        row.target_incremental_revenue_annual === null
+          ? null
+          : Number(row.target_incremental_revenue_annual),
+    };
+    items.set(row.keyword_id, item);
+  }
+
+  return {
+    completedAt: run.completed_at.toISOString(),
+    items: [...items.values()],
+    limit,
+    offset,
+    projectId,
+    runId: run.id,
+    search,
+    total: Number(count.rows[0]?.count ?? "0"),
+  };
+}
+
+export async function getProjectLinkPowerInspector(
+  pool: DatabasePool,
+  user: AuthenticatedUser,
+  projectId: string,
+  limit: number,
+  offset: number,
+  search: string,
+): Promise<Record<string, unknown>> {
+  await assertAdministrator(pool, user.id);
+  await assertProjectAccess(pool, user.id, projectId);
+  const runResult = await pool.query<LatestCalculationRunRow>(
+    `
+      SELECT id, completed_at
+      FROM pipeline_runs
+      WHERE input->>'projectId' = $1
+        AND status = 'succeeded'
+      ORDER BY completed_at DESC, id DESC
+      LIMIT 1
+    `,
+    [projectId],
+  );
+  const run = runResult.rows[0];
+  if (!run) {
+    return {
+      completedAt: null,
+      domains: [],
+      items: [],
+      limit,
+      offset,
+      projectId,
+      runId: null,
+      search,
+      summary: null,
+      total: 0,
+    };
+  }
+
+  const normalisedSearch = normaliseKeyword(search);
+  const [summary, items, domains, count] = await Promise.all([
+    pool.query<LinkPowerSummaryRow>(
+      `
+        SELECT
+          count(*)::text AS scored_count,
+          count(DISTINCT keyword_id)::text AS keyword_count,
+          avg(score)::text AS average_score,
+          percentile_cont(0.1) WITHIN GROUP (ORDER BY score)::text AS p10_score,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY score)::text AS p50_score,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY score)::text AS p90_score,
+          count(*) FILTER (WHERE confidence = 'high')::text
+            AS high_confidence_count,
+          count(*) FILTER (WHERE confidence = 'medium')::text
+            AS medium_confidence_count,
+          count(*) FILTER (WHERE confidence = 'low')::text
+            AS low_confidence_count
+        FROM link_power_scores
+        WHERE project_id = $1
+          AND pipeline_run_id = $2
+      `,
+      [projectId, run.id],
+    ),
+    pool.query<LinkPowerDetailRow>(
+      `
+        SELECT
+          keyword.id AS keyword_id,
+          keyword.keyword,
+          result.rank_absolute,
+          result.url,
+          result.domain,
+          result.is_client_domain,
+          result.url_rating::text,
+          result.domain_rating::text,
+          result.referring_domains::text,
+          result.backlinks::text,
+          score.score::text,
+          score.confidence
+        FROM link_power_scores AS score
+        JOIN keywords AS keyword ON keyword.id = score.keyword_id
+        JOIN serp_results AS result ON result.id = score.serp_result_id
+        WHERE score.project_id = $1
+          AND score.pipeline_run_id = $2
+          AND (
+            $3 = ''
+            OR keyword.normalised_keyword LIKE '%' || $3 || '%'
+            OR result.domain LIKE '%' || $3 || '%'
+          )
+        ORDER BY score.score DESC, keyword.normalised_keyword, result.rank_absolute
+        LIMIT $4 OFFSET $5
+      `,
+      [projectId, run.id, normalisedSearch, limit, offset],
+    ),
+    pool.query<LinkPowerDomainRow>(
+      `
+        SELECT
+          result.domain,
+          result.is_client_domain,
+          count(*)::text AS appearance_count,
+          avg(score.score)::text AS mean_score,
+          min(result.rank_absolute) AS best_rank
+        FROM link_power_scores AS score
+        JOIN serp_results AS result ON result.id = score.serp_result_id
+        WHERE score.project_id = $1
+          AND score.pipeline_run_id = $2
+        GROUP BY result.domain, result.is_client_domain
+        ORDER BY result.is_client_domain DESC, avg(score.score) DESC, result.domain
+        LIMIT 10
+      `,
+      [projectId, run.id],
+    ),
+    pool.query<CountRow>(
+      `
+        SELECT count(*)::text AS count
+        FROM link_power_scores AS score
+        JOIN keywords AS keyword ON keyword.id = score.keyword_id
+        JOIN serp_results AS result ON result.id = score.serp_result_id
+        WHERE score.project_id = $1
+          AND score.pipeline_run_id = $2
+          AND (
+            $3 = ''
+            OR keyword.normalised_keyword LIKE '%' || $3 || '%'
+            OR result.domain LIKE '%' || $3 || '%'
+          )
+      `,
+      [projectId, run.id, normalisedSearch],
+    ),
+  ]);
+  const summaryRow = summary.rows[0];
+
+  return {
+    completedAt: run.completed_at.toISOString(),
+    domains: domains.rows.map((row) => ({
+      appearances: Number(row.appearance_count),
+      bestRank: row.best_rank,
+      domain: row.domain,
+      isClientDomain: row.is_client_domain,
+      meanScore: Number(row.mean_score),
+    })),
+    items: items.rows.map((row) => ({
+      backlinks: row.backlinks === null ? null : Number(row.backlinks),
+      confidence: row.confidence,
+      domain: row.domain,
+      domainRating:
+        row.domain_rating === null ? null : Number(row.domain_rating),
+      isClientDomain: row.is_client_domain,
+      keyword: row.keyword,
+      keywordId: row.keyword_id,
+      rank: row.rank_absolute,
+      referringDomains:
+        row.referring_domains === null ? null : Number(row.referring_domains),
+      score: Number(row.score),
+      url: row.url,
+      urlRating: row.url_rating === null ? null : Number(row.url_rating),
+    })),
+    limit,
+    offset,
+    projectId,
+    runId: run.id,
+    search,
+    summary: summaryRow
+      ? {
+          averageScore:
+            summaryRow.average_score === null
+              ? null
+              : Number(summaryRow.average_score),
+          confidence: {
+            high: Number(summaryRow.high_confidence_count),
+            low: Number(summaryRow.low_confidence_count),
+            medium: Number(summaryRow.medium_confidence_count),
+          },
+          keywordCount: Number(summaryRow.keyword_count),
+          p10: summaryRow.p10_score === null ? null : Number(summaryRow.p10_score),
+          p50: summaryRow.p50_score === null ? null : Number(summaryRow.p50_score),
+          p90: summaryRow.p90_score === null ? null : Number(summaryRow.p90_score),
+          scoredCount: Number(summaryRow.scored_count),
+        }
+      : null,
+    total: Number(count.rows[0]?.count ?? "0"),
   };
 }
 
