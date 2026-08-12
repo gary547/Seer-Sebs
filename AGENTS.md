@@ -32,7 +32,8 @@
 The managed runtime covers client and project administration, keyword
 management, GSC workbook import, SERP ingestion, the ordered 19-stage
 calculation pipeline, forecasting and calibration, archive workflows, URL
-monitoring, reference data, content planning, and slide export.
+monitoring, reference data, content planning, slide export, and admin-only
+inspection of HAR, revenue, and Link Power calculation outputs.
 
 HTTP route registration is centralised in `gcp/apps/api/src/server.ts`.
 Database changes must be additive, ordered SQL contracts in
@@ -96,6 +97,15 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - GSC CSV and XLSX imports skip individual queries longer than 200 characters
   and report the skipped count as an import warning. One malformed SAFS row
   must not reject an otherwise valid upload.
+- GSC CSV and XLSX imports merge duplicate rows by normalised query, page, and
+  device before persistence. Sum clicks and impressions, recompute CTR, and
+  use impression-weighted position; report the merged row count as an import
+  warning.
+- The admin calculation control room reads paginated, searchable results from
+  `GET /v1/projects/:projectId/calculation-inspector` and
+  `GET /v1/projects/:projectId/link-power-inspector`. Both routes require an
+  administrator and project access, and they inspect the latest successful
+  pipeline run without mutating calculation data.
 - Canonical migration maps the source `app_role` enum through an explicit
   `normalise_text` transform into the target checked-text role contract.
 - Canonical migration serializes every JSON/JSONB mapping through the explicit
