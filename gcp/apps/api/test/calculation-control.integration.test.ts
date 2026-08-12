@@ -11,6 +11,7 @@ const clientId = "00000000-0000-4000-8000-000000000003";
 const runId = "00000000-0000-4000-8000-000000000004";
 const uploadId = "00000000-0000-4000-8000-000000000005";
 let applicationRole = "admin";
+let executedSql: string[] = [];
 
 function result(rows: unknown[]) {
   return { rowCount: rows.length, rows };
@@ -19,6 +20,7 @@ function result(rows: unknown[]) {
 function database(): DatabasePool {
   const query = vi.fn(async (sqlValue: string) => {
     const sql = sqlValue.replace(/\s+/g, " ").trim();
+    executedSql.push(sql);
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result([]);
     if (sql.includes("SELECT approval_status FROM profiles")) return result([{ approval_status: "approved" }]);
     if (sql.includes("FROM user_roles AS user_role")) return result([{ role: applicationRole }]);
@@ -34,10 +36,10 @@ function database(): DatabasePool {
     if (sql.includes("WITH base_sources AS")) {
       return result([{ base_rank_sources: { gsc: 9 }, branded_count: "2", kept_count: "10", missing_base_rank_count: "1", total_count: "12", unbranded_count: "9", unclassified_brand_count: "1", with_base_rank_count: "9" }]);
     }
-    if (sql.includes("WITH history AS")) {
+    if (sql.includes("), history AS (")) {
       return result([{ earliest_month: new Date("2024-01-01T00:00:00Z"), history_row_count: "240", kept_keyword_count: "10", latest_month: new Date("2025-12-01T00:00:00Z"), maximum_months: "24", median_months: "24", minimum_months: "0", with_12_months_count: "9", with_24_months_count: "8", with_history_count: "9" }]);
     }
-    if (sql.includes("count(volume.id)::text AS month_count")) {
+    if (sql.includes("count(volume.month)::text AS month_count")) {
       return result([{ keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", month_count: "24", months: [{ month: "2025-12-01", volume: 1200 }] }]);
     }
     if (sql.includes("WITH clusters AS")) {
@@ -72,6 +74,7 @@ describe("calculation control API", () => {
 
   beforeEach(async () => {
     applicationRole = "admin";
+    executedSql = [];
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({ email: "admin@example.com", id: userId })),
       objectStore: {
@@ -106,6 +109,11 @@ describe("calculation control API", () => {
       serpVisibility: { featureCount: 16, ownedCount: 2 },
       volumeHistory: { with24Months: 8, withHistory: 9 },
     });
+    expect(
+      executedSql.filter((sql) =>
+        sql.includes("DISTINCT ON (volume.keyword_id, volume.month)"),
+      ),
+    ).toHaveLength(2);
   });
 
   it("deletes only a project-scoped GSC upload", async () => {

@@ -1044,9 +1044,22 @@ export async function getProjectKeywords(
       ? { rows: [] as KeywordMonthlyVolumeRow[] }
       : await pool.query<KeywordMonthlyVolumeRow>(
           `
+            WITH migrated AS (
+              SELECT DISTINCT ON (keyword_id, month)
+                keyword_id,
+                month,
+                volume
+              FROM keyword_monthly_volumes
+              WHERE keyword_id = ANY($1::uuid[])
+              ORDER BY
+                keyword_id,
+                month,
+                fetched_at DESC,
+                source DESC,
+                id DESC
+            )
             SELECT keyword_id, month, volume
-            FROM keyword_monthly_volumes
-            WHERE keyword_id = ANY($1::uuid[])
+            FROM migrated
             UNION ALL
             SELECT
               keyword.id AS keyword_id,
@@ -1059,7 +1072,7 @@ export async function getProjectKeywords(
             WHERE keyword.id = ANY($1::uuid[])
               AND NOT EXISTS (
                 SELECT 1
-                FROM keyword_monthly_volumes AS migrated
+                FROM migrated
                 WHERE migrated.keyword_id = keyword.id
                   AND migrated.month = provider.month
               )

@@ -113,6 +113,10 @@ worker workflows, event delivery, object persistence, and restart persistence.
   recent runs capped at 20, comparison rows capped at 50, and detail samples
   capped at 20. The route is administrator-only and may inspect archived
   projects; archived UI state must remain read-only.
+- Monthly-volume reads must resolve one canonical migrated row per keyword and
+  month. Prefer the latest `fetched_at`, then use source and row ID as stable
+  tie-breakers; live-provider data may fill only months absent from migrated
+  history.
 - `DELETE /v1/projects/:projectId/gsc-uploads/:uploadId` is an
   administrator-only, project-scoped mutation. It must reject archived
   projects, rely on cascading child-row deletion, and mark calculation inputs

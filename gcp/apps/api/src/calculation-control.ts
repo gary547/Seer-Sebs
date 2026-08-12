@@ -268,14 +268,29 @@ export async function getProjectCalculationControl(
     ),
     pool.query<VolumeSummaryRow>(
       `
-        WITH history AS (
+        WITH canonical_volume AS (
+          SELECT DISTINCT ON (volume.keyword_id, volume.month)
+            volume.keyword_id,
+            volume.month,
+            volume.volume
+          FROM keyword_monthly_volumes AS volume
+          JOIN keywords AS keyword ON keyword.id = volume.keyword_id
+          WHERE keyword.project_id = $1
+            AND keyword.detox_status = 'keep'
+          ORDER BY
+            volume.keyword_id,
+            volume.month,
+            volume.fetched_at DESC,
+            volume.source DESC,
+            volume.id DESC
+        ), history AS (
           SELECT
             keyword.id,
-            count(volume.id)::integer AS month_count,
+            count(volume.month)::integer AS month_count,
             min(volume.month) AS earliest_month,
             max(volume.month) AS latest_month
           FROM keywords AS keyword
-          LEFT JOIN keyword_monthly_volumes AS volume
+          LEFT JOIN canonical_volume AS volume
             ON volume.keyword_id = keyword.id
           WHERE keyword.project_id = $1
             AND keyword.detox_status = 'keep'
@@ -299,26 +314,42 @@ export async function getProjectCalculationControl(
     ),
     pool.query<VolumeSampleRow>(
       `
+        WITH canonical_volume AS (
+          SELECT DISTINCT ON (volume.keyword_id, volume.month)
+            volume.keyword_id,
+            volume.month,
+            volume.volume
+          FROM keyword_monthly_volumes AS volume
+          JOIN keywords AS project_keyword ON project_keyword.id = volume.keyword_id
+          WHERE project_keyword.project_id = $1
+            AND project_keyword.detox_status = 'keep'
+          ORDER BY
+            volume.keyword_id,
+            volume.month,
+            volume.fetched_at DESC,
+            volume.source DESC,
+            volume.id DESC
+        )
         SELECT
           keyword.id AS keyword_id,
           keyword.keyword,
-          count(volume.id)::text AS month_count,
+          count(volume.month)::text AS month_count,
           COALESCE(
             jsonb_agg(
               jsonb_build_object(
                 'month', to_char(volume.month, 'YYYY-MM-DD'),
                 'volume', volume.volume
               ) ORDER BY volume.month
-            ) FILTER (WHERE volume.id IS NOT NULL),
+            ) FILTER (WHERE volume.month IS NOT NULL),
             '[]'::jsonb
           ) AS months
         FROM keywords AS keyword
-        LEFT JOIN keyword_monthly_volumes AS volume
+        LEFT JOIN canonical_volume AS volume
           ON volume.keyword_id = keyword.id
         WHERE keyword.project_id = $1
           AND keyword.detox_status = 'keep'
         GROUP BY keyword.id, keyword.keyword, keyword.normalised_keyword
-        ORDER BY count(volume.id) DESC, keyword.normalised_keyword
+        ORDER BY count(volume.month) DESC, keyword.normalised_keyword
         LIMIT 20
       `,
       [projectId],

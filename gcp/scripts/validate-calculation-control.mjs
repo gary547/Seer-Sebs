@@ -1,6 +1,7 @@
 import process from "node:process";
 
 const apiBaseUrl = process.env.SEER_LOCAL_API_URL ?? "http://127.0.0.1:18080";
+const requestedProjectId = process.env.SEER_CALCULATION_PROJECT_ID?.trim();
 
 async function jsonRequest(path, init = {}) {
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -18,14 +19,18 @@ const registration = await jsonRequest("/v1/local-auth/register", {
   body: JSON.stringify({
     email: `calculation-control-${Date.now()}@example.dev`,
     password: "Local-calculation-control-2026",
-    role: "admin",
+    role: "super_admin",
   }),
   headers: { "content-type": "application/json" },
   method: "POST",
 });
 const headers = { authorization: `Bearer ${registration.token}` };
 const projectList = await jsonRequest("/v1/projects", { headers });
-const project = projectList.projects.find((candidate) => !candidate.archived_at);
+const project = requestedProjectId
+  ? projectList.projects.find(
+      (candidate) => candidate.id === requestedProjectId && !candidate.archived_at,
+    )
+  : projectList.projects.find((candidate) => !candidate.archived_at);
 if (!project) throw new Error("No active local project is available.");
 
 const controlStartedAt = performance.now();
@@ -59,6 +64,12 @@ if (!Array.isArray(control.recentRuns) || control.recentRuns.length > 20) {
 }
 if (!Array.isArray(control.comparisons.items) || control.comparisons.items.length > 50) {
   throw new Error("Comparison rows are missing or unbounded.");
+}
+for (const row of control.volumeHistory.sample) {
+  const uniqueMonths = new Set(row.months.map((point) => point.month));
+  if (uniqueMonths.size !== row.months.length || row.monthCount !== uniqueMonths.size) {
+    throw new Error(`Volume history contains duplicate months for keyword ${row.keywordId}.`);
+  }
 }
 
 console.log(JSON.stringify({
