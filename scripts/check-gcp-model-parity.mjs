@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-const files = ["har-v2.ts", "revenue-v2.ts", "calibration.ts"];
+const files = ["revenue-v2.ts", "calibration.ts"];
 const normalise = (value) =>
   value
     .replace(
@@ -28,6 +28,17 @@ for (const file of files) {
   }
 }
 
+const har = await readFile(
+  new URL("../gcp/packages/models/src/har-v2.ts", import.meta.url),
+  "utf8",
+);
+if (
+  !har.includes("(b.rank_absolute ?? -1) - (a.rank_absolute ?? -1)") ||
+  !har.includes("if (!beaten) break;")
+) {
+  throw new Error("GCP HAR ladder must walk weakest-to-strongest and stop on first failure.");
+}
+
 process.stdout.write(
-  `GCP model parity check passed (${files.length} canonical modules).\n`,
+  `GCP model checks passed (${files.length} parity modules plus the corrected HAR ladder).\n`,
 );

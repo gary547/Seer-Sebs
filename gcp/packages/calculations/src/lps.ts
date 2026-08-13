@@ -17,6 +17,11 @@ export interface LpsResult {
   score: number;
 }
 
+export interface LpsScoringContext {
+  backlinkMaximum: number;
+  referringMaximum: number;
+}
+
 const percentile95 = (values: number[]): number => {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((left, right) => left - right);
@@ -30,16 +35,13 @@ const logScore = (value: number, maximum: number): number =>
 
 export function computeLps(
   row: LpsMetricRow,
-  rows: LpsMetricRow[],
+  rowsOrContext: LpsMetricRow[] | LpsScoringContext,
 ): LpsResult {
-  const referringMaximum = percentile95(
-    rows.flatMap((item) =>
-      item.referringDomains === null ? [] : [item.referringDomains],
-    ),
-  );
-  const backlinkMaximum = percentile95(
-    rows.flatMap((item) => (item.backlinks === null ? [] : [item.backlinks])),
-  );
+  const context = Array.isArray(rowsOrContext)
+    ? createLpsScoringContext(rowsOrContext)
+    : rowsOrContext;
+  const referringMaximum = context.referringMaximum;
+  const backlinkMaximum = context.backlinkMaximum;
   const components = {
     backlinks:
       row.backlinks === null ? null : logScore(row.backlinks, backlinkMaximum),
@@ -75,5 +77,20 @@ export function computeLps(
           ? "medium"
           : "low",
     score: Math.round(score * 100) / 100,
+  };
+}
+
+export function createLpsScoringContext(
+  rows: LpsMetricRow[],
+): LpsScoringContext {
+  return {
+    backlinkMaximum: percentile95(
+      rows.flatMap((item) => (item.backlinks === null ? [] : [item.backlinks])),
+    ),
+    referringMaximum: percentile95(
+      rows.flatMap((item) =>
+      item.referringDomains === null ? [] : [item.referringDomains],
+      ),
+    ),
   };
 }

@@ -1,16 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   Calculator,
   ExternalLink,
-  RefreshCw,
   TriangleAlert,
 } from "lucide-react";
 import { Link, Navigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import CalculationControlPanels from "@/components/admin/CalculationControlPanels";
+import AutonomousPipelinePanel from "@/components/admin/AutonomousPipelinePanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,9 +30,12 @@ import {
 } from "@/integrations/gcp/calculations";
 import {
   getLatestProjectPipelineRun,
-  getPipelineRun,
+  getProjectPipelineReadiness,
+  markProjectKeywordsPrecurated,
   startProjectPipeline,
+  updateProjectPipelinePolicy,
   type PipelineRun,
+  type PipelineReadiness,
 } from "@/integrations/gcp/pipeline";
 import { listProjects } from "@/integrations/gcp/tenancy";
 
@@ -46,6 +49,8 @@ export default function CalculationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [showArchived, setShowArchived] = useState(false);
   const [running, setRunning] = useState(false);
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [stampingPrecurated, setStampingPrecurated] = useState(false);
   const selectedProjectId = searchParams.get("projectId") ?? "";
 
   const projects = useQuery({
@@ -80,9 +85,14 @@ export default function CalculationsPage() {
     refetchInterval: (query) => {
       const value = query.state.data as { run: PipelineRun | null } | undefined;
       return value?.run?.status === "pending" || value?.run?.status === "running"
-        ? 1_000
+        ? 5_000
         : false;
     },
+  });
+  const readiness = useQuery({
+    queryKey: ["admin", "pipeline-readiness", projectId],
+    queryFn: () => getProjectPipelineReadiness(projectId),
+    enabled: Boolean(projectId) && !archived,
   });
 
   if (!canManageUsers) return <Navigate to="/clients" replace />;
@@ -99,37 +109,75 @@ export default function CalculationsPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "calculation-summary", projectId] }),
       queryClient.invalidateQueries({ queryKey: ["admin", "calculation-ctr", projectId] }),
       queryClient.invalidateQueries({ queryKey: ["admin", "calculation-pipeline", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["admin", "pipeline-readiness", projectId] }),
       queryClient.invalidateQueries({ queryKey: ["admin", "calculation-inspector", projectId] }),
       queryClient.invalidateQueries({ queryKey: ["admin", "link-power-inspector", projectId] }),
     ]);
   };
 
-  const runPipeline = async (source: string) => {
+  const terminalRunId =
+    latestPipeline.data?.run?.status === "succeeded" ||
+    latestPipeline.data?.run?.status === "failed"
+      ? latestPipeline.data.run.id
+      : null;
+
+  useEffect(() => {
+    if (!terminalRunId || !projectId) return;
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["admin", "calculation-control", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["admin", "calculation-summary", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["admin", "calculation-ctr", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["admin", "pipeline-readiness", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["admin", "calculation-inspector", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["admin", "link-power-inspector", projectId] }),
+    ]);
+  }, [projectId, queryClient, terminalRunId]);
+
+  const runPipeline = async (mode: "full" | "recalculate" | "resume") => {
     if (!projectId || archived || running) return;
     setRunning(true);
     try {
-      const created = await startProjectPipeline(projectId);
-      const deadline = Date.now() + 15 * 60_000;
-      let terminal: PipelineRun | null = null;
-      while (Date.now() < deadline) {
-        const run = await getPipelineRun(created.id);
-        if (run.status === "succeeded" || run.status === "failed") {
-          terminal = run;
-          break;
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-      }
-      if (!terminal) throw new Error("Pipeline did not finish before the timeout.");
-      if (terminal.status === "failed") {
-        const failed = terminal.stages.find((stage) => stage.state === "failed");
-        throw new Error(failed ? `${failed.id} failed after ${failed.attempts} attempts.` : "Pipeline failed.");
-      }
+      await startProjectPipeline(projectId, mode);
       await refreshQueries();
-      toast.success(`${source} completed through the canonical pipeline`);
+      toast.success(
+        mode === "recalculate"
+          ? "Forecast recalculation started"
+          : mode === "resume"
+            ? "Pipeline resume started"
+            : "Full autonomous pipeline started",
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Calculation run failed");
     } finally {
       setRunning(false);
+    }
+  };
+
+  const savePolicy = async (policy: PipelineReadiness["policy"]) => {
+    if (!projectId || archived || savingPolicy) return;
+    setSavingPolicy(true);
+    try {
+      await updateProjectPipelinePolicy(projectId, policy);
+      await refreshQueries();
+      toast.success("Pipeline policy saved");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Policy update failed");
+    } finally {
+      setSavingPolicy(false);
+    }
+  };
+
+  const stampPrecurated = async () => {
+    if (!projectId || archived || stampingPrecurated) return;
+    setStampingPrecurated(true);
+    try {
+      const result = await markProjectKeywordsPrecurated(projectId);
+      await refreshQueries();
+      toast.success(`${result.stampedKeywordCount} manual keywords marked as pre-curated`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Pre-curated action failed");
+    } finally {
+      setStampingPrecurated(false);
     }
   };
 
@@ -176,16 +224,6 @@ export default function CalculationsPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Button variant="signal" disabled={!projectId || archived || running} onClick={() => void runPipeline("HAR v2 + Revenue v2")}>
-              <RefreshCw className={`h-4 w-4 ${running ? "animate-spin" : ""}`} />
-              {running ? "Running…" : "Run HAR v2 + Revenue v2"}
-            </Button>
-            <Button variant="outline" disabled={!projectId || archived || running} onClick={() => void runPipeline("HAR v2 composite")}>
-              Run HAR v2 (composite)
-            </Button>
-            <Button variant="outline" disabled={!projectId || archived || running || !control.data?.latestSuccessfulRun} onClick={() => void runPipeline("Revenue v2")}>
-              Run Revenue v2
-            </Button>
             {projectId && !archived && (
               <Button variant="outline" asChild>
                 <Link to={`/admin/projects/${projectId}/conversion-overrides`}>
@@ -207,8 +245,20 @@ export default function CalculationsPage() {
                 {latestRun?.status ?? "not run"}
               </Badge>
             )}
-            <span>Latest completion {dateTime(control.data?.latestSuccessfulRun?.completedAt)}</span>
-            <span className="font-mono">{control.data?.latestSuccessfulRun?.id.slice(0, 8) ?? "—"}</span>
+            <span>
+              Latest completion {dateTime(
+                latestRun?.status === "succeeded"
+                  ? latestRun.completedAt
+                  : control.data?.latestSuccessfulRun?.completedAt,
+              )}
+            </span>
+            <span className="font-mono">
+              {(
+                latestRun?.status === "succeeded"
+                  ? latestRun.id
+                  : control.data?.latestSuccessfulRun?.id
+              )?.slice(0, 8) ?? "—"}
+            </span>
           </div>
         )}
       </header>
@@ -237,6 +287,20 @@ export default function CalculationsPage() {
         </Alert>
       )}
 
+      {projectId && !archived && (
+        <AutonomousPipelinePanel
+          archived={archived}
+          onRun={runPipeline}
+          onSavePolicy={savePolicy}
+          onStampPrecurated={stampPrecurated}
+          readiness={readiness.data}
+          run={latestRun}
+          running={running}
+          savingPolicy={savingPolicy}
+          stampingPrecurated={stampingPrecurated}
+        />
+      )}
+
       {projectId && control.isLoading && (
         <div className="space-y-3" aria-label="Loading calculation controls">
           {Array.from({ length: 8 }, (_, index) => <div key={index} className="h-[72px] animate-pulse rounded-xl border border-hairline bg-surface" />)}
@@ -247,7 +311,9 @@ export default function CalculationsPage() {
         <CalculationControlPanels
           control={control.data}
           ctrCurves={ctrCurves.data}
-          onRun={runPipeline}
+          onRun={(source) =>
+            runPipeline(source.toLowerCase().includes("revenue") ? "recalculate" : "full")
+          }
           projectId={projectId}
           running={running}
           summary={summary.data}

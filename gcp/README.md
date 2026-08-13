@@ -19,7 +19,7 @@ The application now uses this boundary for authentication, data, workflows, prov
 - `packages/models`: exact, parity-checked HAR v2.1, Revenue v2.1 and calibration modules;
 - `scripts`: repeatable Docker, persistence and boundary validation;
 - `infra`: validated OpenTofu definitions for the managed Google Cloud foundation and runtime;
-- `workflows`: the validated 19-stage pipeline and scheduled-maintenance Workflows templates;
+- `workflows`: the validated 24-stage autonomous pipeline and scheduled-maintenance Workflows templates;
 - `migration`: the complete 58-table source disposition, archive catalog and ordered canonical transformation rules;
 - `cloudbuild.web.yaml`: validated frontend build plus Firebase live or preview-channel deployment.
 
@@ -51,9 +51,9 @@ It performs:
 - health and readiness checks across six containers;
 - registration and login through the local identity boundary;
 - private asset upload and read-back;
-- a browser-independent run through all 19 canonical stages;
+- a browser-independent run through all 24 canonical stages;
 - a representative synthetic project covering live/deferred keywords, detox removal, GSC promotion, missing metrics, missing ranking URLs and explicit local provider responses;
-- computed outputs for all 19 stages, including SERP and authority data, site architecture, link power, demand, CTR curves, clustering, HAR v2, Revenue v2 and calibration;
+- computed outputs for all 24 stages, including readiness gates, SERP and authority data, site architecture, link power, demand, CTR curves, clustering, HAR v2, Revenue v2, calibration and rollups;
 - exact source-to-target parity checks for the canonical HAR v2.1, Revenue v2.1 and calibration modules;
 - authenticated creation of a client and project, rule replacement, idempotent keyword import and GSC upload through the target API;
 - a project-backed pipeline run that reads core PostgreSQL tables and writes promoted, detoxed, categorised, enriched, ranking and GSC intent state back atomically;
@@ -88,7 +88,7 @@ docker compose -f gcp/docker-compose.local.yml down
 
 ## Current implementation boundary
 
-The complete local foundation, frontend target boundary and all 19 project-backed pipeline stages are validated. Every stage reads controlled source data, writes versioned PostgreSQL state and feeds its dependent stages. The authenticated API covers identity, tenancy, keywords, GSC, calculations, SERP, roadmaps, archives, URL Monitor, reference data, conversion overrides, portfolio, capture window, Content Planner and Slides export. Live DataForSEO, Ahrefs and Anthropic adapters are implemented behind the worker boundary with persisted resumable state. The target also contains authenticated five-minute URL checks, daily retention, a complete 58-table lossless archive path, 26 ordered operational-table migration rules and repeatable canonical transfer, database restore and access-boundary tests.
+The complete local foundation, frontend target boundary and all 24 project-backed pipeline stages are validated. Every stage reads controlled source data, writes versioned PostgreSQL state and feeds its dependent stages. The authenticated API covers identity, tenancy, keywords, GSC, calculations, SERP, roadmaps, archives, URL Monitor, reference data, conversion overrides, portfolio, capture window, Content Planner and Slides export. Live DataForSEO, Ahrefs and Anthropic adapters are implemented behind the worker boundary with persisted resumable state. The target also contains authenticated five-minute URL checks, daily retention, a complete 58-table lossless archive path, 26 ordered operational-table migration rules and repeatable canonical transfer, database restore and access-boundary tests.
 
 Production parity is not yet claimed. Real source discovery, approved data mapping, identity/data/storage import, provider credentials, managed-resource verification and frozen real-project output parity require the isolated Google Cloud projects and source access.
 

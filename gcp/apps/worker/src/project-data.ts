@@ -26,6 +26,7 @@ import type {
   KeywordEnrichmentStageData,
   LinkPowerScoreStageData,
   RankingUrlStageData,
+  RollupOutputStageData,
   RevenueV2StageData,
   SerpCollectionStageData,
   SiteArchitectureStageData,
@@ -46,18 +47,28 @@ interface ProjectSourceRow {
   currency: string;
   domain: string;
   gsc_window_days: number;
+  gsc_date_range_end: string | null;
+  gsc_date_range_start: string | null;
   id: string;
   industry: string;
   language: string;
   project_name: string;
+  competitive_enrichment_volume_floor: number;
+  gsc_promotion_impressions_floor: number;
+  pipeline_policy_reviewed_at: Date | null;
 }
 
 interface KeywordSourceRow {
   avg_monthly_volume: number | null;
+  category: string | null;
+  core_keyword: string | null;
   id: string;
   keyword: string;
   keyword_difficulty: string | null;
+  pre_curated: boolean;
   ranking_url: string | null;
+  search_intent: SyntheticProviderKeyword["intent"];
+  volume_source: "manual" | "provider" | null;
 }
 
 interface GscSourceRow {
@@ -82,11 +93,45 @@ interface RuleSourceRow {
 
 interface ProviderSourceRow {
   avg_monthly_volume: number | null;
+  core_keyword: string | null;
   keyword: string;
   keyword_difficulty: string | null;
   rank: number | null;
   ranking_url: string | null;
   search_intent: SyntheticProviderKeyword["intent"];
+}
+
+interface CompetitorSourceRow {
+  competitor_domain: string;
+}
+
+interface ProviderSerpFeatureRow {
+  feature_raw: string;
+  normalised_keyword: string;
+}
+
+interface ScoringConfigSourceRow {
+  id: string;
+  thresholds_json: {
+    floor_multipliers?: Record<string, number>;
+    min_confidence?: number;
+    probability_factors?: Record<string, number>;
+    temperatures?: Record<string, number>;
+    thresholds?: Record<string, number>;
+  };
+  version: string;
+}
+
+interface VisibilityAdjustmentSourceRow {
+  device: "all" | "desktop" | "mobile" | "tablet";
+  feature_type: string;
+  multiplier: string;
+  search_intent:
+    | "commercial"
+    | "generic"
+    | "informational"
+    | "navigational"
+    | "transactional";
 }
 
 interface ProviderSerpKeywordRow {
@@ -190,6 +235,10 @@ export async function loadProjectPipelineSource(
     providerSerpResult,
     providerSiteArchitectureResult,
     conversionOverrideResult,
+    competitorResult,
+    scoringConfigResult,
+    providerSerpFeatureResult,
+    visibilityAdjustmentResult,
   ] = await Promise.all([
     pool.query<ProjectSourceRow>(
       `
@@ -206,13 +255,28 @@ export async function loadProjectPipelineSource(
           project.authority_backlinks::text,
           project.conversion_rate,
           project.aov,
-          project.gsc_window_days,
+          COALESCE(
+            (latest_upload.date_range_end - latest_upload.date_range_start) + 1,
+            project.gsc_window_days
+          ) AS gsc_window_days,
+          latest_upload.date_range_start::text AS gsc_date_range_start,
+          latest_upload.date_range_end::text AS gsc_date_range_end,
+          project.gsc_promotion_impressions_floor,
+          project.competitive_enrichment_volume_floor,
+          project.pipeline_policy_reviewed_at,
           client.company_name,
           client.domain,
           client.industry,
           client.brand_terms
         FROM navigator_projects AS project
         JOIN clients AS client ON client.id = project.client_id
+        LEFT JOIN LATERAL (
+          SELECT upload.date_range_start, upload.date_range_end
+          FROM gsc_uploads AS upload
+          WHERE upload.project_id = project.id
+          ORDER BY upload.created_at DESC, upload.id DESC
+          LIMIT 1
+        ) AS latest_upload ON true
         WHERE project.id = $1
           AND project.archived_at IS NULL
           AND client.archived_at IS NULL
@@ -226,7 +290,12 @@ export async function loadProjectPipelineSource(
           keyword,
           avg_monthly_volume,
           keyword_difficulty,
-          ranking_url
+          (human_reviewed AND categorisation_status = 'done') AS pre_curated,
+          ranking_url,
+          category,
+          search_intent,
+          core_keyword,
+          volume_source
         FROM keywords
         WHERE project_id = $1
         ORDER BY created_at, id
@@ -270,6 +339,7 @@ export async function loadProjectPipelineSource(
         SELECT
           keyword,
           avg_monthly_volume,
+          core_keyword,
           keyword_difficulty,
           search_intent,
           ranking_url,
@@ -355,6 +425,45 @@ export async function loadProjectPipelineSource(
       `,
       [projectId],
     ),
+    pool.query<CompetitorSourceRow>(
+      `
+        SELECT competitor_domain
+        FROM competitors
+        WHERE client_id = (
+          SELECT client_id FROM navigator_projects WHERE id = $1
+        )
+        ORDER BY competitor_domain
+      `,
+      [projectId],
+    ),
+    pool.query<ScoringConfigSourceRow>(
+      `
+        SELECT id, version, thresholds_json
+        FROM har_scoring_config
+        WHERE is_active
+        LIMIT 1
+      `,
+    ),
+    pool.query<ProviderSerpFeatureRow>(
+      `
+        SELECT keyword.normalised_keyword, feature.feature_raw
+        FROM project_serp_features AS feature
+        JOIN keywords AS keyword
+          ON keyword.id = feature.keyword_id
+         AND keyword.project_id = feature.project_id
+        WHERE feature.project_id = $1
+        ORDER BY keyword.normalised_keyword, feature.feature_raw
+      `,
+      [projectId],
+    ),
+    pool.query<VisibilityAdjustmentSourceRow>(
+      `
+        SELECT feature_type, device, search_intent, multiplier::text
+        FROM serp_feature_visibility_adjustments
+        WHERE is_active
+        ORDER BY feature_type, device, search_intent
+      `,
+    ),
   ]);
   const project = projectResult.rows[0];
   if (!project) {
@@ -363,11 +472,16 @@ export async function loadProjectPipelineSource(
 
   const keywords: SyntheticKeyword[] = keywordResult.rows.map((keyword) => ({
     avgMonthlyVolume: keyword.avg_monthly_volume,
+    category: keyword.category,
+    coreKeyword: keyword.core_keyword,
     id: keyword.id,
     keywordDifficulty:
       keyword.keyword_difficulty === null ? null : Number(keyword.keyword_difficulty),
+    preCurated: keyword.pre_curated,
     rankingUrl: keyword.ranking_url,
+    searchIntent: keyword.search_intent,
     text: keyword.keyword,
+    volumeSource: keyword.volume_source,
   }));
   const gscRows: SyntheticGscRow[] = gscResult.rows.map((row) => ({
     clicks: row.clicks,
@@ -407,6 +521,13 @@ export async function loadProjectPipelineSource(
     points.push({ month: row.month, volume: row.volume });
     providerMonthlyVolumes.set(row.normalised_keyword, points);
   }
+  const providerSerpFeatures = new Map<string, string[]>();
+  for (const row of providerSerpFeatureResult.rows) {
+    providerSerpFeatures.set(row.normalised_keyword, [
+      ...(providerSerpFeatures.get(row.normalised_keyword) ?? []),
+      row.feature_raw,
+    ]);
+  }
 
   return {
     authority: {
@@ -430,6 +551,8 @@ export async function loadProjectPipelineSource(
         project.conversion_rate === null
           ? null
           : Number(project.conversion_rate),
+      gscDateRangeEnd: project.gsc_date_range_end,
+      gscDateRangeStart: project.gsc_date_range_start,
       gscWindowDays: project.gsc_window_days,
     },
     conversionOverrides: conversionOverrideResult.rows.map((override) => ({
@@ -445,6 +568,7 @@ export async function loadProjectPipelineSource(
       scopeType: override.scope_type,
       scopeValue: override.scope_value,
     })),
+    competitorDomains: competitorResult.rows.map((row) => row.competitor_domain),
     gscRows,
     keywords,
     project: {
@@ -455,10 +579,17 @@ export async function loadProjectPipelineSource(
       id: project.id,
       language: project.language,
       name: project.project_name,
+      policy: {
+        competitiveEnrichmentVolumeFloor:
+          project.competitive_enrichment_volume_floor,
+        gscPromotionImpressionsFloor: project.gsc_promotion_impressions_floor,
+        reviewedAt: project.pipeline_policy_reviewed_at?.toISOString() ?? null,
+      },
     },
     providerInputs: {
       keywords: providerResult.rows.map((input) => ({
         avgMonthlyVolume: input.avg_monthly_volume,
+        coreKeyword: input.core_keyword,
         intent: input.search_intent,
         keywordDifficulty:
           input.keyword_difficulty === null
@@ -471,6 +602,7 @@ export async function loadProjectPipelineSource(
           providerMonthlyVolumes.get(normaliseKeyword(input.keyword)) ?? [],
       })),
       serpKeywords: providerSerpKeywordResult.rows.map((input) => ({
+        features: providerSerpFeatures.get(input.normalised_keyword) ?? [],
         results: providerSerpResults.get(input.normalised_keyword) ?? [],
         text: input.keyword,
       })),
@@ -485,6 +617,29 @@ export async function loadProjectPipelineSource(
       ),
     },
     rules: groupRules(ruleResult.rows),
+    scoringConfig: scoringConfigResult.rows[0]
+      ? {
+          config_id: scoringConfigResult.rows[0].id,
+          config_version: scoringConfigResult.rows[0].version,
+          min_confidence:
+            scoringConfigResult.rows[0].thresholds_json.min_confidence ?? null,
+          scenario_floor_multipliers:
+            scoringConfigResult.rows[0].thresholds_json.floor_multipliers,
+          scenario_prob_factors:
+            scoringConfigResult.rows[0].thresholds_json.probability_factors,
+          scenario_temperatures:
+            scoringConfigResult.rows[0].thresholds_json.temperatures,
+          scenario_thresholds:
+            scoringConfigResult.rows[0].thresholds_json.thresholds,
+        }
+      : undefined,
+    scoringConfigActive: scoringConfigResult.rows.length > 0,
+    serpVisibilityAdjustments: visibilityAdjustmentResult.rows.map((row) => ({
+      device: row.device,
+      featureType: row.feature_type,
+      intent: row.search_intent,
+      multiplier: Number(row.multiplier),
+    })),
   };
 }
 
@@ -674,16 +829,28 @@ async function persistKeywordEnrichment(
 ): Promise<void> {
   const values = output.keywords.map((keyword) => ({
     avg_monthly_volume: keyword.enrichment.avgMonthlyVolume,
+    category: keyword.category,
+    competitive_eligible: keyword.enrichment.competitiveEligible,
+    competitive_eligibility_reason:
+      keyword.enrichment.competitiveEligibilityReason,
+    core_keyword: keyword.enrichment.coreKeyword,
     id: keyword.id,
     intent: keyword.enrichment.intent,
     keyword_difficulty: keyword.enrichment.keywordDifficulty,
     source: keyword.enrichment.source,
+    volume_source: keyword.enrichment.volumeSource,
   }));
   const result = await client.query(
     `
       UPDATE keywords AS keyword
       SET avg_monthly_volume = enrichment.avg_monthly_volume,
+          category = COALESCE(keyword.category, enrichment.category),
           keyword_difficulty = enrichment.keyword_difficulty,
+          core_keyword = enrichment.core_keyword,
+          core_keyword_source = 'dataforseo_or_form',
+          volume_source = enrichment.volume_source,
+          competitive_eligible = enrichment.competitive_eligible,
+          competitive_eligibility_reason = enrichment.competitive_eligibility_reason,
           search_intent = enrichment.intent,
           intent_source = enrichment.source,
           enrichment_source = enrichment.source,
@@ -700,9 +867,14 @@ async function persistKeywordEnrichment(
       FROM jsonb_to_recordset($2::jsonb) AS enrichment(
         id uuid,
         avg_monthly_volume integer,
+        category text,
         keyword_difficulty numeric,
+        core_keyword text,
         intent text,
-        source text
+        source text,
+        volume_source text,
+        competitive_eligible boolean,
+        competitive_eligibility_reason text
       )
       WHERE keyword.project_id = $1
         AND keyword.id = enrichment.id
@@ -886,6 +1058,7 @@ async function persistSerpCollection(
       client_rank: clientResult?.rankAbsolute ?? null,
       client_url: clientResult?.url ?? null,
       id: keyword.id,
+      source_keyword_id: keyword.sourceKeywordId,
       status: keyword.status,
     };
   });
@@ -901,6 +1074,10 @@ async function persistSerpCollection(
             ELSE status.status = 'no-result'
           END,
           serp_provider_missing = status.status = 'missing-provider',
+          serp_inherited_from_keyword_id = CASE
+            WHEN status.source_keyword_id <> keyword.id THEN status.source_keyword_id
+            ELSE NULL
+          END,
           base_rank = COALESCE(status.client_rank, keyword.base_rank),
           ranking_url = COALESCE(status.client_url, keyword.ranking_url),
           base_rank_source = CASE
@@ -915,6 +1092,7 @@ async function persistSerpCollection(
       FROM jsonb_to_recordset($2::jsonb) AS status(
         id uuid,
         status text,
+        source_keyword_id uuid,
         client_rank integer,
         client_url text
       )
@@ -938,6 +1116,34 @@ async function persistSerpCollection(
     [projectId, JSON.stringify(statuses)],
   );
   for (const keyword of output.keywords) {
+    if (keyword.status !== "missing-provider") {
+      await client.query(
+        `
+          DELETE FROM project_serp_features
+          WHERE project_id = $1
+            AND keyword_id = $2
+            AND source = 'dataforseo'
+        `,
+        [projectId, keyword.id],
+      );
+    }
+    for (const feature of keyword.features) {
+      await client.query(
+        `
+          INSERT INTO project_serp_features (
+            project_id,
+            keyword_id,
+            device,
+            feature_raw,
+            result_type,
+            source
+          )
+          VALUES ($1, $2, 'mobile', $3, $3, 'dataforseo')
+          ON CONFLICT DO NOTHING
+        `,
+        [projectId, keyword.id, feature],
+      );
+    }
     for (const result of keyword.results) {
       await client.query(
         `
@@ -967,6 +1173,93 @@ async function persistSerpCollection(
         ],
       );
     }
+  }
+}
+
+async function persistRollupOutput(
+  client: PoolClient,
+  projectId: string,
+  runId: string,
+  output: RollupOutputStageData,
+): Promise<void> {
+  const result = await client.query(
+    `
+      INSERT INTO pipeline_rollups (
+        pipeline_run_id,
+        project_id,
+        scenario,
+        naive_expected_incremental_annual,
+        cluster_deduped_expected_incremental_annual,
+        double_count_annual,
+        cluster_rollup,
+        category_rollup,
+        quarter_rollup,
+        trend_rollup,
+        confidence_distribution,
+        cannibalisation_flags,
+        provenance
+      )
+      SELECT
+        $1,
+        $2,
+        rollup.scenario,
+        rollup.naive_total,
+        rollup.deduped_total,
+        rollup.double_count,
+        rollup.cluster_rollup,
+        rollup.category_rollup,
+        rollup.quarter_rollup,
+        rollup.trend_rollup,
+        $4,
+        $5,
+        $6
+      FROM jsonb_to_recordset($3::jsonb) AS rollup(
+        scenario text,
+        naive_total numeric,
+        deduped_total numeric,
+        double_count numeric,
+        cluster_rollup jsonb,
+        category_rollup jsonb,
+        quarter_rollup jsonb,
+        trend_rollup jsonb
+      )
+      ON CONFLICT (pipeline_run_id, scenario)
+      DO UPDATE SET
+        naive_expected_incremental_annual = EXCLUDED.naive_expected_incremental_annual,
+        cluster_deduped_expected_incremental_annual =
+          EXCLUDED.cluster_deduped_expected_incremental_annual,
+        double_count_annual = EXCLUDED.double_count_annual,
+        cluster_rollup = EXCLUDED.cluster_rollup,
+        category_rollup = EXCLUDED.category_rollup,
+        quarter_rollup = EXCLUDED.quarter_rollup,
+        trend_rollup = EXCLUDED.trend_rollup,
+        confidence_distribution = EXCLUDED.confidence_distribution,
+        cannibalisation_flags = EXCLUDED.cannibalisation_flags,
+        provenance = EXCLUDED.provenance,
+        computed_at = now()
+    `,
+    [
+      runId,
+      projectId,
+      JSON.stringify(
+        output.scenarios.map((scenario) => ({
+          deduped_total: scenario.clusterDedupedExpectedIncrementalAnnual,
+          double_count: scenario.doubleCountAnnual,
+          category_rollup: scenario.categoryRollup,
+          cluster_rollup: scenario.clusterRollup,
+          naive_total: scenario.naiveExpectedIncrementalAnnual,
+          quarter_rollup: scenario.quarterRollup,
+          scenario: scenario.scenario,
+          trend_rollup: scenario.trendRollup,
+        })),
+      ),
+      JSON.stringify(output.confidenceDistribution),
+      JSON.stringify(output.cannibalisationFlags),
+      JSON.stringify({ clusterDeduped: true, handlerVersion: output.handlerVersion }),
+    ],
+  );
+  if ((result.rowCount ?? 0) !== output.scenarios.length) {
+    throw new Error("Rollup output did not persist every scenario.");
   }
 }
 
@@ -1282,14 +1575,38 @@ async function persistCtrCurves(
           pipeline_run_id,
           device,
           search_intent,
-          is_branded
+          is_branded,
+          source_date_range_start,
+          source_date_range_end,
+          source_sample_size,
+          provenance
         )
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (pipeline_run_id, device, search_intent, is_branded)
-        DO UPDATE SET computed_at = now()
+        DO UPDATE SET
+          source_date_range_start = EXCLUDED.source_date_range_start,
+          source_date_range_end = EXCLUDED.source_date_range_end,
+          source_sample_size = EXCLUDED.source_sample_size,
+          provenance = EXCLUDED.provenance,
+          computed_at = now()
         RETURNING id
       `,
-      [projectId, runId, curve.device, curve.intent, curve.isBranded],
+      [
+        projectId,
+        runId,
+        curve.device,
+        curve.intent,
+        curve.isBranded,
+        output.provenance.dateRangeStart,
+        output.provenance.dateRangeEnd,
+        curve.points.reduce((sum, point) => sum + point.impressions, 0),
+        JSON.stringify({
+          ...output.provenance,
+          curveSource: curve.points.some((point) => point.source === "gsc")
+            ? "measured_or_blended"
+            : "global_fallback",
+        }),
+      ],
     );
     const curveId = curveResult.rows[0]?.id;
     if (!curveId) throw new Error("CTR curve did not return an identifier.");
@@ -1355,8 +1672,10 @@ async function persistClustering(
       member_count: members.length,
     };
   });
-  const clusterResult = await client.query(
-    `
+  let persistedClusterCount = 0;
+  for (const batch of batches(clusters, FORECAST_PERSISTENCE_BATCH_SIZE)) {
+    const clusterResult = await client.query(
+      `
       INSERT INTO keyword_clusters (
         project_id,
         pipeline_run_id,
@@ -1388,9 +1707,11 @@ async function persistClustering(
         member_count = EXCLUDED.member_count,
         computed_at = now()
     `,
-    [projectId, runId, JSON.stringify(clusters)],
-  );
-  if ((clusterResult.rowCount ?? 0) !== clusters.length) {
+      [projectId, runId, JSON.stringify(batch)],
+    );
+    persistedClusterCount += clusterResult.rowCount ?? 0;
+  }
+  if (persistedClusterCount !== clusters.length) {
     throw new Error("Clustering did not persist every cluster.");
   }
   await client.query(
@@ -1408,8 +1729,10 @@ async function persistClustering(
     is_canonical: keyword.isCanonical,
     keyword_id: keyword.id,
   }));
-  const memberResult = await client.query(
-    `
+  let persistedMemberCount = 0;
+  for (const batch of batches(members, FORECAST_PERSISTENCE_BATCH_SIZE)) {
+    const memberResult = await client.query(
+      `
       INSERT INTO keyword_cluster_members (
         cluster_id,
         keyword_id,
@@ -1429,9 +1752,11 @@ async function persistClustering(
         ON keyword.id = input.keyword_id
        AND keyword.project_id = $1
     `,
-    [projectId, runId, JSON.stringify(members)],
-  );
-  if ((memberResult.rowCount ?? 0) !== members.length) {
+      [projectId, runId, JSON.stringify(batch)],
+    );
+    persistedMemberCount += memberResult.rowCount ?? 0;
+  }
+  if (persistedMemberCount !== members.length) {
     throw new Error("Clustering did not persist every cluster member.");
   }
 }
@@ -1724,6 +2049,7 @@ async function persistCalibration(
         sum_actual_monthly,
         impressions_context,
         promotion_eligible,
+        unavailable_reason,
         status,
         matched,
         excluded_noise_floor,
@@ -1733,7 +2059,7 @@ async function persistCalibration(
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11, $12, $13, $14, $15
+        $9, $10, $11, $12, $13, $14, $15, $16
       )
       ON CONFLICT (pipeline_run_id)
       DO UPDATE SET
@@ -1744,6 +2070,7 @@ async function persistCalibration(
         sum_actual_monthly = EXCLUDED.sum_actual_monthly,
         impressions_context = EXCLUDED.impressions_context,
         promotion_eligible = EXCLUDED.promotion_eligible,
+        unavailable_reason = EXCLUDED.unavailable_reason,
         status = EXCLUDED.status,
         matched = EXCLUDED.matched,
         excluded_noise_floor = EXCLUDED.excluded_noise_floor,
@@ -1762,6 +2089,7 @@ async function persistCalibration(
       output.sumActualMonthly,
       output.impressionsContext,
       output.promotionEligible,
+      output.unavailableReason,
       output.status,
       output.matched,
       output.excludedNoiseFloor,
@@ -1786,6 +2114,11 @@ export async function persistProjectStageData(
       return;
     case "detox-v1":
       await persistDetox(client, projectId, output);
+      return;
+    case "preflight-v1":
+    case "historical-volume-v1":
+    case "har-readiness-v1":
+    case "revenue-readiness-v1":
       return;
     case "categorisation-v1":
       await persistCategorisation(client, projectId, output);
@@ -1834,5 +2167,9 @@ export async function persistProjectStageData(
       return;
     case "calibration-v1":
       await persistCalibration(client, projectId, runId, output);
+      return;
+    case "rollup-output-v1":
+      await persistRollupOutput(client, projectId, runId, output);
+      return;
   }
 }

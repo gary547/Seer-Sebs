@@ -13,13 +13,17 @@ interface ProjectProviderRow {
 
 interface KeywordProviderRow {
   avg_monthly_volume: number | null;
+  id: string;
   keyword: string;
   normalised_keyword: string;
+  provider_fetched_at: Date | null;
+  ranking_lookup_checked_at: Date | null;
   ranking_url: string | null;
 }
 
 interface EnrichedKeyword {
   avgMonthlyVolume: number | null;
+  coreKeyword: string | null;
   intent: string | null;
   keyword: string;
   keywordDifficulty: number | null;
@@ -42,6 +46,11 @@ interface SerpResult {
   domain: string;
   rankAbsolute: number;
   url: string;
+}
+
+interface SerpSnapshot {
+  features: string[];
+  results: SerpResult[];
 }
 
 interface AuthorityMetrics {
@@ -287,9 +296,13 @@ export class DataForSeoClient {
         language_code: languageCode(language),
         location_name: countryName(country),
       };
-      const [volumeItems, difficultyItems, intentItems] = await Promise.all([
+      const [volumeItems, historicalItems, difficultyItems, intentItems] = await Promise.all([
         this.liveItems(
           "/v3/keywords_data/google_ads/search_volume/live",
+          request,
+        ),
+        this.liveItems(
+          "/v3/dataforseo_labs/google/historical_search_volume/live",
           request,
         ),
         this.liveItems(
@@ -304,6 +317,7 @@ export class DataForSeoClient {
       for (const keyword of group) {
         result.set(normaliseKeyword(keyword), {
           avgMonthlyVolume: null,
+          coreKeyword: null,
           intent: null,
           keyword,
           keywordDifficulty: null,
@@ -338,6 +352,36 @@ export class DataForSeoClient {
               volume: number;
             } => point !== null,
           );
+      }
+      for (const item of historicalItems) {
+        const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
+        const value = result.get(key);
+        if (!value) continue;
+        const keywordInfo = record(item.keyword_info);
+        const properties = record(item.keyword_properties);
+        value.coreKeyword =
+          stringOrNull(properties.core_keyword) ?? value.coreKeyword;
+        value.avgMonthlyVolume =
+          value.avgMonthlyVolume ?? numberOrNull(keywordInfo.search_volume);
+        const history = records(keywordInfo.monthly_searches)
+          .map((point) => {
+            const year = numberOrNull(point.year);
+            const month = numberOrNull(point.month);
+            const volume = numberOrNull(point.search_volume);
+            return year && month && month <= 12 && volume !== null
+              ? {
+                  month: `${year}-${String(month).padStart(2, "0")}-01`,
+                  volume,
+                }
+              : null;
+          })
+          .filter(
+            (point): point is { month: string; volume: number } =>
+              point !== null,
+          );
+        if (history.length > value.monthlyVolumes.length) {
+          value.monthlyVolumes = history;
+        }
       }
       for (const item of difficultyItems) {
         const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
@@ -459,13 +503,13 @@ export class DataForSeoClient {
     return ready;
   }
 
-  async serpTaskResult(providerTaskId: string): Promise<SerpResult[]> {
+  async serpTaskResult(providerTaskId: string): Promise<SerpSnapshot> {
     const items = dataForSeoItems(
       await this.http.json(
         `https://api.dataforseo.com/v3/serp/google/organic/task_get/advanced/${encodeURIComponent(providerTaskId)}`,
       ),
     );
-    return items
+    const results = items
       .filter((item) => item.type === "organic")
       .map((item) => {
         const rank = numberOrNull(item.rank_absolute);
@@ -481,6 +525,18 @@ export class DataForSeoClient {
           : null;
       })
       .filter((item): item is SerpResult => item !== null);
+    const features = [
+      ...new Set(
+        items
+          .map((item) => stringOrNull(item.type))
+          .filter(
+            (type): type is string =>
+              type !== null && type !== "organic",
+          )
+          .map((type) => type.toLowerCase().replace(/[\s-]+/g, "_")),
+      ),
+    ];
+    return { features, results };
   }
 }
 
@@ -653,6 +709,11 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     runId: string,
     stageId: PipelineStageId,
   ): Promise<void> {
+    const runResult = await pool.query<{ mode: string | null }>(
+      `SELECT input->>'mode' AS mode FROM pipeline_runs WHERE id = $1`,
+      [runId],
+    );
+    if (runResult.rows[0]?.mode === "recalculate") return;
     switch (stageId) {
       case "keyword-enrichment":
         await this.hydrateKeywordMetrics(pool, projectId);
@@ -703,11 +764,21 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
   ): Promise<KeywordProviderRow[]> {
     const result = await pool.query<KeywordProviderRow>(
       `
-        SELECT keyword, normalised_keyword, avg_monthly_volume, ranking_url
-        FROM keywords
-        WHERE project_id = $1
-          AND detox_status = 'keep'
-        ORDER BY normalised_keyword
+        SELECT
+          keyword.id,
+          keyword.keyword,
+          keyword.normalised_keyword,
+          keyword.avg_monthly_volume,
+          keyword.ranking_url,
+          keyword.ranking_lookup_checked_at,
+          provider.fetched_at AS provider_fetched_at
+        FROM keywords AS keyword
+        LEFT JOIN local_provider_keyword_inputs AS provider
+          ON provider.project_id = keyword.project_id
+         AND provider.normalised_keyword = keyword.normalised_keyword
+        WHERE keyword.project_id = $1
+          AND keyword.detox_status = 'keep'
+        ORDER BY keyword.normalised_keyword
       `,
       [projectId],
     );
@@ -722,8 +793,15 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       this.project(pool, projectId),
       this.keywords(pool, projectId),
     ]);
+    const staleBefore = Date.now() - 30 * 24 * 60 * 60 * 1_000;
+    const requiresFetch = keywords.filter(
+      (keyword) =>
+        keyword.provider_fetched_at === null ||
+        keyword.provider_fetched_at.getTime() < staleBefore,
+    );
+    if (requiresFetch.length === 0) return;
     const values = await this.dataForSeo.enrichKeywords(
-      keywords.map((keyword) => keyword.keyword),
+      requiresFetch.map((keyword) => keyword.keyword),
       project.country,
       project.language,
     );
@@ -737,22 +815,29 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
               normalised_keyword,
               keyword,
               avg_monthly_volume,
+              core_keyword,
+              core_keyword_source,
               keyword_difficulty,
-              search_intent
+              search_intent,
+              fetched_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, 'dataforseo', $6, $7, now())
             ON CONFLICT (project_id, normalised_keyword)
             DO UPDATE SET
               keyword = EXCLUDED.keyword,
               avg_monthly_volume = EXCLUDED.avg_monthly_volume,
+              core_keyword = EXCLUDED.core_keyword,
+              core_keyword_source = EXCLUDED.core_keyword_source,
               keyword_difficulty = EXCLUDED.keyword_difficulty,
-              search_intent = EXCLUDED.search_intent
+              search_intent = EXCLUDED.search_intent,
+              fetched_at = EXCLUDED.fetched_at
           `,
           [
             projectId,
             key,
             value.keyword,
             value.avgMonthlyVolume,
+            value.coreKeyword,
             value.keywordDifficulty,
             value.intent,
           ],
@@ -785,9 +870,16 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       this.project(pool, projectId),
       this.keywords(pool, projectId),
     ]);
+    const staleBefore = Date.now() - 7 * 24 * 60 * 60 * 1_000;
+    const requiresLookup = keywords.filter(
+      (keyword) =>
+        keyword.ranking_lookup_checked_at === null ||
+        keyword.ranking_lookup_checked_at.getTime() < staleBefore,
+    );
+    if (requiresLookup.length === 0) return;
     const matches = await this.dataForSeo.rankingUrls(
       project.domain,
-      keywords.map((keyword) => keyword.keyword),
+      requiresLookup.map((keyword) => keyword.keyword),
       project.country,
       project.language,
     );
@@ -795,7 +887,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       matches.map((match) => [normaliseKeyword(match.keyword), match]),
     );
     await withTransaction(pool, async (client) => {
-      for (const keyword of keywords) {
+      for (const keyword of requiresLookup) {
         const match = byKeyword.get(keyword.normalised_keyword);
         await client.query(
           `
@@ -830,10 +922,39 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     projectId: string,
     runId: string,
   ): Promise<void> {
-    const [project, keywords] = await Promise.all([
+    const [project, keywordResult] = await Promise.all([
       this.project(pool, projectId),
-      this.keywords(pool, projectId),
+      pool.query<KeywordProviderRow>(
+        `
+          SELECT
+            keyword.id,
+            keyword.keyword,
+            keyword.normalised_keyword,
+            keyword.avg_monthly_volume,
+            keyword.ranking_url,
+            keyword.ranking_lookup_checked_at,
+            provider.fetched_at AS provider_fetched_at
+          FROM keyword_clusters AS cluster
+          JOIN keywords AS keyword
+            ON keyword.id = cluster.canonical_keyword_id
+           AND keyword.project_id = cluster.project_id
+          LEFT JOIN local_provider_serp_keywords AS provider
+            ON provider.project_id = keyword.project_id
+           AND provider.normalised_keyword = keyword.normalised_keyword
+          WHERE cluster.pipeline_run_id = $1
+            AND cluster.project_id = $2
+            AND keyword.competitive_eligible IS DISTINCT FROM false
+            AND (
+              provider.fetched_at IS NULL
+              OR provider.fetched_at < now() - interval '7 days'
+            )
+          ORDER BY keyword.normalised_keyword
+        `,
+        [runId, projectId],
+      ),
     ]);
+    const keywords = keywordResult.rows;
+    if (keywords.length === 0) return;
     await pool.query(
       `
         INSERT INTO provider_work_items (
@@ -910,7 +1031,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           item.provider_task_id && ready.has(item.provider_task_id),
       );
       await concurrently(readyItems, 10, async (item) => {
-        const results = await this.dataForSeo.serpTaskResult(
+        const snapshot = await this.dataForSeo.serpTaskResult(
           item.provider_task_id!,
         );
         const keyword = byKey.get(item.item_key);
@@ -920,7 +1041,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           projectId,
           runId,
           keyword,
-          results,
+          snapshot,
         );
       });
       if (readyItems.length === 0) await this.wait(3_000);
@@ -950,7 +1071,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     projectId: string,
     runId: string,
     keyword: KeywordProviderRow,
-    results: SerpResult[],
+    snapshot: SerpSnapshot,
   ): Promise<void> {
     await withTransaction(pool, async (client) => {
       await client.query(
@@ -958,13 +1079,18 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           INSERT INTO local_provider_serp_keywords (
             project_id,
             normalised_keyword,
-            keyword
+            keyword,
+            source_keyword_id,
+            fetched_at
           )
-          VALUES ($1, $2, $3)
+          VALUES ($1, $2, $3, $4, now())
           ON CONFLICT (project_id, normalised_keyword)
-          DO UPDATE SET keyword = EXCLUDED.keyword
+          DO UPDATE SET
+            keyword = EXCLUDED.keyword,
+            source_keyword_id = EXCLUDED.source_keyword_id,
+            fetched_at = EXCLUDED.fetched_at
         `,
-        [projectId, keyword.normalised_keyword, keyword.keyword],
+        [projectId, keyword.normalised_keyword, keyword.keyword, keyword.id],
       );
       await client.query(
         `
@@ -974,7 +1100,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         `,
         [projectId, keyword.normalised_keyword],
       );
-      for (const result of results) {
+      for (const result of snapshot.results) {
         await client.query(
           `
             INSERT INTO local_provider_serp_results (
@@ -993,6 +1119,32 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
             result.url,
             result.domain,
           ],
+        );
+      }
+      await client.query(
+        `
+          DELETE FROM project_serp_features
+          WHERE project_id = $1
+            AND keyword_id = $2
+            AND source = 'dataforseo'
+        `,
+        [projectId, keyword.id],
+      );
+      for (const feature of snapshot.features) {
+        await client.query(
+          `
+            INSERT INTO project_serp_features (
+              project_id,
+              keyword_id,
+              device,
+              feature_raw,
+              result_type,
+              source
+            )
+            VALUES ($1, $2, 'mobile', $3, $3, 'dataforseo')
+            ON CONFLICT DO NOTHING
+          `,
+          [projectId, keyword.id, feature],
         );
       }
       await client.query(
@@ -1017,10 +1169,48 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     projectId: string,
   ): Promise<void> {
     const project = await this.project(pool, projectId);
+    const domain = cleanDomain(project.domain);
+    const cached = await pool.query<
+      AuthorityMetrics & { fetched_at: Date }
+    >(
+      `
+        SELECT
+          domain_rating AS "domainRating",
+          ahrefs_rank AS "ahrefsRank",
+          referring_domains AS "referringDomains",
+          backlinks,
+          NULL::numeric AS "urlRating",
+          fetched_at
+        FROM authority_domain_cache
+        WHERE domain = $1
+          AND fetched_at >= now() - interval '30 days'
+      `,
+      [domain],
+    );
+    const cachedValue = cached.rows[0];
+    if (cachedValue) {
+      await pool.query(
+        `
+          UPDATE navigator_projects
+          SET authority_domain_rating = COALESCE($2, authority_domain_rating),
+              authority_referring_domains = COALESCE($3, authority_referring_domains),
+              authority_backlinks = COALESCE($4, authority_backlinks),
+              updated_at = now()
+          WHERE id = $1
+        `,
+        [
+          projectId,
+          cachedValue.domainRating,
+          cachedValue.referringDomains,
+          cachedValue.backlinks,
+        ],
+      );
+      return;
+    }
     const metrics = await this.ahrefs.metrics([
-      { mode: "domain", url: cleanDomain(project.domain) },
+      { mode: "domain", url: domain },
     ]);
-    const value = metrics.get(cleanDomain(project.domain));
+    const value = metrics.get(domain);
     if (!value) throw new Error("Ahrefs returned no client-domain record.");
     await pool.query(
       `
@@ -1035,6 +1225,36 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       [
         projectId,
         value.domainRating,
+        value.referringDomains,
+        value.backlinks,
+      ],
+    );
+    await pool.query(
+      `
+        INSERT INTO authority_domain_cache (
+          domain,
+          domain_rating,
+          ahrefs_rank,
+          referring_domains,
+          backlinks,
+          metric_source,
+          fetched_at
+        )
+        VALUES ($1, $2, $3, $4, $5, 'ahrefs', now())
+        ON CONFLICT (domain)
+        DO UPDATE SET
+          domain_rating = EXCLUDED.domain_rating,
+          ahrefs_rank = EXCLUDED.ahrefs_rank,
+          referring_domains = EXCLUDED.referring_domains,
+          backlinks = EXCLUDED.backlinks,
+          metric_source = EXCLUDED.metric_source,
+          fetched_at = EXCLUDED.fetched_at,
+          updated_at = now()
+      `,
+      [
+        domain,
+        value.domainRating,
+        value.ahrefsRank,
         value.referringDomains,
         value.backlinks,
       ],
@@ -1054,11 +1274,73 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       `,
       [projectId],
     );
-    const metrics = await this.ahrefs.metrics(
-      result.rows.map((row) => ({ mode: "exact" as const, url: row.url })),
+    const cached = await pool.query<
+      AuthorityMetrics & { url: string }
+    >(
+      `
+        SELECT
+          url,
+          url_rating AS "urlRating",
+          domain_rating AS "domainRating",
+          ahrefs_rank AS "ahrefsRank",
+          referring_domains AS "referringDomains",
+          backlinks
+        FROM authority_url_cache
+        WHERE url = ANY($1::text[])
+          AND fetched_at >= now() - interval '30 days'
+      `,
+      [result.rows.map((row) => row.url)],
     );
+    const metrics = new Map<string, AuthorityMetrics>(
+      cached.rows.map((row) => [row.url, row]),
+    );
+    const missingUrls = result.rows
+      .map((row) => row.url)
+      .filter((url) => !metrics.has(url));
+    if (missingUrls.length > 0) {
+      const fetched = await this.ahrefs.metrics(
+        missingUrls.map((url) => ({ mode: "exact" as const, url })),
+      );
+      for (const [url, value] of fetched) metrics.set(url, value);
+    }
     await withTransaction(pool, async (client) => {
       for (const [url, value] of metrics) {
+        await client.query(
+          `
+            INSERT INTO authority_url_cache (
+              url,
+              domain,
+              url_rating,
+              domain_rating,
+              ahrefs_rank,
+              referring_domains,
+              backlinks,
+              metric_source,
+              fetched_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'ahrefs', now())
+            ON CONFLICT (url)
+            DO UPDATE SET
+              domain = EXCLUDED.domain,
+              url_rating = EXCLUDED.url_rating,
+              domain_rating = EXCLUDED.domain_rating,
+              ahrefs_rank = EXCLUDED.ahrefs_rank,
+              referring_domains = EXCLUDED.referring_domains,
+              backlinks = EXCLUDED.backlinks,
+              metric_source = EXCLUDED.metric_source,
+              fetched_at = EXCLUDED.fetched_at,
+              updated_at = now()
+          `,
+          [
+            url,
+            cleanDomain(url),
+            value.urlRating,
+            value.domainRating,
+            value.ahrefsRank,
+            value.referringDomains,
+            value.backlinks,
+          ],
+        );
         await client.query(
           `
             UPDATE local_provider_serp_results
@@ -1097,32 +1379,46 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         ranking_url: string;
       } => Boolean(keyword.ranking_url),
     );
+    if (requiresScoring.length === 0) {
+      await pool.query(
+        `DELETE FROM local_provider_site_architecture_inputs WHERE project_id = $1`,
+        [projectId],
+      );
+      return;
+    }
     const scores = await this.siteArchitecture.score(
       requiresScoring.map((keyword) => ({
         keyword: keyword.keyword,
         rankingUrl: keyword.ranking_url,
       })),
     );
-    const values: SiteArchitectureResult[] = keywords.map((keyword) => {
-      if (!keyword.ranking_url) {
-        return {
-          contentStatus: "red",
-          keyword: keyword.keyword,
-          matchedUrl: null,
-          relevancyScore: 0,
-          tacticalStatus: "create_content",
-        };
-      }
+    const values: SiteArchitectureResult[] = requiresScoring.map((keyword) => {
       const score = scores.get(keyword.normalised_keyword);
+      if (!score) {
+        throw new Error(
+          `Content-fit scoring returned no result for ${keyword.normalised_keyword}.`,
+        );
+      }
       return {
-        contentStatus: score?.contentStatus ?? "amber",
+        contentStatus: score.contentStatus,
         keyword: keyword.keyword,
         matchedUrl: keyword.ranking_url,
-        relevancyScore: score?.relevancyScore ?? 50,
-        tacticalStatus: score?.tacticalStatus ?? "optimise_content",
+        relevancyScore: score.relevancyScore,
+        tacticalStatus: score.tacticalStatus,
       };
     });
     await withTransaction(pool, async (client) => {
+      await client.query(
+        `
+          DELETE FROM local_provider_site_architecture_inputs AS input
+          USING keywords AS keyword
+          WHERE input.project_id = $1
+            AND keyword.project_id = $1
+            AND keyword.normalised_keyword = input.normalised_keyword
+            AND keyword.ranking_url IS NULL
+        `,
+        [projectId],
+      );
       for (const value of values) {
         await client.query(
           `

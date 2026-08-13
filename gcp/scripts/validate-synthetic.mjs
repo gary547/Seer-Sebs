@@ -55,7 +55,7 @@ async function waitForTerminalRun(token, runId) {
     );
     if (
       run.status === "failed" ||
-      (run.status === "succeeded" && run.deliveredEventCount === 19)
+      (run.status === "succeeded" && run.deliveredEventCount === 24)
     ) {
       return run;
     }
@@ -138,7 +138,7 @@ function assertDataDrivenOutputs(run, expected) {
     demandSignals?.handlerVersion !== "demand-signals-v1" ||
     demandSignals.sufficientHistoryCount !== 2 ||
     ctrCurves?.handlerVersion !== "ctr-curves-v1" ||
-    ctrCurves.curves.length !== 7 ||
+    ctrCurves.curves.length !== 5 ||
     clustering?.handlerVersion !== "clustering-v1" ||
     clustering.clusterCount !== 12 ||
     har?.handlerVersion !== "har-v2.1" ||
@@ -189,8 +189,8 @@ function assertSuccessfulSyntheticRun(
   if (run.status !== "succeeded") {
     throw new Error(`Synthetic run failed: ${JSON.stringify(run)}`);
   }
-  if (run.stages.length !== 19 || run.deliveredEventCount !== 19) {
-    throw new Error("Synthetic run did not complete all 19 stages and events.");
+  if (run.stages.length !== 24 || run.deliveredEventCount !== 24) {
+    throw new Error("Synthetic run did not complete all 24 stages and events.");
   }
   if (
     !run.stages.every(

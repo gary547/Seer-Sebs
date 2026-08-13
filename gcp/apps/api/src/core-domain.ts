@@ -207,6 +207,7 @@ interface CalibrationApiRow {
   status: string;
   sum_actual_monthly: string;
   sum_modelled_monthly: string;
+  unavailable_reason: string | null;
 }
 
 interface SiteActionSummaryRow {
@@ -2618,6 +2619,7 @@ export async function getProjectCalculations(
             sum_actual_monthly::text,
             impressions_context::text,
             promotion_eligible,
+            unavailable_reason,
             status,
             matched,
             excluded_noise_floor,
@@ -2689,6 +2691,7 @@ export async function getProjectCalculations(
           status: calibrationRow.status,
           sumActualMonthly: Number(calibrationRow.sum_actual_monthly),
           sumModelledMonthly: Number(calibrationRow.sum_modelled_monthly),
+          unavailableReason: calibrationRow.unavailable_reason,
         }
       : null,
     completedAt: run.completed_at.toISOString(),

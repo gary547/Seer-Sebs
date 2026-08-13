@@ -28,83 +28,39 @@ import {
   type SerpCollectionStageData,
   type SiteArchitectureStageData,
 } from "../src/stage-handlers.js";
+import { PIPELINE_STAGES, type PipelineStageId } from "../src/definition.js";
 
 const fixtureUrl = new URL("../../../fixtures/representative-project.json", import.meta.url);
 const rawFixture = JSON.parse(readFileSync(fixtureUrl, "utf8")) as unknown;
 
 function executeRepresentativeStages() {
   const fixture = parseRepresentativeProjectFixture(rawFixture);
-  const intake = executeDataDrivenStage("intake", fixture, {}) as IntakeStageData;
-  const promotion = executeDataDrivenStage("gsc-promotion", fixture, {
-    intake,
-  }) as GscPromotionStageData;
-  const detox = executeDataDrivenStage("detox", fixture, {
-    "gsc-promotion": promotion,
-  }) as DetoxStageData;
-  const categorisation = executeDataDrivenStage("categorisation", fixture, {
-    detox,
-  }) as CategorisationStageData;
-  const enrichment = executeDataDrivenStage("keyword-enrichment", fixture, {
-    categorisation,
-  }) as KeywordEnrichmentStageData;
-  const ranking = executeDataDrivenStage("ranking-url", fixture, {
-    categorisation,
-  }) as RankingUrlStageData;
-  const gscIntent = executeDataDrivenStage("gsc-intent", fixture, {
-    categorisation,
-  }) as GscIntentStageData;
-  const brandClassification = executeDataDrivenStage(
-    "brand-classification",
-    fixture,
-    { "gsc-promotion": promotion },
-  ) as BrandClassificationStageData;
-  const serpCollection = executeDataDrivenStage("serp-collection", fixture, {
-    "keyword-enrichment": enrichment,
-  }) as SerpCollectionStageData;
-  const authority = executeDataDrivenStage("authority", fixture, {
-    "serp-collection": serpCollection,
-  }) as AuthorityStageData;
-  const backlinks = executeDataDrivenStage("backlinks", fixture, {
-    authority,
-  }) as BacklinksStageData;
-  const siteArchitecture = executeDataDrivenStage("site-architecture", fixture, {
-    "keyword-enrichment": enrichment,
-    "ranking-url": ranking,
-  }) as SiteArchitectureStageData;
-  const linkPowerScore = executeDataDrivenStage("link-power-score", fixture, {
-    authority,
-    backlinks,
-  }) as LinkPowerScoreStageData;
-  const demandSignals = executeDataDrivenStage("demand-signals", fixture, {
-    "keyword-enrichment": enrichment,
-  }) as DemandSignalsStageData;
-  const ctrCurves = executeDataDrivenStage("ctr-curves", fixture, {
-    "brand-classification": brandClassification,
-    "gsc-intent": gscIntent,
-  }) as CtrCurvesStageData;
-  const clustering = executeDataDrivenStage("clustering", fixture, {
-    "keyword-enrichment": enrichment,
-    "serp-collection": serpCollection,
-  }) as ClusteringStageData;
-  const har = executeDataDrivenStage("har-v2", fixture, {
-    "brand-classification": brandClassification,
-    clustering,
-    "keyword-enrichment": enrichment,
-    "link-power-score": linkPowerScore,
-    "ranking-url": ranking,
-    "serp-collection": serpCollection,
-    "site-architecture": siteArchitecture,
-  }) as HarV2StageData;
-  const revenue = executeDataDrivenStage("revenue-v2", fixture, {
-    categorisation,
-    "ctr-curves": ctrCurves,
-    "demand-signals": demandSignals,
-    "har-v2": har,
-    "ranking-url": ranking,
-  }) as RevenueV2StageData;
-  const calibration = executeDataDrivenStage("calibration", fixture, {
-    "revenue-v2": revenue,
-  }) as CalibrationStageData;
+  const outputs: Partial<Record<PipelineStageId, unknown>> = {};
+  for (const stage of PIPELINE_STAGES) {
+    const dependencies = Object.fromEntries(
+      stage.dependencies.map((dependency) => [dependency, outputs[dependency]]),
+    );
+    outputs[stage.id] = executeDataDrivenStage(stage.id, fixture, dependencies);
+  }
+  const intake = outputs.intake as IntakeStageData;
+  const promotion = outputs["gsc-promotion"] as GscPromotionStageData;
+  const detox = outputs.detox as DetoxStageData;
+  const categorisation = outputs.categorisation as CategorisationStageData;
+  const enrichment = outputs["keyword-enrichment"] as KeywordEnrichmentStageData;
+  const ranking = outputs["ranking-url"] as RankingUrlStageData;
+  const gscIntent = outputs["gsc-intent"] as GscIntentStageData;
+  const brandClassification = outputs["brand-classification"] as BrandClassificationStageData;
+  const serpCollection = outputs["serp-collection"] as SerpCollectionStageData;
+  const authority = outputs.authority as AuthorityStageData;
+  const backlinks = outputs.backlinks as BacklinksStageData;
+  const siteArchitecture = outputs["site-architecture"] as SiteArchitectureStageData;
+  const linkPowerScore = outputs["link-power-score"] as LinkPowerScoreStageData;
+  const demandSignals = outputs["demand-signals"] as DemandSignalsStageData;
+  const ctrCurves = outputs["ctr-curves"] as CtrCurvesStageData;
+  const clustering = outputs.clustering as ClusteringStageData;
+  const har = outputs["har-v2"] as HarV2StageData;
+  const revenue = outputs["revenue-v2"] as RevenueV2StageData;
+  const calibration = outputs.calibration as CalibrationStageData;
   return {
     authority,
     backlinks,
@@ -417,11 +373,16 @@ describe("data-driven pipeline handlers", () => {
     ];
 
     const revenue = executeDataDrivenStage("revenue-v2", fixture, {
-      categorisation,
       "ctr-curves": ctrCurves,
       "demand-signals": demandSignals,
       "har-v2": har,
       "ranking-url": ranking,
+      "revenue-readiness": {
+        handlerVersion: "revenue-readiness-v1",
+        keywords: har.keywords.map(({ id, normalisedText }) => ({ id, normalisedText })),
+        ready: true,
+        substitutions: [],
+      },
     }) as RevenueV2StageData;
     const scenario = revenue.keywords.find(
       (keyword) => keyword.id === rankedKeyword?.id,

@@ -20,9 +20,13 @@ import {
   computeScenario,
   HAR_V2_MODEL_VERSION as HAR_MODEL_VERSION,
   SCENARIOS as HAR_SCENARIOS,
+  type ScoringConfig,
   type Scenario as HarScenario,
 } from "../../models/src/har-v2.js";
-import { computeLps } from "../../calculations/src/lps.js";
+import {
+  computeLps,
+  createLpsScoringContext,
+} from "../../calculations/src/lps.js";
 import {
   annualVolumeFromInputs,
   computeRevenueV2,
@@ -42,6 +46,8 @@ import type { PipelineStageId } from "./definition.js";
 
 export interface PipelineKeyword {
   avgMonthlyVolume: number | null;
+  category: string | null;
+  coreKeyword: string | null;
   gsc: {
     clicks: number;
     ctr: number;
@@ -53,9 +59,12 @@ export interface PipelineKeyword {
   keywordDifficulty: number | null;
   normalisedText: string;
   promotedFromGsc: boolean;
+  preCurated: boolean;
   rankingUrl: string | null;
+  searchIntent: SearchIntent;
   sources: Array<"gsc" | "source">;
   text: string;
+  volumeSource: "manual" | "provider" | null;
 }
 
 export interface IntakeStageData {
@@ -70,6 +79,20 @@ export interface GscPromotionStageData {
   processingKeywordCount: number;
   promotedQueries: string[];
   promotionCount: number;
+  excludedBelowFloorCount: number;
+  impressionsFloor: number;
+}
+
+export interface PreflightStageData {
+  handlerVersion: "preflight-v1";
+  keywords: DetoxedKeyword[];
+  ready: true;
+  checks: Array<{ id: string; ok: true; value: number | string }>;
+  derivedBrandSuggestions: string[];
+  policy: {
+    competitiveEnrichmentVolumeFloor: number;
+    gscPromotionImpressionsFloor: number;
+  };
 }
 
 export interface DetoxedKeyword extends PipelineKeyword {
@@ -92,7 +115,7 @@ export interface CategorisedKeyword extends DetoxedKeyword {
   categorisation: {
     category: string;
     intent: Exclude<SearchIntent, null>;
-    source: "rule" | "taxonomy";
+    source: "client_supplied" | "rule" | "taxonomy";
     tags: string[];
     tier: "deferred" | "live";
   };
@@ -104,12 +127,17 @@ export interface CategorisationStageData {
   summary: RepresentativePipelineSummary;
 }
 
-export interface EnrichedKeyword extends CategorisedKeyword {
+export interface EnrichedKeyword extends DetoxedKeyword {
+  category: string | null;
   enrichment: {
     avgMonthlyVolume: number | null;
+    competitiveEligible: boolean;
+    competitiveEligibilityReason: string;
+    coreKeyword: string;
     intent: Exclude<SearchIntent, null>;
     keywordDifficulty: number | null;
     source: "existing" | "local-provider" | "mixed" | "missing-provider";
+    volumeSource: "manual" | "provider" | "missing";
   };
 }
 
@@ -119,6 +147,17 @@ export interface KeywordEnrichmentStageData {
   keywords: EnrichedKeyword[];
   missingProviderCount: number;
   providerValueCount: number;
+}
+
+export interface HistoricalVolumeStageData {
+  handlerVersion: "historical-volume-v1";
+  keywords: Array<{
+    coverageMonths: number;
+    id: string;
+    normalisedText: string;
+  }>;
+  sufficientHistoryCount: number;
+  unavailableCount: number;
 }
 
 export interface RankingUrlStageData {
@@ -168,9 +207,11 @@ export interface SerpResult {
 }
 
 export interface SerpKeywordResult {
+  features: string[];
   id: string;
   normalisedText: string;
   results: SerpResult[];
+  sourceKeywordId: string;
   status: "matched" | "missing-provider" | "no-result";
 }
 
@@ -181,6 +222,8 @@ export interface SerpCollectionStageData {
   missingProviderCount: number;
   noResultCount: number;
   resultCount: number;
+  clusterFetchCount: number;
+  inheritedKeywordCount: number;
 }
 
 export interface AuthorityStageData {
@@ -283,7 +326,7 @@ export interface CtrCurvePoint {
   ctr: number;
   impressions: number;
   rank: number;
-  source: "fallback" | "gsc";
+  source: "blended" | "fallback" | "gsc";
 }
 
 export interface CtrCurvesStageData {
@@ -303,6 +346,13 @@ export interface CtrCurvesStageData {
     position: number;
   }>;
   observedPointCount: number;
+  provenance: {
+    dateRangeEnd: string | null;
+    dateRangeStart: string | null;
+    excludedBrandedRows: number;
+    sampleImpressions: number;
+    sampleRows: number;
+  };
 }
 
 export interface ClusteringStageData {
@@ -336,11 +386,14 @@ export interface HarV2StageData {
   handlerVersion: "har-v2.1";
   keywords: Array<{
     baseRank: number | null;
+    category: string | null;
+    device: SyntheticGscRow["device"] | null;
     id: string;
     intent: Exclude<SearchIntent, null>;
     isBranded: boolean;
     isCanonical: boolean;
     normalisedText: string;
+    serpFeatures: string[];
     scenarios: HarScenarioResult[];
   }>;
   modelVersion: typeof HAR_MODEL_VERSION;
@@ -412,14 +465,62 @@ export interface CalibrationStageData {
   status: "amber" | "green" | "red" | "unavailable";
   sumActualMonthly: number;
   sumModelledMonthly: number;
+  unavailableReason: "calibration_unavailable_no_gsc" | null;
+}
+
+export interface ReadinessStageData {
+  handlerVersion: "har-readiness-v1" | "revenue-readiness-v1";
+  keywords: Array<{ id: string; normalisedText: string }>;
+  ready: true;
+  substitutions: Array<{
+    count: number;
+    input: string;
+    substitute: string;
+  }>;
+}
+
+export interface RollupOutputStageData {
+  handlerVersion: "rollup-output-v1";
+  keywords: Array<{ id: string; normalisedText: string }>;
+  scenarios: Array<{
+    categoryRollup: Array<{
+      category: string;
+      expectedIncrementalAnnual: number;
+      keywordCount: number;
+    }>;
+    clusterDedupedExpectedIncrementalAnnual: number;
+    clusterRollup: Array<{
+      canonicalKeywordId: string;
+      clusterKey: string;
+      expectedIncrementalAnnual: number;
+      memberCount: number;
+    }>;
+    doubleCountAnnual: number;
+    naiveExpectedIncrementalAnnual: number;
+    quarterRollup: Array<{
+      expectedIncrementalAnnual: number;
+      keywordCount: number;
+      quarter: "Q1" | "Q2" | "Q3" | "Q4" | "Unscheduled";
+    }>;
+    scenario: HarScenario;
+    trendRollup: Array<{
+      expectedIncrementalAnnual: number;
+      keywordCount: number;
+      trend: DemandSignalsStageData["keywords"][number]["trendDirection"];
+    }>;
+  }>;
+  confidenceDistribution: { high: number; low: number; medium: number };
+  cannibalisationFlags: Array<{ keywordIds: string[]; url: string }>;
 }
 
 export type DataDrivenStageData =
   | IntakeStageData
   | GscPromotionStageData
+  | PreflightStageData
   | DetoxStageData
   | CategorisationStageData
   | KeywordEnrichmentStageData
+  | HistoricalVolumeStageData
   | RankingUrlStageData
   | GscIntentStageData
   | BrandClassificationStageData
@@ -433,7 +534,9 @@ export type DataDrivenStageData =
   | ClusteringStageData
   | HarV2StageData
   | RevenueV2StageData
-  | CalibrationStageData;
+  | CalibrationStageData
+  | ReadinessStageData
+  | RollupOutputStageData;
 
 type DependencyOutputs = Partial<Record<PipelineStageId, unknown>>;
 
@@ -538,14 +641,23 @@ function executeIntake(fixture: ProjectPipelineSource): IntakeStageData {
     handlerVersion: "intake-v1",
     keywords: fixture.keywords.map((keyword) => ({
       avgMonthlyVolume: keyword.avgMonthlyVolume,
+      category: keyword.category ?? null,
+      coreKeyword: keyword.coreKeyword ?? null,
       gsc: null,
       id: keyword.id,
       keywordDifficulty: keyword.keywordDifficulty,
       normalisedText: normaliseKeyword(keyword.text),
       promotedFromGsc: false,
+      preCurated: keyword.preCurated ?? false,
       rankingUrl: keyword.rankingUrl,
+      searchIntent: keyword.searchIntent ?? null,
       sources: ["source"],
       text: keyword.text,
+      volumeSource:
+        keyword.volumeSource ??
+        (keyword.avgMonthlyVolume !== null && keyword.avgMonthlyVolume > 0
+          ? "manual"
+          : null),
     })),
     sourceKeywordCount: fixture.keywords.length,
   };
@@ -602,6 +714,8 @@ function executeGscPromotion(
 ): GscPromotionStageData {
   const byText = new Map(intake.keywords.map((keyword) => [keyword.normalisedText, keyword]));
   const promotedQueries: string[] = [];
+  const impressionsFloor = fixture.project.policy?.gscPromotionImpressionsFloor ?? 1;
+  let excludedBelowFloorCount = 0;
 
   for (const aggregate of aggregateGscRows(fixture.gscRows)) {
     const gsc = {
@@ -622,17 +736,27 @@ function executeGscPromotion(
       continue;
     }
 
+    if (aggregate.impressions < impressionsFloor) {
+      excludedBelowFloorCount += 1;
+      continue;
+    }
+
     promotedQueries.push(aggregate.normalisedText);
     byText.set(aggregate.normalisedText, {
       avgMonthlyVolume: null,
+      category: null,
+      coreKeyword: null,
       gsc,
       id: stableGscId(fixture.project.id, aggregate.normalisedText),
       keywordDifficulty: null,
       normalisedText: aggregate.normalisedText,
       promotedFromGsc: true,
+      preCurated: false,
       rankingUrl: aggregate.page,
+      searchIntent: null,
       sources: ["gsc"],
       text: aggregate.query,
+      volumeSource: null,
     });
   }
 
@@ -640,6 +764,8 @@ function executeGscPromotion(
   return {
     handlerVersion: "gsc-promotion-v1",
     keywords,
+    excludedBelowFloorCount,
+    impressionsFloor,
     processingKeywordCount: keywords.length,
     promotedQueries: promotedQueries.sort(),
     promotionCount: promotedQueries.length,
@@ -651,6 +777,13 @@ function detoxDecision(
   fixture: ProjectPipelineSource,
 ): DetoxedKeyword["detox"] {
   const text = keyword.normalisedText;
+  if (keyword.preCurated) {
+    return {
+      decision: "keep",
+      reason: "Operator-confirmed pre-curated set",
+      rule: "pre-curated",
+    };
+  }
   for (const value of fixture.rules.whitelist) {
     if (containsTokenOrPhrase(text, value)) {
       return { decision: "keep", reason: `Matched whitelist: ${value}`, rule: "whitelist" };
@@ -728,6 +861,60 @@ function executeDetox(
   };
 }
 
+function executePreflight(
+  fixture: ProjectPipelineSource,
+  detox: DetoxStageData,
+): PreflightStageData {
+  const missing: string[] = [];
+  const domain = normaliseHost(fixture.client.domain);
+  const competitorCount = fixture.competitorDomains?.length ?? 0;
+  const brandTermCount = fixture.client.brandTerms
+    .map(normaliseKeyword)
+    .filter(Boolean).length;
+  const authorityReady =
+    fixture.authority.domainRating > 0 ||
+    fixture.authority.referringDomains > 0 ||
+    fixture.authority.backlinks > 0;
+
+  if (!domain) missing.push("client_domain");
+  if (competitorCount === 0) missing.push("competitor_domains");
+  if (brandTermCount === 0) missing.push("explicit_brand_terms");
+  if (fixture.economics.conversionRate === null) missing.push("conversion_rate");
+  if (fixture.economics.averageOrderValue === null) missing.push("average_order_value");
+  if (!authorityReady) missing.push("client_domain_authority");
+  if (fixture.scoringConfigActive === false) missing.push("active_scoring_config");
+  if (detox.keptKeywordCount === 0) missing.push("kept_keywords");
+
+  if (missing.length > 0) {
+    throw new Error(`Pipeline preflight failed: ${missing.join(", ")}.`);
+  }
+
+  return {
+    checks: [
+      { id: "client_domain", ok: true, value: domain },
+      { id: "competitor_domains", ok: true, value: competitorCount },
+      { id: "explicit_brand_terms", ok: true, value: brandTermCount },
+      { id: "conversion_rate", ok: true, value: fixture.economics.conversionRate! },
+      { id: "average_order_value", ok: true, value: fixture.economics.averageOrderValue! },
+      { id: "client_domain_authority", ok: true, value: fixture.authority.domainRating },
+      { id: "active_scoring_config", ok: true, value: "active" },
+      { id: "kept_keywords", ok: true, value: detox.keptKeywordCount },
+    ],
+    handlerVersion: "preflight-v1",
+    keywords: detox.keywords,
+    derivedBrandSuggestions: derivedBrandTerms(fixture).filter(
+      (term) => !fixture.client.brandTerms.map(normaliseKeyword).includes(term),
+    ),
+    policy: {
+      competitiveEnrichmentVolumeFloor:
+        fixture.project.policy?.competitiveEnrichmentVolumeFloor ?? 0,
+      gscPromotionImpressionsFloor:
+        fixture.project.policy?.gscPromotionImpressionsFloor ?? 1,
+    },
+    ready: true,
+  };
+}
+
 function findBrand(keyword: string, brands: readonly string[]): string | null {
   return brands.find((brand) => containsTokenOrPhrase(keyword, brand)) ?? null;
 }
@@ -779,6 +966,15 @@ function categoriseKeyword(
   fixture: ProjectPipelineSource,
 ): CategorisedKeyword["categorisation"] {
   const text = keyword.normalisedText;
+  if (keyword.preCurated && keyword.category && keyword.searchIntent) {
+    return {
+      category: keyword.category,
+      intent: keyword.searchIntent,
+      source: "client_supplied",
+      tags: [keyword.category],
+      tier: decideTier(text, keyword.searchIntent),
+    };
+  }
   const ownBrand = findBrand(text, fixture.rules.ownBrands);
   if (ownBrand) {
     return {
@@ -892,7 +1088,7 @@ function executeCategorisation(
 
 function executeKeywordEnrichment(
   fixture: ProjectPipelineSource,
-  categorisation: CategorisationStageData,
+  preflight: PreflightStageData,
 ): KeywordEnrichmentStageData {
   const provider = new Map(
     fixture.providerInputs.keywords.map((input) => [
@@ -901,13 +1097,20 @@ function executeKeywordEnrichment(
     ]),
   );
   let providerValueCount = 0;
-  const keywords = categorisation.keywords.map((keyword) => {
+  const floor = fixture.project.policy?.competitiveEnrichmentVolumeFloor ?? 0;
+  const keywords = preflight.keywords
+    .filter((keyword) => keyword.detox.decision === "keep")
+    .map((keyword) => {
     const input = provider.get(keyword.normalisedText);
     const avgMonthlyVolume =
-      keyword.avgMonthlyVolume ?? input?.avgMonthlyVolume ?? null;
+      keyword.avgMonthlyVolume !== null && keyword.avgMonthlyVolume > 0
+        ? keyword.avgMonthlyVolume
+        : input?.avgMonthlyVolume ?? keyword.avgMonthlyVolume ?? null;
     const keywordDifficulty =
       keyword.keywordDifficulty ?? input?.keywordDifficulty ?? null;
-    const intent = input?.intent ?? keyword.categorisation.intent;
+    const fallbackCategorisation = categoriseKeyword(keyword, fixture);
+    const intent =
+      input?.intent ?? keyword.searchIntent ?? fallbackCategorisation.intent;
     const usedProvider =
       (keyword.avgMonthlyVolume === null && input?.avgMonthlyVolume !== null && input?.avgMonthlyVolume !== undefined) ||
       (keyword.keywordDifficulty === null && input?.keywordDifficulty !== null && input?.keywordDifficulty !== undefined) ||
@@ -924,11 +1127,28 @@ function executeKeywordEnrichment(
             : "missing-provider";
     return {
       ...keyword,
+      category: keyword.category ?? fallbackCategorisation.category,
       enrichment: {
         avgMonthlyVolume,
+        competitiveEligible:
+          avgMonthlyVolume !== null && avgMonthlyVolume >= floor,
+        competitiveEligibilityReason:
+          avgMonthlyVolume === null
+            ? "missing_volume"
+            : avgMonthlyVolume >= floor
+              ? "meets_operator_threshold"
+              : "below_operator_threshold",
+        coreKeyword:
+          input?.coreKeyword ?? keyword.coreKeyword ?? clusterKey(keyword.normalisedText),
         intent,
         keywordDifficulty,
         source,
+        volumeSource:
+          keyword.avgMonthlyVolume !== null && keyword.avgMonthlyVolume > 0
+            ? "manual"
+            : input?.avgMonthlyVolume !== null && input?.avgMonthlyVolume !== undefined
+              ? "provider"
+              : "missing",
       },
     } satisfies EnrichedKeyword;
   });
@@ -949,7 +1169,7 @@ function executeKeywordEnrichment(
 
 function executeRankingUrl(
   fixture: ProjectPipelineSource,
-  categorisation: CategorisationStageData,
+  preflight: PreflightStageData,
 ): RankingUrlStageData {
   const provider = new Map(
     fixture.providerInputs.keywords.map((input) => [
@@ -957,7 +1177,9 @@ function executeRankingUrl(
       input,
     ]),
   );
-  const keywords = categorisation.keywords.map((keyword) => {
+  const keywords = preflight.keywords
+    .filter((keyword) => keyword.detox.decision === "keep")
+    .map((keyword) => {
     const input = provider.get(keyword.normalisedText);
     if (keyword.rankingUrl) {
       return {
@@ -994,14 +1216,42 @@ function executeRankingUrl(
   };
 }
 
+function executeHistoricalVolume(
+  fixture: ProjectPipelineSource,
+  enrichment: KeywordEnrichmentStageData,
+): HistoricalVolumeStageData {
+  const provider = new Map(
+    fixture.providerInputs.keywords.map((input) => [
+      normaliseKeyword(input.text),
+      input,
+    ]),
+  );
+  const keywords = enrichment.keywords.map((keyword) => ({
+    coverageMonths:
+      provider.get(keyword.normalisedText)?.monthlyVolumes.length ?? 0,
+    id: keyword.id,
+    normalisedText: keyword.normalisedText,
+  }));
+  return {
+    handlerVersion: "historical-volume-v1",
+    keywords,
+    sufficientHistoryCount: keywords.filter(
+      (keyword) => keyword.coverageMonths >= 12,
+    ).length,
+    unavailableCount: keywords.filter(
+      (keyword) => keyword.coverageMonths === 0,
+    ).length,
+  };
+}
+
 function executeGscIntent(
   fixture: ProjectPipelineSource,
-  categorisation: CategorisationStageData,
+  preflight: PreflightStageData,
 ): GscIntentStageData {
   const classifications = new Map(
-    categorisation.keywords.map((keyword) => [
+    preflight.keywords.map((keyword) => [
       keyword.normalisedText,
-      keyword.categorisation.intent,
+      keyword.searchIntent ?? classifyIntent(keyword.normalisedText, fixture),
     ]),
   );
   const provider = new Map(
@@ -1066,14 +1316,13 @@ function derivedBrandTerms(fixture: ProjectPipelineSource): string[] {
 
 function executeBrandClassification(
   fixture: ProjectPipelineSource,
-  promotion: GscPromotionStageData,
+  preflight: PreflightStageData,
 ): BrandClassificationStageData {
   const explicitTerms = [
     ...fixture.client.brandTerms,
     ...fixture.rules.ownBrands,
   ].map(normaliseKeyword);
-  const derivedTerms = derivedBrandTerms(fixture);
-  const keywords = promotion.keywords.map((keyword) => {
+  const keywords = preflight.keywords.map((keyword) => {
     const explicit = explicitTerms.find((term) =>
       containsTokenOrPhrase(keyword.normalisedText, term),
     );
@@ -1085,19 +1334,6 @@ function executeBrandClassification(
         matchedTerm: explicit,
         normalisedText: keyword.normalisedText,
         source: "explicit-rule" as const,
-      };
-    }
-    const derived = derivedTerms.find((term) =>
-      containsTokenOrPhrase(keyword.normalisedText, term),
-    );
-    if (derived) {
-      return {
-        confidence: 0.95,
-        id: keyword.id,
-        isBranded: true,
-        matchedTerm: derived,
-        normalisedText: keyword.normalisedText,
-        source: "derived-client" as const,
       };
     }
     return {
@@ -1119,7 +1355,7 @@ function executeBrandClassification(
 
 function executeSerpCollection(
   fixture: ProjectPipelineSource,
-  enrichment: KeywordEnrichmentStageData,
+  clustering: ClusteringStageData,
 ): SerpCollectionStageData {
   const provider = new Map(
     fixture.providerInputs.serpKeywords.map((keyword) => [
@@ -1128,15 +1364,29 @@ function executeSerpCollection(
     ]),
   );
   const clientDomain = normaliseHost(fixture.client.domain);
-  const keywords = enrichment.keywords.map((keyword) => {
-    const input = provider.get(keyword.normalisedText);
+  const clusterMembers = new Map<string, ClusteringStageData["keywords"]>();
+  for (const keyword of clustering.keywords) {
+    clusterMembers.set(keyword.clusterKey, [
+      ...(clusterMembers.get(keyword.clusterKey) ?? []),
+      keyword,
+    ]);
+  }
+  const keywords: SerpKeywordResult[] = [];
+  for (const members of clusterMembers.values()) {
+    const canonical = members.find((member) => member.isCanonical) ?? members[0]!;
+    const input = provider.get(canonical.normalisedText);
     if (!input) {
-      return {
-        id: keyword.id,
-        normalisedText: keyword.normalisedText,
-        results: [],
-        status: "missing-provider" as const,
-      };
+      for (const member of members) {
+        keywords.push({
+          id: member.id,
+          features: [],
+          normalisedText: member.normalisedText,
+          results: [],
+          sourceKeywordId: canonical.id,
+          status: "missing-provider",
+        });
+      }
+      continue;
     }
     const results = input.results.map((result) => ({
       domain: normaliseHost(result.domain),
@@ -1144,15 +1394,23 @@ function executeSerpCollection(
       rankAbsolute: result.rankAbsolute,
       url: result.url,
     }));
-    return {
-      id: keyword.id,
-      normalisedText: keyword.normalisedText,
-      results,
-      status: results.length > 0 ? ("matched" as const) : ("no-result" as const),
-    };
-  });
+    for (const member of members) {
+      keywords.push({
+        id: member.id,
+        features: input.features ?? [],
+        normalisedText: member.normalisedText,
+        results,
+        sourceKeywordId: canonical.id,
+        status: results.length > 0 ? "matched" : "no-result",
+      });
+    }
+  }
   return {
+    clusterFetchCount: clusterMembers.size,
     handlerVersion: "serp-collection-v1",
+    inheritedKeywordCount: keywords.filter(
+      (keyword) => keyword.id !== keyword.sourceKeywordId,
+    ).length,
     keywords,
     matchedKeywordCount: keywords.filter((keyword) => keyword.status === "matched")
       .length,
@@ -1259,7 +1517,6 @@ function executeBacklinks(
 
 function executeSiteArchitecture(
   fixture: ProjectPipelineSource,
-  enrichment: KeywordEnrichmentStageData,
   ranking: RankingUrlStageData,
 ): SiteArchitectureStageData {
   const provider = new Map(
@@ -1268,16 +1525,13 @@ function executeSiteArchitecture(
       keyword,
     ]),
   );
-  const rankingById = new Map(
-    ranking.keywords.map((keyword) => [keyword.id, keyword]),
-  );
-  const keywords = enrichment.keywords.map((keyword) => {
+  const keywords = ranking.keywords.map((keyword) => {
     const input = provider.get(keyword.normalisedText);
     if (!input) {
       return {
         contentStatus: null,
         id: keyword.id,
-        matchedUrl: rankingById.get(keyword.id)?.rankingUrl ?? null,
+        matchedUrl: keyword.rankingUrl,
         normalisedText: keyword.normalisedText,
         relevancyScore: null,
         status: "missing-provider" as const,
@@ -1317,8 +1571,9 @@ function executeLinkPowerScore(
       urlRating: result.urlRating,
     })),
   );
+  const scoringContext = createLpsScoringContext(metricRows);
   const metrics = new Map(
-    metricRows.map((row) => [row.keywordId, computeLps(row, metricRows)]),
+    metricRows.map((row) => [row.keywordId, computeLps(row, scoringContext)]),
   );
   const keywords = backlinks.keywords.map((keyword) => ({
     id: keyword.id,
@@ -1424,6 +1679,7 @@ function executeCtrCurves(
     const normalisedText = normaliseKeyword(row.query);
     const intent = intentByText.get(normalisedText) ?? ("generic" as const);
     const isBranded = brandByText.get(normalisedText) ?? false;
+    if (isBranded) continue;
     const key = `${row.device}\u0000${intent}\u0000${isBranded}`;
     const group = groups.get(key) ?? {
       device: row.device,
@@ -1463,19 +1719,26 @@ function executeCtrCurves(
           source: "fallback",
         };
       }
+      const observedCtr =
+        observations.reduce(
+          (sum, observation) =>
+            sum + observation.ctr * observation.impressions,
+          0,
+        ) / impressions;
+      const blendWeight = Math.min(1, impressions / 500);
       return {
         confidence: ctrConfidence(impressions),
         ctr:
-          observations.reduce(
-            (sum, observation) =>
-              sum + observation.ctr * observation.impressions,
-            0,
-          ) / impressions,
+          observedCtr * blendWeight +
+          fallbackCtr(rank) * (1 - blendWeight),
         impressions,
         rank,
-        source: "gsc",
+        source: impressions >= 500 ? "gsc" : "blended",
       };
     });
+    for (let index = 1; index < points.length; index += 1) {
+      points[index]!.ctr = Math.min(points[index]!.ctr, points[index - 1]!.ctr);
+    }
     return {
       device: group.device,
       intent: group.intent,
@@ -1490,38 +1753,42 @@ function executeCtrCurves(
     observedPointCount: curves.reduce(
       (count, curve) =>
         count +
-        curve.points.filter((point) => point.source === "gsc").length,
+        curve.points.filter((point) => point.source !== "fallback").length,
       0,
     ),
+    provenance: {
+      dateRangeEnd: fixture.economics.gscDateRangeEnd ?? null,
+      dateRangeStart: fixture.economics.gscDateRangeStart ?? null,
+      excludedBrandedRows: keywords.filter((keyword) => keyword.isBranded).length,
+      sampleImpressions: keywords
+        .filter((keyword) => !keyword.isBranded)
+        .reduce((sum, keyword) => sum + keyword.impressions, 0),
+      sampleRows: keywords.filter((keyword) => !keyword.isBranded).length,
+    },
   };
 }
 
 function executeClustering(
   enrichment: KeywordEnrichmentStageData,
-  serp: SerpCollectionStageData,
 ): ClusteringStageData {
-  const serpByKeyword = new Map(
-    serp.keywords.map((keyword) => [keyword.id, keyword]),
-  );
   const groups = new Map<string, EnrichedKeyword[]>();
   for (const keyword of enrichment.keywords) {
-    const key = clusterKey(keyword.normalisedText) || keyword.normalisedText;
+    const key =
+      normaliseKeyword(keyword.enrichment.coreKeyword) ||
+      clusterKey(keyword.normalisedText) ||
+      keyword.normalisedText;
     groups.set(key, [...(groups.get(key) ?? []), keyword]);
   }
   const keywords: ClusteringStageData["keywords"] = [];
   for (const [key, members] of groups) {
     const canonical = pickCanonical(
       members.map((member) => {
-        const clientResult = serpByKeyword
-          .get(member.id)
-          ?.results.filter((result) => result.isClientDomain)
-          .sort((left, right) => left.rankAbsolute - right.rankAbsolute)[0];
         return {
           annualVolume: (member.enrichment.avgMonthlyVolume ?? 0) * 12,
-          baseRank: clientResult?.rankAbsolute ?? null,
+          baseRank: member.gsc?.position ?? null,
           gscClicks: member.gsc?.clicks ?? 0,
           id: member.id,
-          rankingUrl: clientResult?.url ?? member.rankingUrl,
+          rankingUrl: member.rankingUrl,
           text: member.normalisedText,
         };
       }),
@@ -1579,6 +1846,34 @@ function executeHarV2(
     const clientResult = lpsKeyword?.results
       .filter((result) => result.isClientDomain)
       .sort((left, right) => left.rankAbsolute - right.rankAbsolute)[0];
+    const lpsMetricRows = (lpsKeyword?.results ?? []).map((result) => ({
+      backlinks: result.backlinks,
+      domainRating: result.domainRating,
+      keywordId: keyword.id,
+      referringDomains: result.referringDomains,
+      urlRating: result.urlRating,
+    }));
+    const syntheticClientLps = clientResult
+      ? null
+      : computeLps(
+          {
+            backlinks: fixture.authority.backlinks,
+            domainRating: fixture.authority.domainRating,
+            keywordId: keyword.id,
+            referringDomains: fixture.authority.referringDomains,
+            urlRating: null,
+          },
+          [
+            ...lpsMetricRows,
+            {
+              backlinks: fixture.authority.backlinks,
+              domainRating: fixture.authority.domainRating,
+              keywordId: keyword.id,
+              referringDomains: fixture.authority.referringDomains,
+              urlRating: null,
+            },
+          ],
+        ).score;
     const baseRank =
       clientResult?.rankAbsolute ??
       rankingById.get(keyword.id)?.rank ??
@@ -1603,9 +1898,11 @@ function executeHarV2(
         {
           base_rank: baseRank,
           client_dr: fixture.authority.domainRating,
-          client_lps: clientResult?.score ?? null,
-          client_lps_match: clientResult ? "ranking_url" : "unavailable",
-          client_lps_source: clientResult ? "serp_row" : "unavailable",
+          client_lps: clientResult?.score ?? syntheticClientLps,
+          client_lps_match: clientResult ? "ranking_url" : "synthetic",
+          client_lps_source: clientResult
+            ? "serp_row"
+            : "synthetic_client_domain",
           client_resolved_url:
             clientResult?.url ??
             rankingById.get(keyword.id)?.rankingUrl ??
@@ -1617,14 +1914,16 @@ function executeHarV2(
             fixture.authority.domainRating > 0 ||
             fixture.authority.referringDomains > 0 ||
             fixture.authority.backlinks > 0,
-          has_client_lps_row: clientResult !== undefined,
+          has_client_lps_row:
+            clientResult !== undefined || syntheticClientLps !== null,
           latest_lps_run_exists: (lpsKeyword?.results.length ?? 0) > 0,
-          serp_feature_count: null,
+          serp_feature_count: serpKeyword?.features.length ?? 0,
           snippet_opportunity: null,
-          top_serp_feature: null,
+          top_serp_feature: serpKeyword?.features[0] ?? null,
         },
         scenario,
         null,
+        fixture.scoringConfig as ScoringConfig | undefined,
       );
       return {
         authorityScore: result.authority_score,
@@ -1645,11 +1944,14 @@ function executeHarV2(
     });
     return {
       baseRank,
+      category: keyword.category,
+      device: (keyword.gsc?.devices[0] as SyntheticGscRow["device"] | undefined) ?? null,
       id: keyword.id,
       intent: keyword.enrichment.intent,
       isBranded: brandById.get(keyword.id)?.isBranded ?? false,
       isCanonical: clusterById.get(keyword.id)?.isCanonical ?? true,
       normalisedText: keyword.normalisedText,
+      serpFeatures: serpKeyword?.features ?? [],
       scenarios,
     };
   });
@@ -1669,6 +1971,7 @@ function curveCtr(
   rank: number | null,
   intent: Exclude<SearchIntent, null>,
   isBranded: boolean,
+  device: SyntheticGscRow["device"] | null,
 ): number | null {
   if (rank === null || rank < 1) return null;
   const candidates = curves.curves
@@ -1676,6 +1979,10 @@ function curveCtr(
       (curve) => curve.intent === intent && curve.isBranded === isBranded,
     )
     .sort((left, right) => {
+      if (device) {
+        if (left.device === device && right.device !== device) return -1;
+        if (right.device === device && left.device !== device) return 1;
+      }
       const order = { mobile: 0, desktop: 1, tablet: 2 };
       return order[left.device] - order[right.device];
     });
@@ -1710,10 +2017,44 @@ function normaliseOverrideUrl(value: string): string {
   }
 }
 
+const REVENUE_VISIBILITY_MULTIPLIERS: Record<
+  string,
+  Partial<Record<Exclude<SearchIntent, null>, number>>
+> = {
+  ai_overview: { commercial: 0.72, informational: 0.55, navigational: 0.9, transactional: 0.86 },
+  featured_snippet: { commercial: 0.88, informational: 0.78, navigational: 0.95, transactional: 0.94 },
+  local_pack: { commercial: 0.78, informational: 0.9, navigational: 0.82, transactional: 0.7 },
+  people_also_ask: { commercial: 0.95, informational: 0.88, navigational: 0.98, transactional: 0.98 },
+  shopping: { commercial: 0.78, informational: 0.93, navigational: 0.92, transactional: 0.68 },
+  video: { commercial: 0.94, informational: 0.86, navigational: 0.96, transactional: 0.97 },
+};
+
+function revenueVisibilityMultiplier(
+  features: readonly string[],
+  intent: Exclude<SearchIntent, null>,
+  fixture: ProjectPipelineSource,
+  device: SyntheticGscRow["device"] | null,
+): number {
+  return Math.max(
+    0.25,
+    features.reduce((multiplier, feature) => {
+      const key = normaliseKeyword(feature).replace(/[\s-]+/g, "_");
+      const configured = fixture.serpVisibilityAdjustments?.find(
+        (adjustment) =>
+          normaliseKeyword(adjustment.featureType).replace(/[\s-]+/g, "_") === key &&
+          (adjustment.intent === intent || adjustment.intent === "generic") &&
+          (adjustment.device === "all" || adjustment.device === device),
+      );
+      return multiplier * (
+        configured?.multiplier ?? REVENUE_VISIBILITY_MULTIPLIERS[key]?.[intent] ?? 1
+      );
+    }, 1),
+  );
+}
+
 function revenueAssumptions(
   fixture: ProjectPipelineSource,
   keyword: HarV2StageData["keywords"][number],
-  categorisation: CategorisationStageData,
   ranking: RankingUrlStageData,
 ): {
   averageOrderValue: number | null;
@@ -1721,13 +2062,10 @@ function revenueAssumptions(
   conversionRate: number | null;
   conversionRateOverrideId: string | null;
 } {
-  const categorisedKeyword = categorisation.keywords.find(
-    (candidate) => candidate.id === keyword.id,
-  );
   const rankingKeyword = ranking.keywords.find(
     (candidate) => candidate.id === keyword.id,
   );
-  const category = categorisedKeyword?.categorisation.category ?? null;
+  const category = keyword.category;
   const rankingUrl = rankingKeyword?.rankingUrl ?? null;
   const scopePriority = { url: 0, category: 1, intent: 2, project: 3 };
   const matchingOverrides = fixture.conversionOverrides
@@ -1781,7 +2119,6 @@ function executeRevenueV2(
   har: HarV2StageData,
   demand: DemandSignalsStageData,
   ctrCurves: CtrCurvesStageData,
-  categorisation: CategorisationStageData,
   ranking: RankingUrlStageData,
 ): RevenueV2StageData {
   const demandById = new Map(
@@ -1791,7 +2128,6 @@ function executeRevenueV2(
     const assumptions = revenueAssumptions(
       fixture,
       keyword,
-      categorisation,
       ranking,
     );
     const demandSignal = demandById.get(keyword.id);
@@ -1810,6 +2146,7 @@ function executeRevenueV2(
       keyword.baseRank,
       keyword.intent,
       keyword.isBranded,
+      keyword.device,
     );
     const scenarios = keyword.scenarios.map((harScenario) => {
       const ctrTarget = curveCtr(
@@ -1817,6 +2154,7 @@ function executeRevenueV2(
         harScenario.harPosition,
         keyword.intent,
         keyword.isBranded,
+        keyword.device,
       );
       const result = computeRevenueV2({
         aov: assumptions.averageOrderValue,
@@ -1830,7 +2168,12 @@ function executeRevenueV2(
         rank_attainment_probability:
           harScenario.rankAttainmentProbability,
         scenario: harScenario.scenario,
-        svm: harScenario.serpVisibilityMultiplier,
+        svm: revenueVisibilityMultiplier(
+          keyword.serpFeatures,
+          keyword.intent,
+          fixture,
+          keyword.device,
+        ),
         trend_confidence: demandSignal?.trendConfidence ?? "low",
         trend_pct: demandSignal?.trendPct ?? null,
         volume_annual: volume.volume_annual,
@@ -1894,6 +2237,215 @@ function executeRevenueV2(
   };
 }
 
+function executeHarReadiness(
+  fixture: ProjectPipelineSource,
+  ranking: RankingUrlStageData,
+  siteArchitecture: SiteArchitectureStageData,
+  linkPowerScore: LinkPowerScoreStageData,
+  serp: SerpCollectionStageData,
+): ReadinessStageData {
+  const missing: string[] = [];
+  if (ranking.keywords.length === 0) missing.push("kept_keywords");
+  const competitiveKeywordCount = serp.keywords.filter(
+    (keyword) => keyword.status !== "missing-provider",
+  ).length;
+  if (competitiveKeywordCount > 0 && serp.resultCount === 0) {
+    missing.push("fresh_serp_results");
+  }
+  if (
+    linkPowerScore.scoredResultCount === 0 &&
+    fixture.authority.domainRating === 0 &&
+    fixture.authority.referringDomains === 0 &&
+    fixture.authority.backlinks === 0
+  ) {
+    missing.push("link_power_or_client_authority");
+  }
+  if (siteArchitecture.keywords.length !== ranking.keywords.length) {
+    missing.push("content_fit_attempt");
+  }
+  if (fixture.scoringConfigActive === false) missing.push("active_scoring_config");
+  if (missing.length > 0) {
+    throw new Error(`HAR readiness failed: ${missing.join(", ")}.`);
+  }
+  return {
+    handlerVersion: "har-readiness-v1",
+    keywords: ranking.keywords.map(({ id, normalisedText }) => ({ id, normalisedText })),
+    ready: true,
+    substitutions: [
+      {
+        count: siteArchitecture.keywords.filter(
+          (keyword) => keyword.relevancyScore === null,
+        ).length,
+        input: "content_fit",
+        substitute: "neutral_with_confidence_penalty",
+      },
+      {
+        count: serp.inheritedKeywordCount,
+        input: "variant_serp",
+        substitute: "canonical_cluster_serp",
+      },
+    ],
+  };
+}
+
+function executeRevenueReadiness(
+  fixture: ProjectPipelineSource,
+  har: HarV2StageData,
+  demand: DemandSignalsStageData,
+  ctr: CtrCurvesStageData,
+): ReadinessStageData {
+  const missing: string[] = [];
+  if (har.scenarioCount === 0) missing.push("completed_har_run");
+  if (fixture.economics.conversionRate === null) missing.push("conversion_rate");
+  if (fixture.economics.averageOrderValue === null) missing.push("average_order_value");
+  if (demand.keywords.length !== har.keywords.length) missing.push("demand_signals");
+  if (missing.length > 0) {
+    throw new Error(`Revenue readiness failed: ${missing.join(", ")}.`);
+  }
+  return {
+    handlerVersion: "revenue-readiness-v1",
+    keywords: har.keywords.map(({ id, normalisedText }) => ({ id, normalisedText })),
+    ready: true,
+    substitutions: [
+      {
+        count: ctr.curves.length === 0 ? har.keywords.length : 0,
+        input: "project_ctr_curve",
+        substitute: "global_fallback_ladder",
+      },
+      {
+        count: demand.warningCount,
+        input: "monthly_history",
+        substitute: "annual_volume_without_seasonal_shape",
+      },
+    ],
+  };
+}
+
+function executeRollupOutput(
+  revenue: RevenueV2StageData,
+  ranking: RankingUrlStageData,
+  categorisation: CategorisationStageData,
+  clustering: ClusteringStageData,
+  demand: DemandSignalsStageData,
+): RollupOutputStageData {
+  const categoryById = new Map(
+    categorisation.keywords.map((keyword) => [
+      keyword.id,
+      keyword.categorisation.category,
+    ]),
+  );
+  const clusterById = new Map(
+    clustering.keywords.map((keyword) => [keyword.id, keyword]),
+  );
+  const demandById = new Map(
+    demand.keywords.map((keyword) => [keyword.id, keyword]),
+  );
+  const scenarios = HAR_SCENARIOS.map((scenario) => {
+    const rows = revenue.keywords.flatMap((keyword) => {
+      const result = keyword.scenarios.find((item) => item.scenario === scenario);
+      return result ? [{ keyword, result }] : [];
+    });
+    const naive = rows.reduce(
+      (sum, row) => sum + (row.result.expectedIncrementalAnnual ?? 0),
+      0,
+    );
+    const deduped = rows
+      .filter((row) => row.keyword.isCanonical)
+      .reduce(
+        (sum, row) => sum + (row.result.expectedIncrementalAnnual ?? 0),
+        0,
+      );
+    const canonicalRows = rows.filter((row) => row.keyword.isCanonical);
+    const grouped = <T extends string>(
+      values: Array<{ key: T; value: number }>,
+    ): Array<{ expectedIncrementalAnnual: number; key: T; keywordCount: number }> => {
+      const groups = new Map<T, { expectedIncrementalAnnual: number; keywordCount: number }>();
+      for (const value of values) {
+        const group = groups.get(value.key) ?? {
+          expectedIncrementalAnnual: 0,
+          keywordCount: 0,
+        };
+        group.expectedIncrementalAnnual += value.value;
+        group.keywordCount += 1;
+        groups.set(value.key, group);
+      }
+      return [...groups.entries()]
+        .map(([key, value]) => ({ key, ...value }))
+        .sort((left, right) => right.expectedIncrementalAnnual - left.expectedIncrementalAnnual);
+    };
+    const categoryRollup = grouped(
+      canonicalRows.map((row) => ({
+        key: categoryById.get(row.keyword.id) ?? "Uncategorised",
+        value: row.result.expectedIncrementalAnnual ?? 0,
+      })),
+    ).map(({ key, ...value }) => ({ category: key, ...value }));
+    const quarterRollup = grouped(
+      canonicalRows.map((row) => {
+        const peakMonth = demandById.get(row.keyword.id)?.peakMonths[0];
+        const quarter: "Q1" | "Q2" | "Q3" | "Q4" | "Unscheduled" = peakMonth
+          ? (`Q${Math.ceil(peakMonth / 3)}` as "Q1" | "Q2" | "Q3" | "Q4")
+          : "Unscheduled";
+        return {
+          key: quarter,
+          value: row.result.expectedIncrementalAnnual ?? 0,
+        };
+      }),
+    ).map(({ key, ...value }) => ({ quarter: key, ...value }));
+    const trendRollup = grouped(
+      canonicalRows.map((row) => ({
+        key: demandById.get(row.keyword.id)?.trendDirection ?? "insufficient_data",
+        value: row.result.expectedIncrementalAnnual ?? 0,
+      })),
+    ).map(({ key, ...value }) => ({ trend: key, ...value }));
+    const clusterRollup = canonicalRows.map((row) => {
+      const cluster = clusterById.get(row.keyword.id);
+      return {
+        canonicalKeywordId: row.keyword.id,
+        clusterKey: cluster?.clusterKey ?? row.keyword.normalisedText,
+        expectedIncrementalAnnual: row.result.expectedIncrementalAnnual ?? 0,
+        memberCount: cluster?.memberCount ?? 1,
+      };
+    });
+    return {
+      categoryRollup,
+      clusterDedupedExpectedIncrementalAnnual: deduped,
+      clusterRollup,
+      doubleCountAnnual: Math.max(0, naive - deduped),
+      naiveExpectedIncrementalAnnual: naive,
+      quarterRollup,
+      scenario,
+      trendRollup,
+    };
+  });
+  const realistic = revenue.keywords.flatMap((keyword) => {
+    const result = keyword.scenarios.find((item) => item.scenario === "realistic");
+    return result ? [result] : [];
+  });
+  const confidenceDistribution = { high: 0, low: 0, medium: 0 };
+  for (const row of realistic) {
+    if (row.harConfidenceUsed >= 0.75) confidenceDistribution.high += 1;
+    else if (row.harConfidenceUsed >= 0.5) confidenceDistribution.medium += 1;
+    else confidenceDistribution.low += 1;
+  }
+  const byUrl = new Map<string, string[]>();
+  for (const keyword of ranking.keywords) {
+    if (!keyword.rankingUrl) continue;
+    byUrl.set(keyword.rankingUrl, [
+      ...(byUrl.get(keyword.rankingUrl) ?? []),
+      keyword.id,
+    ]);
+  }
+  return {
+    cannibalisationFlags: [...byUrl.entries()]
+      .filter(([, keywordIds]) => keywordIds.length > 1)
+      .map(([url, keywordIds]) => ({ keywordIds, url })),
+    confidenceDistribution,
+    handlerVersion: "rollup-output-v1",
+    keywords: revenue.keywords.map(({ id, normalisedText }) => ({ id, normalisedText })),
+    scenarios,
+  };
+}
+
 function executeCalibration(
   fixture: ProjectPipelineSource,
   revenue: RevenueV2StageData,
@@ -1951,6 +2503,8 @@ function executeCalibration(
     status: calibrationStatus ?? "unavailable",
     sumActualMonthly: result.sum_actual_monthly,
     sumModelledMonthly: result.sum_modelled_monthly,
+    unavailableReason:
+      fixture.gscRows.length === 0 ? "calibration_unavailable_no_gsc" : null,
   };
 }
 
@@ -1976,6 +2530,11 @@ export function executeDataDrivenStage(
           "gsc-promotion-v1",
         ),
       );
+    case "preflight":
+      return executePreflight(
+        fixture,
+        dependency<DetoxStageData>(outputs, "detox", "detox-v1"),
+      );
     case "categorisation":
       return executeCategorisation(
         fixture,
@@ -1984,46 +2543,55 @@ export function executeDataDrivenStage(
     case "keyword-enrichment":
       return executeKeywordEnrichment(
         fixture,
-        dependency<CategorisationStageData>(
+        dependency<PreflightStageData>(
           outputs,
-          "categorisation",
-          "categorisation-v1",
+          "preflight",
+          "preflight-v1",
         ),
       );
-    case "ranking-url":
-      return executeRankingUrl(
-        fixture,
-        dependency<CategorisationStageData>(
-          outputs,
-          "categorisation",
-          "categorisation-v1",
-        ),
-      );
-    case "gsc-intent":
-      return executeGscIntent(
-        fixture,
-        dependency<CategorisationStageData>(
-          outputs,
-          "categorisation",
-          "categorisation-v1",
-        ),
-      );
-    case "brand-classification":
-      return executeBrandClassification(
-        fixture,
-        dependency<GscPromotionStageData>(
-          outputs,
-          "gsc-promotion",
-          "gsc-promotion-v1",
-        ),
-      );
-    case "serp-collection":
-      return executeSerpCollection(
+    case "historical-volume":
+      return executeHistoricalVolume(
         fixture,
         dependency<KeywordEnrichmentStageData>(
           outputs,
           "keyword-enrichment",
           "keyword-enrichment-v1",
+        ),
+      );
+    case "ranking-url":
+      return executeRankingUrl(
+        fixture,
+        dependency<PreflightStageData>(
+          outputs,
+          "preflight",
+          "preflight-v1",
+        ),
+      );
+    case "gsc-intent":
+      return executeGscIntent(
+        fixture,
+        dependency<PreflightStageData>(
+          outputs,
+          "preflight",
+          "preflight-v1",
+        ),
+      );
+    case "brand-classification":
+      return executeBrandClassification(
+        fixture,
+        dependency<PreflightStageData>(
+          outputs,
+          "preflight",
+          "preflight-v1",
+        ),
+      );
+    case "serp-collection":
+      return executeSerpCollection(
+        fixture,
+        dependency<ClusteringStageData>(
+          outputs,
+          "clustering",
+          "clustering-v1",
         ),
       );
     case "authority":
@@ -2047,11 +2615,6 @@ export function executeDataDrivenStage(
     case "site-architecture":
       return executeSiteArchitecture(
         fixture,
-        dependency<KeywordEnrichmentStageData>(
-          outputs,
-          "keyword-enrichment",
-          "keyword-enrichment-v1",
-        ),
         dependency<RankingUrlStageData>(
           outputs,
           "ranking-url",
@@ -2067,6 +2630,11 @@ export function executeDataDrivenStage(
         ),
       );
     case "demand-signals":
+      dependency<HistoricalVolumeStageData>(
+        outputs,
+        "historical-volume",
+        "historical-volume-v1",
+      );
       return executeDemandSignals(
         fixture,
         dependency<KeywordEnrichmentStageData>(
@@ -2096,6 +2664,21 @@ export function executeDataDrivenStage(
           "keyword-enrichment",
           "keyword-enrichment-v1",
         ),
+      );
+    case "har-readiness":
+      return executeHarReadiness(
+        fixture,
+        dependency<RankingUrlStageData>(outputs, "ranking-url", "ranking-url-v1"),
+        dependency<SiteArchitectureStageData>(
+          outputs,
+          "site-architecture",
+          "site-architecture-v1",
+        ),
+        dependency<LinkPowerScoreStageData>(
+          outputs,
+          "link-power-score",
+          "link-power-score-v1",
+        ),
         dependency<SerpCollectionStageData>(
           outputs,
           "serp-collection",
@@ -2103,6 +2686,11 @@ export function executeDataDrivenStage(
         ),
       );
     case "har-v2":
+      dependency<ReadinessStageData>(
+        outputs,
+        "har-readiness",
+        "har-readiness-v1",
+      );
       return executeHarV2(
         fixture,
         dependency<RankingUrlStageData>(
@@ -2141,7 +2729,23 @@ export function executeDataDrivenStage(
           "serp-collection-v1",
         ),
       );
+    case "revenue-readiness":
+      return executeRevenueReadiness(
+        fixture,
+        dependency<HarV2StageData>(outputs, "har-v2", "har-v2.1"),
+        dependency<DemandSignalsStageData>(
+          outputs,
+          "demand-signals",
+          "demand-signals-v1",
+        ),
+        dependency<CtrCurvesStageData>(outputs, "ctr-curves", "ctr-curves-v1"),
+      );
     case "revenue-v2":
+      dependency<ReadinessStageData>(
+        outputs,
+        "revenue-readiness",
+        "revenue-readiness-v1",
+      );
       return executeRevenueV2(
         fixture,
         dependency<HarV2StageData>(outputs, "har-v2", "har-v2.1"),
@@ -2154,11 +2758,6 @@ export function executeDataDrivenStage(
           outputs,
           "ctr-curves",
           "ctr-curves-v1",
-        ),
-        dependency<CategorisationStageData>(
-          outputs,
-          "categorisation",
-          "categorisation-v1",
         ),
         dependency<RankingUrlStageData>(
           outputs,
@@ -2174,6 +2773,30 @@ export function executeDataDrivenStage(
           "revenue-v2",
           "revenue-v2.1",
         ),
+      );
+    case "rollup-output":
+      dependency<CalibrationStageData>(
+        outputs,
+        "calibration",
+        "calibration-v1",
+      );
+      dependency<CategorisationStageData>(
+        outputs,
+        "categorisation",
+        "categorisation-v1",
+      );
+      dependency<ClusteringStageData>(outputs, "clustering", "clustering-v1");
+      dependency<DemandSignalsStageData>(
+        outputs,
+        "demand-signals",
+        "demand-signals-v1",
+      );
+      return executeRollupOutput(
+        dependency<RevenueV2StageData>(outputs, "revenue-v2", "revenue-v2.1"),
+        dependency<RankingUrlStageData>(outputs, "ranking-url", "ranking-url-v1"),
+        dependency<CategorisationStageData>(outputs, "categorisation", "categorisation-v1"),
+        dependency<ClusteringStageData>(outputs, "clustering", "clustering-v1"),
+        dependency<DemandSignalsStageData>(outputs, "demand-signals", "demand-signals-v1"),
       );
     default:
       return null;

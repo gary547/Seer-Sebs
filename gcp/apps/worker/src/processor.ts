@@ -352,6 +352,7 @@ export async function executeStageTask(
   }
 
   const fixture = representativeFixture(input);
+  const runMode = object(input)?.mode === "recalculate" ? "recalculate" : "full";
   const projectId = projectIdFromInput(input);
   if (!fixture && projectId && options.providerHydrator) {
     await options.providerHydrator.hydrate(
@@ -473,14 +474,24 @@ export async function executeStageTask(
             UPDATE navigator_projects
             SET
               last_synced_at = now(),
-              last_dirty_at = NULL,
-              keywords_dirty = false,
-              serp_dirty = false,
+              last_dirty_at = CASE
+                WHEN $2 = 'recalculate' AND (keywords_dirty OR serp_dirty)
+                  THEN last_dirty_at
+                ELSE NULL
+              END,
+              keywords_dirty = CASE
+                WHEN $2 = 'recalculate' THEN keywords_dirty
+                ELSE false
+              END,
+              serp_dirty = CASE
+                WHEN $2 = 'recalculate' THEN serp_dirty
+                ELSE false
+              END,
               inputs_dirty = false,
               updated_at = now()
             WHERE id = $1
           `,
-          [projectId],
+          [projectId, runMode],
         );
       }
     }

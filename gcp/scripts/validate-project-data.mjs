@@ -58,7 +58,7 @@ async function waitForRun(token, runId) {
       `${apiBaseUrl}/v1/pipeline-runs/${runId}`,
       authenticated(token),
     );
-    if (run.status === "succeeded" && run.deliveredEventCount === 19) return run;
+    if (run.status === "succeeded" && run.deliveredEventCount === 24) return run;
     if (run.status === "failed") {
       throw new Error(`Project-backed pipeline failed: ${JSON.stringify(run)}`);
     }
@@ -81,7 +81,7 @@ function assertProjectState(project, fixture) {
     project.calculationCounts?.siteArchitecture !== 12 ||
     project.calculationCounts?.linkPowerScores !== 12 ||
     project.calculationCounts?.demandSignals !== 12 ||
-    project.calculationCounts?.ctrCurves !== 7 ||
+    project.calculationCounts?.ctrCurves !== 5 ||
     project.calculationCounts?.clusters !== 12 ||
     project.calculationCounts?.harForecasts !== 36 ||
     project.calculationCounts?.revenueForecasts !== 36 ||
@@ -459,7 +459,7 @@ async function validateEndToEnd() {
     stage(firstRun, "site-architecture").missingProviderCount !== 7 ||
     stage(firstRun, "link-power-score").scoredResultCount !== 12 ||
     stage(firstRun, "demand-signals").sufficientHistoryCount !== 2 ||
-    stage(firstRun, "ctr-curves").curves.length !== 7 ||
+    stage(firstRun, "ctr-curves").curves.length !== 5 ||
     stage(firstRun, "clustering").clusterCount !== 12 ||
     stage(firstRun, "har-v2").scenarioCount !== 36 ||
     stage(firstRun, "revenue-v2").forecastCount !== 36 ||
@@ -551,7 +551,7 @@ async function validateEndToEnd() {
   );
   if (
     ctrCurvePage.runId !== firstRun.id ||
-    ctrCurvePage.curves.length !== 7 ||
+    ctrCurvePage.curves.length !== 5 ||
     ctrCurvePage.curves.some((curve) => curve.points.length !== 20)
   ) {
     throw new Error("CTR curve API did not expose the completed run.");
@@ -797,7 +797,7 @@ async function validateEndToEnd() {
     stage(secondRun, "site-architecture").matchedCount !== 5 ||
     stage(secondRun, "link-power-score").scoredResultCount !== 12 ||
     stage(secondRun, "demand-signals").sufficientHistoryCount !== 2 ||
-    stage(secondRun, "ctr-curves").curves.length !== 7 ||
+    stage(secondRun, "ctr-curves").curves.length !== 5 ||
     stage(secondRun, "clustering").clusterCount !== 12 ||
     stage(secondRun, "har-v2").scenarioCount !== 36 ||
     stage(secondRun, "revenue-v2").forecastCount !== 36 ||

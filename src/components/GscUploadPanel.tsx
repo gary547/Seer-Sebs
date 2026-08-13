@@ -209,6 +209,8 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
       queryClient.invalidateQueries({ queryKey: ["project_sync_state", projectId] });
       queryClient.invalidateQueries({ queryKey: ["ctr_curves"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "gsc-uploads"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "pipeline-readiness", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "calculation-pipeline", projectId] });
 
       onUploaded?.({ upload_id: s.upload_id, row_count: s.row_count, source: s.source });
       resetAfter();
@@ -285,8 +287,9 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
           {needsDateRange && (
             <>
               <div className="space-y-1">
-                <Label className="text-xs">Export period start</Label>
+                <Label className="text-xs" htmlFor="gsc-export-period-start">Export period start</Label>
                 <Input
+                  id="gsc-export-period-start"
                   type="date"
                   value={dateStart}
                   onChange={(e) => setDateStart(e.target.value)}
@@ -294,8 +297,9 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Export period end</Label>
+                <Label className="text-xs" htmlFor="gsc-export-period-end">Export period end</Label>
                 <Input
+                  id="gsc-export-period-end"
                   type="date"
                   value={dateEnd}
                   onChange={(e) => setDateEnd(e.target.value)}

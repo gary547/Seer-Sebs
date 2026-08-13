@@ -14,122 +14,100 @@ main:
         result: internalToken
     - intake:
         call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "intake"
+        args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "intake" }
     - gscPromotion:
         call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "gsc-promotion"
+        args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "gsc-promotion" }
     - detox:
         call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "detox"
-    - categorisation:
+        args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "detox" }
+    - preflight:
         call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "categorisation"
-    - brandClassification:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "brand-classification"
+        args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "preflight" }
     - keywordEnrichment:
         call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "keyword-enrichment"
-    - rankingUrl:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "ranking-url"
-    - gscIntent:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "gsc-intent"
-    - serpCollection:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "serp-collection"
-    - authority:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "authority"
-    - backlinks:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "backlinks"
-    - siteArchitecture:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "site-architecture"
-    - linkPowerScore:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "link-power-score"
-    - demandSignals:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "demand-signals"
-    - ctrCurves:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "ctr-curves"
+        args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "keyword-enrichment" }
     - clustering:
         call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "clustering"
-    - harV2:
+        args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "clustering" }
+    - parallelTracks:
+        parallel:
+          exception_policy: continueAll
+          branches:
+            - categorisationTrack:
+                steps:
+                  - categorisation:
+                      call: runStage
+                      args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "categorisation" }
+            - forecastTrack:
+                steps:
+                  - calculationTracks:
+                      parallel:
+                        exception_policy: continueAll
+                        branches:
+                          - ctrTruthTrack:
+                              steps:
+                                - brandClassification:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "brand-classification" }
+                                - gscIntent:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "gsc-intent" }
+                                - ctrCurves:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "ctr-curves" }
+                          - demandTrack:
+                              steps:
+                                - historicalVolume:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "historical-volume" }
+                                - demandSignals:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "demand-signals" }
+                          - competitiveTrack:
+                              steps:
+                                - serpCollection:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "serp-collection" }
+                                - authority:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "authority" }
+                                - backlinks:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "backlinks" }
+                                - linkPowerScore:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "link-power-score" }
+                          - contentTrack:
+                              steps:
+                                - rankingUrl:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "ranking-url" }
+                                - siteArchitecture:
+                                    call: runStage
+                                    args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "site-architecture" }
+                  - harReadiness:
+                      call: runStage
+                      args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "har-readiness" }
+                  - harV2:
+                      call: runStage
+                      args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "har-v2" }
+                  - revenueReadiness:
+                      call: runStage
+                      args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "revenue-readiness" }
+                  - revenueV2:
+                      call: runStage
+                      args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "revenue-v2" }
+                  - calibration:
+                      call: runStage
+                      args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "calibration" }
+    - rollupOutput:
         call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "har-v2"
-    - revenueV2:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "revenue-v2"
-    - calibration:
-        call: runStage
-        args:
-          internalToken: $${internalToken}
-          runId: $${args.runId}
-          stageId: "calibration"
+        args: { internalToken: $${internalToken}, runId: $${args.runId}, stageId: "rollup-output" }
     - complete:
         return:
           runId: $${args.runId}
-          stageCount: 19
+          stageCount: 24
           status: "succeeded"
 
 runStage:

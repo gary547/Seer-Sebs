@@ -41,6 +41,7 @@
     "test:gcp:docker": "bash gcp/scripts/validate-docker.sh",
     "test:gcp:fresh-schema": "bash gcp/scripts/validate-fresh-schema.sh",
     "test:gcp:scale": "node gcp/scripts/validate-scale.mjs",
+    "test:e2e:autonomous-pipeline": "playwright test e2e/autonomous-pipeline-live.spec.ts --project=chromium",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.app.json",
     "typecheck:gcp": "tsc -p tsconfig.gcp.json",

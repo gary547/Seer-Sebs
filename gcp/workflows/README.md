@@ -6,7 +6,7 @@ The application API creates the durable run and starts one workflow execution. T
 
 - retrieves the internal service token from Secret Manager;
 - invokes the private worker with Workflows OIDC authentication;
-- runs all 19 stage contracts in dependency-safe order;
+- runs all 24 stage contracts across four dependency-safe parallel tracks;
 - retries retryable HTTP failures with bounded exponential backoff;
 - records a terminal run failure before propagating an exhausted stage error;
 - never carries project data or provider credentials in its execution arguments.

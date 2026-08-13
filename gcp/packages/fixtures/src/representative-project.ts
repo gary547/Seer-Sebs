@@ -9,10 +9,15 @@ export type SearchIntent =
 
 export interface SyntheticKeyword {
   avgMonthlyVolume: number | null;
+  category?: string | null;
+  coreKeyword?: string | null;
   id: string;
   keywordDifficulty: number | null;
+  preCurated?: boolean;
   rankingUrl: string | null;
+  searchIntent?: SearchIntent;
   text: string;
+  volumeSource?: "manual" | "provider" | null;
 }
 
 export interface SyntheticGscRow {
@@ -27,6 +32,7 @@ export interface SyntheticGscRow {
 
 export interface SyntheticProviderKeyword {
   avgMonthlyVolume: number | null;
+  coreKeyword?: string | null;
   intent: SearchIntent;
   keywordDifficulty: number | null;
   monthlyVolumes: Array<{
@@ -50,6 +56,7 @@ export interface SyntheticSerpResult {
 }
 
 export interface SyntheticProviderSerpKeyword {
+  features?: string[];
   results: SyntheticSerpResult[];
   text: string;
 }
@@ -125,6 +132,8 @@ export interface ProjectPipelineSource {
   economics: {
     averageOrderValue: number | null;
     conversionRate: number | null;
+    gscDateRangeEnd?: string | null;
+    gscDateRangeStart?: string | null;
     gscWindowDays: number;
   };
   conversionOverrides: ProjectConversionOverride[];
@@ -138,7 +147,29 @@ export interface ProjectPipelineSource {
     id: string;
     language: string;
     name: string;
+    policy?: {
+      competitiveEnrichmentVolumeFloor: number;
+      gscPromotionImpressionsFloor: number;
+      reviewedAt: string | null;
+    };
   };
+  competitorDomains?: string[];
+  scoringConfig?: {
+    config_id?: string | null;
+    config_version?: string | null;
+    min_confidence?: number | null;
+    scenario_floor_multipliers?: Partial<Record<"conservative" | "realistic" | "stretch", number>>;
+    scenario_prob_factors?: Partial<Record<"conservative" | "realistic" | "stretch", number>>;
+    scenario_temperatures?: Partial<Record<"conservative" | "realistic" | "stretch", number>>;
+    scenario_thresholds?: Partial<Record<"conservative" | "realistic" | "stretch", number>>;
+  };
+  scoringConfigActive?: boolean;
+  serpVisibilityAdjustments?: Array<{
+    device: "all" | "desktop" | "mobile" | "tablet";
+    featureType: string;
+    intent: Exclude<SearchIntent, null> | "generic";
+    multiplier: number;
+  }>;
   providerInputs: {
     keywords: SyntheticProviderKeyword[];
     serpKeywords: SyntheticProviderSerpKeyword[];
@@ -263,13 +294,34 @@ function parseKeyword(value: unknown, index: number): SyntheticKeyword {
   const path = `keywords[${index}]`;
   const item = record(value, path);
 
-  return {
+  const keyword: SyntheticKeyword = {
     avgMonthlyVolume: nullableNumber(item.avgMonthlyVolume, `${path}.avgMonthlyVolume`),
+    coreKeyword:
+      item.coreKeyword === undefined || item.coreKeyword === null
+        ? null
+        : string(item.coreKeyword, `${path}.coreKeyword`),
     id: uuid(item.id, `${path}.id`),
     keywordDifficulty: nullableNumber(item.keywordDifficulty, `${path}.keywordDifficulty`),
     rankingUrl: nullableString(item.rankingUrl, `${path}.rankingUrl`),
+    searchIntent:
+      item.searchIntent === undefined || item.searchIntent === null
+        ? null
+        : literal(
+            item.searchIntent,
+            ["transactional", "commercial", "informational", "navigational"] as const,
+            `${path}.searchIntent`,
+          ),
     text: string(item.text, `${path}.text`),
+    volumeSource:
+      item.volumeSource === undefined || item.volumeSource === null
+        ? null
+        : literal(item.volumeSource, ["manual", "provider"] as const, `${path}.volumeSource`),
   };
+  if (item.category !== undefined) {
+    keyword.category =
+      item.category === null ? null : string(item.category, `${path}.category`);
+  }
+  return keyword;
 }
 
 function parseGscRow(value: unknown, index: number): SyntheticGscRow {
@@ -331,6 +383,10 @@ function parseProviderKeyword(
       item.avgMonthlyVolume,
       `${path}.avgMonthlyVolume`,
     ),
+    coreKeyword:
+      item.coreKeyword === undefined || item.coreKeyword === null
+        ? null
+        : string(item.coreKeyword, `${path}.coreKeyword`),
     intent,
     keywordDifficulty: nullableNumber(
       item.keywordDifficulty,
@@ -431,6 +487,7 @@ function parseProviderSerpKeyword(
     throw new Error(`${path}.results must contain unique absolute ranks.`);
   }
   return {
+    features: stringArray(item.features ?? [], `${path}.features`),
     results,
     text: string(item.text, `${path}.text`),
   };
@@ -569,6 +626,26 @@ export function parseRepresentativeProjectFixture(
     id: uuid(projectValue.id, "project.id"),
     language: string(projectValue.language, "project.language"),
     name: string(projectValue.name, "project.name"),
+    policy: {
+      competitiveEnrichmentVolumeFloor: number(
+        record(projectValue.policy ?? {}, "project.policy")
+          .competitiveEnrichmentVolumeFloor ?? 0,
+        "project.policy.competitiveEnrichmentVolumeFloor",
+      ),
+      gscPromotionImpressionsFloor: number(
+        record(projectValue.policy ?? {}, "project.policy")
+          .gscPromotionImpressionsFloor ?? 1,
+        "project.policy.gscPromotionImpressionsFloor",
+      ),
+      reviewedAt:
+        record(projectValue.policy ?? {}, "project.policy").reviewedAt === undefined ||
+        record(projectValue.policy ?? {}, "project.policy").reviewedAt === null
+          ? null
+          : string(
+              record(projectValue.policy ?? {}, "project.policy").reviewedAt,
+              "project.policy.reviewedAt",
+            ),
+    },
   };
   if (project.clientId !== client.id) {
     throw new Error("project.clientId must reference client.id.");
@@ -600,6 +677,10 @@ export function parseRepresentativeProjectFixture(
       root.conversionOverrides ?? [],
       "conversionOverrides",
     ).map(parseConversionOverride),
+    competitorDomains: stringArray(
+      root.competitorDomains ?? rulesValue.competitorBrands,
+      "competitorDomains",
+    ),
     expected: parseExpected(root.expected),
     gscRows: array(root.gscRows, "gscRows").map(parseGscRow),
     keywords: array(root.keywords, "keywords").map(parseKeyword),
@@ -628,6 +709,10 @@ export function parseRepresentativeProjectFixture(
       relevantTerms: stringArray(rulesValue.relevantTerms, "rules.relevantTerms"),
       whitelist: stringArray(rulesValue.whitelist, "rules.whitelist"),
     },
+    scoringConfigActive:
+      root.scoringConfigActive === undefined
+        ? true
+        : root.scoringConfigActive === true,
     schemaVersion: "1.1",
   };
   if (

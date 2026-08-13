@@ -13,10 +13,19 @@ export function createDatabasePool(
     throw new Error("DATABASE_URL is required.");
   }
 
+  const configuredStatementTimeout = Number(
+    process.env.DATABASE_STATEMENT_TIMEOUT_MS ?? "10000",
+  );
+  const statementTimeout =
+    Number.isInteger(configuredStatementTimeout) &&
+    configuredStatementTimeout >= 1_000 &&
+    configuredStatementTimeout <= 300_000
+      ? configuredStatementTimeout
+      : 10_000;
   return new Pool({
     connectionString,
     max: 10,
-    statement_timeout: 10_000,
+    statement_timeout: statementTimeout,
   });
 }
 

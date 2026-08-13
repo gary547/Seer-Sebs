@@ -106,6 +106,9 @@ docker compose -f "$compose_file" exec -T postgres \
   -f /docker-entrypoint-initdb.d/027_calculation_control_contract.sql
 docker compose -f "$compose_file" exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
+  -f /docker-entrypoint-initdb.d/028_autonomous_pipeline_contract.sql
+docker compose -f "$compose_file" exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
   -f /docker-entrypoint-initdb.d/999_local_runtime_users.sql
 docker compose -f "$compose_file" up -d --wait
 
@@ -145,7 +148,7 @@ validation_counts="$(
     "
 )"
 
-if [[ "$validation_counts" != "19|19|19|19|0" ]]; then
+if [[ "$validation_counts" != "24|24|24|24|0" ]]; then
   echo "Unexpected database validation counts: $validation_counts" >&2
   exit 1
 fi

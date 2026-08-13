@@ -58,7 +58,7 @@ describe("canonical pipeline definition", () => {
       expect.arrayContaining([
         "gsc-promotion",
         "detox",
-        "categorisation",
+        "preflight",
         "keyword-enrichment",
         "ranking-url",
         "serp-collection",
@@ -67,8 +67,10 @@ describe("canonical pipeline definition", () => {
         "site-architecture",
         "link-power-score",
         "clustering",
+        "har-readiness",
       ]),
     );
+    expect(harAncestors.has("categorisation")).toBe(false);
   });
 
   it("orders Revenue v2 and calibration after their full dependency chain", () => {

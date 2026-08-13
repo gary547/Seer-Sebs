@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0",
+  "har": {
+    "competitors": [
+      { "rank": 10, "beatProbability": 0.8 },
+      { "rank": 5, "beatProbability": 0.55 },
+      { "rank": 1, "beatProbability": 0.35 }
+    ],
+    "scenarios": {
+      "conservative": { "threshold": 0.6, "attainablePosition": 10 },
+      "realistic": { "threshold": 0.5, "attainablePosition": 5 },
+      "stretch": { "threshold": 0.3, "attainablePosition": 1 }
+    },
+    "noBeat": {
+      "attainablePosition": null,
+      "reason": "authority_below_threshold"
+    }
+  },
+  "revenue": {
+    "inputs": {
+      "annualForwardVolume": 12000,
+      "targetCtr": 0.1,
+      "visibilityMultiplier": 0.8,
+      "conversionRate": 0.02,
+      "averageOrderValue": 100,
+      "attainmentProbability": 0.5
+    },
+    "expected": {
+      "currentRevenue": 0,
+      "targetAbsoluteRevenue": 1920,
+      "targetIncrementalRevenue": 1920,
+      "expectedIncrementalRevenue": 960
+    }
+  }
+}

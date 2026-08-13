@@ -220,7 +220,7 @@ export async function authenticateLocalRequest(
       SELECT sessions.user_id, users.email
       FROM local_auth_sessions AS sessions
       JOIN local_users AS users ON users.id = sessions.user_id
-      WHERE sessions.token_hash = $1
+      WHERE sessions.token_hash = $1::char(64)
         AND sessions.expires_at > now()
     `,
     [tokenHash(token)],

@@ -17,7 +17,7 @@ It creates:
 - Identity Platform, Firebase project metadata, web app and Hosting site;
 - an optional, explicitly executed Cloud Run schema-migration job;
 - optional Cloud Run API, worker, compatibility dispatcher and event-relay services with automatic IAM database authentication;
-- the ordered 19-stage Workflows pipeline with authenticated worker calls and terminal failure recording.
+- the 24-stage Workflows pipeline with four parallel tracks, authenticated worker calls and terminal failure recording.
 
 ## Two-phase apply
 

@@ -53,7 +53,7 @@ const manifest = {
     har: "har_v2.1.0",
     revenue: "revenue_v2.1.0",
   },
-  pipelineStageCount: 19,
+  pipelineStageCount: 24,
 };
 const runtimeImages = {
   database_migration_image: databaseImage,

@@ -33,13 +33,23 @@ function authenticated(token, init = {}) {
 async function waitForRun(token, runId) {
   const deadline = Date.now() + 20 * 60_000;
   while (Date.now() < deadline) {
-    const run = await jsonRequest(
-      `${apiBaseUrl}/v1/pipeline-runs/${runId}?includeOutput=false`,
-      authenticated(token),
-    );
-    if (run.status === "succeeded" && run.deliveredEventCount === 19) return run;
-    if (run.status === "failed") {
-      throw new Error(`Scale pipeline failed: ${JSON.stringify(run)}`);
+    try {
+      const run = await jsonRequest(
+        `${apiBaseUrl}/v1/pipeline-runs/${runId}?includeOutput=false`,
+        authenticated(token),
+      );
+      if (run.status === "succeeded" && run.deliveredEventCount === 24) return run;
+      if (run.status === "failed") {
+        throw new Error(`Scale pipeline failed: ${JSON.stringify(run)}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        !message.includes("returned 500") &&
+        !(error instanceof Error && error.name === "TimeoutError")
+      ) {
+        throw error;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -62,6 +72,13 @@ const client = await jsonRequest(
     body: JSON.stringify({
       brandTerms: ["scale"],
       companyName: "Scale Validation",
+      competitors: [
+        {
+          competitorDomain: "scale-competitor.test",
+          competitorName: "Scale Competitor",
+          verified: true,
+        },
+      ],
       domain,
       industry: "Test",
     }),
@@ -73,9 +90,9 @@ const project = await jsonRequest(
   authenticated(identity.token, {
     body: JSON.stringify({
       authority: {
-        backlinks: 0,
-        domainRating: 0,
-        referringDomains: 0,
+        backlinks: 100,
+        domainRating: 20,
+        referringDomains: 25,
       },
       categoryFocus: "television",
       country: "GB",
@@ -136,7 +153,21 @@ await jsonRequest(
   authenticated(identity.token, {
     body: JSON.stringify({
       keywords: [],
-      serpKeywords: [],
+      serpKeywords: keywords.map((keyword, index) => ({
+        results: [
+          {
+            ahrefsRank: 100_000 + index,
+            backlinks: 500 + index,
+            domain: "scale-competitor.test",
+            domainRating: 45,
+            rankAbsolute: 1,
+            referringDomains: 100 + (index % 1_000),
+            url: `https://scale-competitor.test/tv-model-${index + 1}`,
+            urlRating: 35,
+          },
+        ],
+        text: keyword.text,
+      })),
       siteArchitectureKeywords: [],
     }),
     method: "PUT",
@@ -148,7 +179,7 @@ const createdRun = await jsonRequest(
 );
 const run = await waitForRun(identity.token, createdRun.id);
 if (
-  run.stages.length !== 19 ||
+  run.stages.length !== 24 ||
   !run.stages.every((stage) => stage.state === "succeeded")
 ) {
   throw new Error("Scale run did not close every stage successfully.");
@@ -169,6 +200,7 @@ if (
   persisted.calculationCounts?.siteArchitecture !== keywordCount ||
   persisted.calculationCounts?.demandSignals !== keywordCount ||
   persisted.calculationCounts?.clusters !== keywordCount ||
+  persisted.calculationCounts?.linkPowerScores < keywordCount ||
   persisted.calculationCounts?.harForecasts !== expectedScenarioCount ||
   persisted.calculationCounts?.revenueForecasts !== expectedScenarioCount ||
   persisted.calculationCounts?.calibrationSnapshots !== 1

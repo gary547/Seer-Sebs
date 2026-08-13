@@ -67,8 +67,8 @@ function assertPersistedRun(run) {
   if (run.status !== "succeeded") {
     throw new Error(`Pipeline run status is ${run.status}.`);
   }
-  if (!Array.isArray(run.stages) || run.stages.length !== 19) {
-    throw new Error(`Expected 19 stages, received ${run.stages?.length ?? "none"}.`);
+  if (!Array.isArray(run.stages) || run.stages.length !== 24) {
+    throw new Error(`Expected 24 stages, received ${run.stages?.length ?? "none"}.`);
   }
   if (!run.stages.every((stage) => stage.state === "succeeded")) {
     throw new Error("At least one pipeline stage did not succeed.");
@@ -76,8 +76,8 @@ function assertPersistedRun(run) {
   if (!run.stages.every((stage) => stage.attempts === 1)) {
     throw new Error("At least one pipeline stage was executed more than once.");
   }
-  if (run.deliveredEventCount !== 19) {
-    throw new Error(`Expected 19 delivered events, received ${run.deliveredEventCount}.`);
+  if (run.deliveredEventCount !== 24) {
+    throw new Error(`Expected 24 delivered events, received ${run.deliveredEventCount}.`);
   }
 }
 
@@ -171,7 +171,7 @@ async function validateEndToEnd() {
       authenticated(login.token),
     );
 
-    if (run.status === "succeeded" && run.deliveredEventCount === 19) {
+    if (run.status === "succeeded" && run.deliveredEventCount === 24) {
       break;
     }
     if (run.status === "failed") {

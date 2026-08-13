@@ -1,10 +1,7 @@
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  getPipelineRun,
-  startProjectPipeline,
-} from "@/integrations/gcp/pipeline";
+import { startProjectPipeline } from "@/integrations/gcp/pipeline";
 
 /**
  * Shared trigger for the `compute-forecasts` edge function. Used by both
@@ -20,28 +17,7 @@ export function useRecomputeForecasts(projectId: string | undefined) {
       if (!projectId) return { ok: false, error: "Missing project id" };
       setIsRecomputing(true);
       try {
-        const created = await startProjectPipeline(projectId);
-        const deadline = Date.now() + 15 * 60_000;
-        let completed = false;
-        while (Date.now() < deadline) {
-          const run = await getPipelineRun(created.id);
-          if (run.status === "succeeded") {
-            completed = true;
-            break;
-          }
-          if (run.status === "failed") {
-            const failed = run.stages.find((stage) => stage.state === "failed");
-            throw new Error(
-              failed
-                ? `${failed.id} failed after ${failed.attempts} attempts`
-                : "The project pipeline failed.",
-            );
-          }
-          await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-        }
-        if (!completed) {
-          throw new Error("The project pipeline did not finish before the timeout.");
-        }
+        await startProjectPipeline(projectId, "recalculate");
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["tp_revenue_by_keyword", projectId] }),
           queryClient.invalidateQueries({ queryKey: ["performance_dashboard", projectId] }),
@@ -51,8 +27,9 @@ export function useRecomputeForecasts(projectId: string | undefined) {
           queryClient.invalidateQueries({ queryKey: ["project-data", projectId] }),
           queryClient.invalidateQueries({ queryKey: ["project_calculations", projectId] }),
           queryClient.invalidateQueries({ queryKey: ["forecast_rows", projectId] }),
+          queryClient.invalidateQueries({ queryKey: ["project-pipeline", projectId] }),
         ]);
-        if (!silent) toast.success("TP revenue recalculated");
+        if (!silent) toast.success("Forecast recalculation started");
         return { ok: true };
       } catch (err: any) {
         const message = err?.message || "Recompute failed";

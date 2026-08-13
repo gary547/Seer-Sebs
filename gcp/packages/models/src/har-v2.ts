@@ -277,7 +277,7 @@ export function computeScenario(
   cfg?: ScoringConfig,
 ): ScenarioResult {
   const sortedComps = [...inp.competitors].sort(
-    (a, b) => (a.rank_absolute ?? 999) - (b.rank_absolute ?? 999),
+    (a, b) => (b.rank_absolute ?? -1) - (a.rank_absolute ?? -1),
   );
   const serpPen = serpPenalty(inp.serp_feature_count, inp.top_serp_feature);
   const temp = scenarioTemperature(s, cfg);
@@ -319,12 +319,10 @@ export function computeScenario(
       p_beat: Number(p.toFixed(4)),
       beaten,
     });
-    if (beaten) {
-      harPosition = c.rank_absolute ?? null;
-      rankProb = clamp(p, 0, 1);
-      pAttLegacy = clamp(1 - notBeatenProduct * (1 - p), 0, 1);
-      break;
-    }
+    if (!beaten) break;
+    harPosition = c.rank_absolute ?? null;
+    rankProb = clamp(p, 0, 1);
+    pAttLegacy = clamp(1 - notBeatenProduct * (1 - p), 0, 1);
     notBeatenProduct *= (1 - p);
   }
 

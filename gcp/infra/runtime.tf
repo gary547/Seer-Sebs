@@ -47,8 +47,9 @@ locals {
       ingress         = "INGRESS_TRAFFIC_INTERNAL_ONLY"
       service_account = google_service_account.runtime["worker"].email
       environment = {
-        SEER_ENVIRONMENT = var.environment
-        DATABASE_URL     = "postgresql://${urlencode(trimsuffix(google_service_account.runtime["worker"].email, ".gserviceaccount.com"))}@127.0.0.1:5432/seer"
+        DATABASE_STATEMENT_TIMEOUT_MS = "120000"
+        SEER_ENVIRONMENT              = var.environment
+        DATABASE_URL                  = "postgresql://${urlencode(trimsuffix(google_service_account.runtime["worker"].email, ".gserviceaccount.com"))}@127.0.0.1:5432/seer"
       }
       secrets = {
         AHREFS_API_KEY         = "seer-ahrefs-api-key"

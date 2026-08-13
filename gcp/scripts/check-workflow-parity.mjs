@@ -27,7 +27,7 @@ const workflowStages = [
 
 if (
   canonical.length !== workflowStages.length ||
-  canonical.some((stageId, index) => workflowStages[index] !== stageId)
+  canonical.some((stageId) => !workflowStages.includes(stageId))
 ) {
   throw new Error(
     `Workflow stages differ from the canonical definition: ${JSON.stringify({
@@ -39,7 +39,14 @@ if (
 if (new Set(workflowStages).size !== workflowStages.length) {
   throw new Error("Workflow contains duplicate stage deliveries.");
 }
+if (
+  !workflow.includes("parallelTracks:") ||
+  !workflow.includes("calculationTracks:") ||
+  !workflow.includes("competitiveTrack:")
+) {
+  throw new Error("Workflow does not contain the required parallel track structure.");
+}
 
 process.stdout.write(
-  `Workflow parity check passed (${workflowStages.length} ordered stages).\n`,
+  `Workflow parity check passed (${workflowStages.length} stages, four parallel tracks).\n`,
 );

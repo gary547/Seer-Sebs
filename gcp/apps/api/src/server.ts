@@ -47,6 +47,9 @@ import {
   createPipelineRun,
   getLatestProjectPipelineRun,
   getPipelineRun,
+  getProjectPipelineReadiness,
+  markProjectKeywordsPrecurated,
+  updateProjectPipelinePolicy,
 } from "./pipeline-runs.js";
 import {
   deleteProjectGscUpload,
@@ -445,6 +448,16 @@ async function handleRequest(
     "/v1/projects/",
     "/pipeline-runs",
   );
+  const pipelineReadinessProjectId = uuidSubresourcePath(
+    url.pathname,
+    "/v1/projects/",
+    "/pipeline-readiness",
+  );
+  const pipelinePrecuratedProjectId = uuidSubresourcePath(
+    url.pathname,
+    "/v1/projects/",
+    "/pipeline-precurated",
+  );
   const slideExportProjectId = uuidSubresourcePath(
     url.pathname,
     "/v1/projects/",
@@ -665,6 +678,8 @@ async function handleRequest(
     gscWorkbookProjectId !== null ||
     ruleProjectId !== null ||
     pipelineProjectId !== null ||
+    pipelineReadinessProjectId !== null ||
+    pipelinePrecuratedProjectId !== null ||
     slideExportProjectId !== null ||
     providerProjectId !== null ||
     serpProjectId !== null ||
@@ -1679,8 +1694,14 @@ async function handleRequest(
       methodNotAllowed(response, ["GET", "POST"]);
     }
     await assertProjectAccess(runtime.pool, user.id, pipelineProjectId, true);
+    const input = await readJson(request, 10 * 1_024);
+    const inputRecord =
+      input && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>)
+        : {};
     const run = await createPipelineRun(runtime.pool, user, {
       inputVersion: "project-v1",
+      mode: inputRecord.mode ?? "full",
       projectId: pipelineProjectId,
     });
     const orchestration =
@@ -1693,6 +1714,51 @@ async function handleRequest(
       ...run,
       ...(orchestration ?? {}),
     });
+    return;
+  }
+
+  if (pipelineReadinessProjectId) {
+    if (method === "GET") {
+      sendJson(
+        response,
+        200,
+        await getProjectPipelineReadiness(
+          runtime.pool,
+          user,
+          pipelineReadinessProjectId,
+        ),
+      );
+      return;
+    }
+    if (method === "PATCH") {
+      sendJson(
+        response,
+        200,
+        await updateProjectPipelinePolicy(
+          runtime.pool,
+          user,
+          pipelineReadinessProjectId,
+          await readJson(request, 10 * 1_024),
+        ),
+      );
+      return;
+    }
+    methodNotAllowed(response, ["GET", "PATCH"]);
+  }
+
+  if (pipelinePrecuratedProjectId) {
+    if (method !== "POST") {
+      methodNotAllowed(response, ["POST"]);
+    }
+    sendJson(
+      response,
+      200,
+      await markProjectKeywordsPrecurated(
+        runtime.pool,
+        user,
+        pipelinePrecuratedProjectId,
+      ),
+    );
     return;
   }
 

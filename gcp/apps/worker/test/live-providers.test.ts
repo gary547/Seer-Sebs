@@ -25,6 +25,21 @@ describe("managed pipeline providers", () => {
     const fetchImplementation = vi.fn<typeof fetch>(
       async (input: string | URL | Request) => {
         const url = String(input);
+        if (url.includes("historical_search_volume/live")) {
+          return dataForSeoResponse([
+            {
+              keyword: "buy television",
+              keyword_info: {
+                monthly_searches: [
+                  { month: 5, search_volume: 80, year: 2026 },
+                  { month: 6, search_volume: 90, year: 2026 },
+                ],
+                search_volume: 120,
+              },
+              keyword_properties: { core_keyword: "buy tv" },
+            },
+          ]);
+        }
         if (url.includes("search_volume/live")) {
           return dataForSeoResponse([
             {
@@ -59,13 +74,17 @@ describe("managed pipeline providers", () => {
     ).resolves.toEqual([
       {
         avgMonthlyVolume: 120,
+        coreKeyword: "buy tv",
         intent: "transactional",
         keyword: "buy television",
         keywordDifficulty: 44,
-        monthlyVolumes: [{ month: "2026-06-01", volume: 90 }],
+        monthlyVolumes: [
+          { month: "2026-05-01", volume: 80 },
+          { month: "2026-06-01", volume: 90 },
+        ],
       },
     ]);
-    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    expect(fetchImplementation).toHaveBeenCalledTimes(4);
     const request = fetchImplementation.mock.calls[0]?.[1];
     expect(new Headers(request?.headers).get("authorization")).toBe(
       `Basic ${Buffer.from("login:password").toString("base64")}`,

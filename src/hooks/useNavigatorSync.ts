@@ -175,7 +175,7 @@ export function useNavigatorSync({ projectId }: Options) {
             queryClient.invalidateQueries({ queryKey: ["has_forecasts", projectId] }),
           ]);
           toast.success("Pipeline complete", {
-            description: "All 19 stages completed successfully.",
+            description: "All 24 stages completed successfully.",
           });
           return;
         }
