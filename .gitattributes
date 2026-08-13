@@ -1,0 +1,1 @@
+gcp/fixtures/control-data/**/*.csv -text -diff
