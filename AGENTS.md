@@ -30,8 +30,9 @@
 ## Product capabilities
 
 The managed runtime covers client and project administration, keyword
-management, GSC workbook import, SERP ingestion, the ordered 19-stage
-calculation pipeline, forecasting and calibration, archive workflows, URL
+management, GSC workbook import, SERP ingestion, the ordered 24-stage
+autonomous calculation pipeline, forecasting, calibration and deduplicated
+rollups, archive workflows, URL
 monitoring, reference data, content planning, slide export, and admin-only
 inspection and control of GSC readiness, CTR, calibration, rank provenance,
 clustering, volume history, demand, SERP visibility, Link Power, content fit,
@@ -121,9 +122,32 @@ worker workflows, event delivery, object persistence, and restart persistence.
   administrator-only, project-scoped mutation. It must reject archived
   projects, rely on cascading child-row deletion, and mark calculation inputs
   and keywords dirty after a successful deletion.
-- Calculation panel actions run the canonical dependency-safe 19-stage GCP
+- Calculation panel actions run the canonical dependency-safe 24-stage GCP
   pipeline. Do not reintroduce standalone Supabase edge-function calls for
   individual legacy buttons.
+- The autonomous pipeline is a 24-stage graph: intake and qualification fan
+  out into CTR truth, demand, competitive and content tracks, converge at HAR
+  v2, then continue through Revenue v2, calibration and rollup output. Preserve
+  the stage dependencies and parallel-track semantics in
+  `gcp/packages/pipeline/src/definition.ts` and the managed Workflow template.
+- `GET` and `PATCH /v1/projects/:projectId/pipeline-readiness` expose and update
+  the hard-gate configuration and operator-controlled promotion/enrichment
+  thresholds. `POST /v1/projects/:projectId/pipeline-precurated` stamps a
+  manually curated keyword set. `POST /v1/projects/:projectId/pipeline-runs`
+  accepts `full`, `resume` and `recalculate` modes; recalculation must not repeat
+  paid provider stages.
+- Keep domain and URL authority caches shared across projects, preserve source
+  and freshness provenance, and never overwrite a positive manually imported
+  volume with an empty provider value. Competitive SERP fetching is performed
+  per canonical cluster and inherited rows must retain their source keyword.
+- Readiness stages must fail clearly before HAR or Revenue when their hard
+  inputs are absent. Every fallback or substitution must remain visible in the
+  run output and derived-record provenance; missing content fit is `NULL`, not
+  zero.
+- `pipeline_rollups` stores naive and cluster-deduplicated totals plus cluster,
+  category, quarter, trend, confidence and cannibalisation output. Client-facing
+  totals must use the deduplicated value while retaining the naive total for
+  auditability.
 - Migration `027_calculation_control_contract` materializes legacy v1 forecast
   values from the lossless migration archive into
   `legacy_keyword_forecasts` for read-only HAR/Revenue comparison and adds the
