@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { projectIdFromInput } from "../src/project-data.js";
+import {
+  normaliseStoredConversionRate,
+  projectIdFromInput,
+} from "../src/project-data.js";
 
 describe("project-backed pipeline input", () => {
   const projectId = "32000000-0000-4000-8000-000000000001";
@@ -26,5 +29,12 @@ describe("project-backed pipeline input", () => {
         projectId: "not-a-project",
       }),
     ).toThrow("invalid projectId");
+  });
+
+  it("normalises legacy percentage conversion rates without changing decimals", () => {
+    expect(normaliseStoredConversionRate(null)).toBeNull();
+    expect(normaliseStoredConversionRate("0.016")).toBe(0.016);
+    expect(normaliseStoredConversionRate("1.6")).toBe(0.016);
+    expect(normaliseStoredConversionRate("100")).toBe(1);
   });
 });

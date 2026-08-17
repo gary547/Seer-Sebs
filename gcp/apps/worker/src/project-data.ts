@@ -220,6 +220,12 @@ export function projectIdFromInput(input: unknown): string | null {
   return record.projectId;
 }
 
+export function normaliseStoredConversionRate(value: string | null): number | null {
+  if (value === null) return null;
+  const conversionRate = Number(value);
+  return conversionRate > 1 ? conversionRate / 100 : conversionRate;
+}
+
 export async function loadProjectPipelineSource(
   pool: DatabasePool,
   projectId: string,
@@ -548,9 +554,7 @@ export async function loadProjectPipelineSource(
           ? null
           : Number(project.aov),
       conversionRate:
-        project.conversion_rate === null
-          ? null
-          : Number(project.conversion_rate),
+        normaliseStoredConversionRate(project.conversion_rate),
       gscDateRangeEnd: project.gsc_date_range_end,
       gscDateRangeStart: project.gsc_date_range_start,
       gscWindowDays: project.gsc_window_days,
