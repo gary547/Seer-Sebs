@@ -6,7 +6,7 @@ import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 
 interface ProjectProviderRow {
-  country: string;
+  country: string | null;
   domain: string;
   language: string | null;
 }
@@ -151,6 +151,16 @@ function countryName(country: string): string {
   } catch {
     return country;
   }
+}
+
+function locationTarget(
+  country: string | null,
+): { location_code: number } | { location_name: string } {
+  const normalised = country?.trim().toUpperCase() ?? "";
+  if (!normalised || normalised === "GB" || normalised === "UK") {
+    return { location_code: 2826 };
+  }
+  return { location_name: countryName(normalised) };
 }
 
 function languageCode(language: string | null): string {
@@ -305,7 +315,7 @@ export class DataForSeoClient {
 
   async enrichKeywords(
     keywords: readonly string[],
-    country: string,
+    country: string | null,
     language: string | null,
   ): Promise<EnrichedKeyword[]> {
     const result = new Map<string, EnrichedKeyword>();
@@ -313,7 +323,7 @@ export class DataForSeoClient {
       const request = {
         keywords: group,
         language_code: languageCode(language),
-        location_name: countryName(country),
+        ...locationTarget(country),
       };
       const [volumeItems, historicalItems, difficultyItems, intentItems] = await Promise.all([
         this.liveItems(
@@ -423,7 +433,7 @@ export class DataForSeoClient {
   async rankingUrls(
     domain: string,
     keywords: readonly string[],
-    country: string,
+    country: string | null,
     language: string | null,
   ): Promise<RankingMatch[]> {
     const matches: RankingMatch[] = [];
@@ -440,7 +450,7 @@ export class DataForSeoClient {
             language_code: languageCode(language),
             limit: 1_000,
             load_rank_absolute: false,
-            location_name: countryName(country),
+            ...locationTarget(country),
             offset,
             target: cleanDomain(domain),
           },
@@ -466,7 +476,7 @@ export class DataForSeoClient {
 
   async submitSerpTasks(
     items: readonly { itemKey: string; keyword: string }[],
-    country: string,
+    country: string | null,
     language: string | null,
   ): Promise<SerpTask[]> {
     const submitted: SerpTask[] = [];
@@ -482,7 +492,7 @@ export class DataForSeoClient {
               depth: 10,
               keyword: item.keyword,
               language_code: languageCode(language),
-              location_name: countryName(country),
+              ...locationTarget(country),
               tag: providerTag(item.itemKey),
             })),
           ),

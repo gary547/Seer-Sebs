@@ -157,8 +157,16 @@ describe("managed pipeline providers", () => {
   });
 
   it("surfaces the DataForSEO status when SERP task submission is rejected", async () => {
-    const fetchImplementation = vi.fn<typeof fetch>(async () =>
-      dataForSeoFailure(40201, "Access denied"),
+    const fetchImplementation = vi.fn<typeof fetch>(
+      async (_input, request) => {
+        const task = JSON.parse(String(request?.body))[0] as Record<
+          string,
+          unknown
+        >;
+        expect(task.location_code).toBe(2826);
+        expect(task).not.toHaveProperty("location_name");
+        return dataForSeoFailure(40201, "Access denied");
+      },
     );
     const client = new DataForSeoClient("login:password", fetchImplementation);
 
