@@ -172,6 +172,9 @@ describe("managed database runtime contract", () => {
       ]);
       expect(pipeline).toContain("https://seer-worker.example.run.app/internal/tasks");
       expect(pipeline).toContain("${not(\"runId\" in args)}");
+      expect(pipeline).toContain("internalToken: '${internalToken}'");
+      expect(pipeline).toContain("runId: '${args.runId}'");
+      expect(pipeline).not.toMatch(/args: \{[^\n]*: \$\{/);
       expect(pipeline).not.toContain("${worker_url}");
       expect(maintenance).toContain(
         "https://seer-api.example.run.app/internal/maintenance/url-monitor",
