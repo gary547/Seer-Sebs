@@ -8,7 +8,7 @@ import { withTransaction } from "../../../packages/runtime/src/database.js";
 interface ProjectProviderRow {
   country: string;
   domain: string;
-  language: string;
+  language: string | null;
 }
 
 interface KeywordProviderRow {
@@ -153,8 +153,8 @@ function countryName(country: string): string {
   }
 }
 
-function languageCode(language: string): string {
-  const normalised = language.trim().toLowerCase();
+function languageCode(language: string | null): string {
+  const normalised = language?.trim().toLowerCase() ?? "";
   return /^[a-z]{2}$/.test(normalised) ? normalised : "en";
 }
 
@@ -287,7 +287,7 @@ export class DataForSeoClient {
   async enrichKeywords(
     keywords: readonly string[],
     country: string,
-    language: string,
+    language: string | null,
   ): Promise<EnrichedKeyword[]> {
     const result = new Map<string, EnrichedKeyword>();
     for (const group of batches(keywords, 200)) {
@@ -403,7 +403,7 @@ export class DataForSeoClient {
     domain: string,
     keywords: readonly string[],
     country: string,
-    language: string,
+    language: string | null,
   ): Promise<RankingMatch[]> {
     const matches: RankingMatch[] = [];
     for (const group of batches(keywords, 700)) {
@@ -446,7 +446,7 @@ export class DataForSeoClient {
   async submitSerpTasks(
     items: readonly { itemKey: string; keyword: string }[],
     country: string,
-    language: string,
+    language: string | null,
   ): Promise<SerpTask[]> {
     const submitted: SerpTask[] = [];
     for (const group of batches(items, 100)) {

@@ -91,6 +91,24 @@ describe("managed pipeline providers", () => {
     );
   });
 
+  it("defaults a missing project language to English", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(async () =>
+      dataForSeoResponse([]),
+    );
+    const client = new DataForSeoClient("login:password", fetchImplementation);
+
+    await expect(
+      client.enrichKeywords(["buy television"], "GB", null),
+    ).resolves.toHaveLength(1);
+
+    for (const [, request] of fetchImplementation.mock.calls) {
+      const task = JSON.parse(String(request?.body))[0] as {
+        language_code: string;
+      };
+      expect(task.language_code).toBe("en");
+    }
+  });
+
   it("parses ranked URLs and Ahrefs authority metrics", async () => {
     const dataForSeoFetch = vi.fn<typeof fetch>().mockResolvedValue(
       dataForSeoResponse([
