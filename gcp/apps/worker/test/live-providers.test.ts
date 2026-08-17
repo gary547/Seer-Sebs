@@ -20,6 +20,15 @@ function dataForSeoResponse(items: unknown[]): Response {
   );
 }
 
+function dataForSeoFailure(code: number, message: string): Response {
+  return new Response(
+    JSON.stringify({
+      tasks: [{ status_code: code, status_message: message }],
+    }),
+    { status: 200 },
+  );
+}
+
 describe("managed pipeline providers", () => {
   it("merges live keyword volume, difficulty, intent and monthly history", async () => {
     const fetchImplementation = vi.fn<typeof fetch>(
@@ -107,6 +116,44 @@ describe("managed pipeline providers", () => {
       };
       expect(task.language_code).toBe("en");
     }
+  });
+
+  it("continues with standard volume when optional Labs endpoints are unavailable", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchImplementation = vi.fn<typeof fetch>(
+      async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("/keywords_data/google_ads/search_volume/live")) {
+          return dataForSeoResponse([
+            {
+              keyword: "buy television",
+              keyword_properties: { core_keyword: "buy tv" },
+              monthly_searches: [
+                { month: 6, search_volume: 90, year: 2026 },
+              ],
+              search_volume: 120,
+            },
+          ]);
+        }
+        return dataForSeoFailure(40201, "Access denied");
+      },
+    );
+    const client = new DataForSeoClient("login:password", fetchImplementation);
+
+    await expect(
+      client.enrichKeywords(["buy television"], "GB", "en"),
+    ).resolves.toEqual([
+      {
+        avgMonthlyVolume: 120,
+        coreKeyword: "buy tv",
+        intent: null,
+        keyword: "buy television",
+        keywordDifficulty: null,
+        monthlyVolumes: [{ month: "2026-06-01", volume: 90 }],
+      },
+    ]);
+    expect(warning).toHaveBeenCalledTimes(3);
+    warning.mockRestore();
   });
 
   it("parses ranked URLs and Ahrefs authority metrics", async () => {

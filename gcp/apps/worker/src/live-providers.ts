@@ -235,7 +235,11 @@ function dataForSeoItems(value: unknown): Record<string, unknown>[] {
   const root = record(value);
   const task = records(root.tasks)[0];
   if (!task || task.status_code !== 20000) {
-    throw new Error("DataForSEO task did not complete successfully.");
+    const code = task ? numberOrNull(task.status_code) : null;
+    const message = task ? stringOrNull(task.status_message) : null;
+    throw new Error(
+      `DataForSEO task failed (${code ?? "unknown"}): ${message ?? "unknown task failure"}.`,
+    );
   }
   const result = records(task.result);
   const nested = records(result[0]?.items);
@@ -284,6 +288,21 @@ export class DataForSeoClient {
     );
   }
 
+  private async optionalLiveItems(
+    path: string,
+    task: Record<string, unknown>,
+  ): Promise<Record<string, unknown>[]> {
+    try {
+      return await this.liveItems(path, task);
+    } catch (error) {
+      console.warn("Optional DataForSEO enrichment is unavailable.", {
+        endpoint: path,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
   async enrichKeywords(
     keywords: readonly string[],
     country: string,
@@ -301,15 +320,15 @@ export class DataForSeoClient {
           "/v3/keywords_data/google_ads/search_volume/live",
           request,
         ),
-        this.liveItems(
+        this.optionalLiveItems(
           "/v3/dataforseo_labs/google/historical_search_volume/live",
           request,
         ),
-        this.liveItems(
+        this.optionalLiveItems(
           "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live",
           request,
         ),
-        this.liveItems("/v3/dataforseo_labs/google/search_intent/live", {
+        this.optionalLiveItems("/v3/dataforseo_labs/google/search_intent/live", {
           keywords: group,
           language_code: languageCode(language),
         }),
@@ -328,7 +347,9 @@ export class DataForSeoClient {
         const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
         const value = result.get(key);
         if (!value) continue;
+        const properties = record(item.keyword_properties);
         value.avgMonthlyVolume = numberOrNull(item.search_volume);
+        value.coreKeyword = stringOrNull(properties.core_keyword);
         value.monthlyVolumes = records(item.monthly_searches)
           .map((point) => {
             const year = numberOrNull(point.year);
