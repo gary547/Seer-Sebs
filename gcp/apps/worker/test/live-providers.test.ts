@@ -156,6 +156,23 @@ describe("managed pipeline providers", () => {
     warning.mockRestore();
   });
 
+  it("surfaces the DataForSEO status when SERP task submission is rejected", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(async () =>
+      dataForSeoFailure(40201, "Access denied"),
+    );
+    const client = new DataForSeoClient("login:password", fetchImplementation);
+
+    await expect(
+      client.submitSerpTasks(
+        [{ itemKey: "buy television", keyword: "buy television" }],
+        "GB",
+        "en",
+      ),
+    ).rejects.toThrow(
+      "DataForSEO SERP task submission failed (40201): Access denied.",
+    );
+  });
+
   it("parses ranked URLs and Ahrefs authority metrics", async () => {
     const dataForSeoFetch = vi.fn<typeof fetch>().mockResolvedValue(
       dataForSeoResponse([

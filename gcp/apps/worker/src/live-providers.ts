@@ -491,12 +491,18 @@ export class DataForSeoClient {
       );
       for (const task of records(response.tasks)) {
         const status = numberOrNull(task.status_code);
+        const statusMessage = stringOrNull(task.status_message);
         const id = stringOrNull(task.id);
         const tag = stringOrNull(record(task.data).tag);
-        const item = tag ? byTag.get(tag) : null;
-        if (!status || status < 20000 || status >= 30000 || !id || !item) {
-          throw new Error("DataForSEO SERP task submission failed.");
+        if (!status || status < 20000 || status >= 30000) {
+          throw new Error(
+            `DataForSEO SERP task submission failed (${status ?? "unknown"}): ${statusMessage ?? "unknown task failure"}.`,
+          );
         }
+        if (!id) throw new Error("DataForSEO SERP response omitted the task ID.");
+        if (!tag) throw new Error("DataForSEO SERP response omitted the task tag.");
+        const item = byTag.get(tag);
+        if (!item) throw new Error("DataForSEO SERP response returned an unknown task tag.");
         submitted.push({
           itemKey: item.itemKey,
           keyword: item.keyword,
