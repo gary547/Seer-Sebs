@@ -22,6 +22,7 @@ The application now uses this boundary for authentication, data, workflows, prov
 - `workflows`: the validated 24-stage autonomous pipeline and scheduled-maintenance Workflows templates;
 - `migration`: the complete 58-table source disposition, archive catalog and ordered canonical transformation rules;
 - `cloudbuild.web.yaml`: validated frontend build plus Firebase live or preview-channel deployment.
+- `cloudbuild.runtime.yaml`: immutable runtime build and release manifest, with an opt-in automatic release path that migrates the schema, updates Cloud Run and Workflows, verifies API readiness, then publishes Firebase Hosting.
 
 ## Local validation
 
@@ -91,5 +92,19 @@ docker compose -f gcp/docker-compose.local.yml down
 The complete local foundation, frontend target boundary and all 24 project-backed pipeline stages are validated. Every stage reads controlled source data, writes versioned PostgreSQL state and feeds its dependent stages. The authenticated API covers identity, tenancy, keywords, GSC, calculations, SERP, roadmaps, archives, URL Monitor, reference data, conversion overrides, portfolio, capture window, Content Planner and Slides export. Live DataForSEO, Ahrefs and Anthropic adapters are implemented behind the worker boundary with persisted resumable state. The target also contains authenticated five-minute URL checks, daily retention, a complete 58-table lossless archive path, 26 ordered operational-table migration rules and repeatable canonical transfer, database restore and access-boundary tests.
 
 Production parity is not yet claimed. Real source discovery, approved data mapping, identity/data/storage import, provider credentials, managed-resource verification and frozen real-project output parity require the isolated Google Cloud projects and source access.
+
+## Automatic production releases
+
+The production Cloud Build trigger follows `main` and runs
+`gcp/cloudbuild.runtime.yaml` with `_AUTO_DEPLOY=true`. A release is ordered as
+schema migration, Cloud Run revisions, managed Workflows, API readiness and
+Firebase Hosting. Manual builds retain `_AUTO_DEPLOY=false`, so validation and
+immutable image creation remain safe without changing the live environment.
+
+The regional Developer Connect repository and trigger are one-time project
+bootstrap resources because GitHub OAuth must be approved by a repository
+administrator. The trigger uses `seer-build` and the existing managed runtime
+URLs, Firebase web configuration, Hosting site and release bucket as
+substitutions; no provider credential is stored in Git.
 
 The exact synthetic coverage and its limits are recorded in `docs/migration/LOCAL_SYNTHETIC_ACCEPTANCE.md`.

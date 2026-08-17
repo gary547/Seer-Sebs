@@ -43,3 +43,18 @@ Project creation, billing attachment, organisation policy, DNS and the remote-st
 After the API is deployed, pass `firebase_web_config` and `runtime_service_urls.api` into the substitutions in `gcp/cloudbuild.web.yaml`. The build fails before compilation if any required Firebase value is missing or if the API URL is not HTTPS.
 
 Use `_HOSTING_CHANNEL=live` for the production Hosting release. Any other valid channel name creates or updates a seven-day Firebase preview channel. The build identity requires the Firebase deployment and API-key viewer permissions documented for Cloud Build; those bootstrap permissions remain external because the deployment identity is not known yet.
+
+## Continuous deployment
+
+The managed `seer-build` identity may update the schema-migration job, the API,
+worker and event-relay services, and both Workflows definitions. It receives
+Cloud Run and Workflows administration at project scope and `actAs` only on the
+five runtime identities it must deploy.
+
+After the one-time GitHub OAuth connection is approved, configure one regional
+Cloud Build repository and a push trigger for `^main$`. Point it at
+`gcp/cloudbuild.runtime.yaml`, set `_AUTO_DEPLOY=true`, and supply the existing
+Firebase web configuration, API and worker URLs, Hosting site, Artifact
+Registry repository and release bucket as substitutions. The build runs the
+database migration before changing service revisions and publishes Hosting
+only after API readiness succeeds.

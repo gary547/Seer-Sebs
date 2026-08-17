@@ -57,6 +57,61 @@ steps:
     args: ["run", "build:gcp"]
     waitFor: ["install"]
 
+  - id: web-build
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    automapSubstitutions: true
+    env:
+      - VITE_FIREBASE_API_KEY=${_FIREBASE_API_KEY}
+      - VITE_FIREBASE_APP_ID=${_FIREBASE_APP_ID}
+      - VITE_FIREBASE_AUTH_DOMAIN=${_FIREBASE_AUTH_DOMAIN}
+      - VITE_FIREBASE_PROJECT_ID=${PROJECT_ID}
+      - VITE_SEER_API_URL=${_SEER_API_URL}
+      - VITE_SEER_AUTH_MODE=identity-platform
+    script: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      if [[ "${_AUTO_DEPLOY}" != "true" ]]; then
+        echo "Automatic web release disabled."
+        exit 0
+      fi
+      for variable in \
+        VITE_FIREBASE_API_KEY \
+        VITE_FIREBASE_APP_ID \
+        VITE_FIREBASE_AUTH_DOMAIN \
+        VITE_FIREBASE_PROJECT_ID \
+        VITE_SEER_API_URL
+      do
+        value="${!variable:-}"
+        if [[ -z "${value}" || "${value}" == replace-with-* ]]; then
+          echo "${variable} must be provided by the deployment trigger." >&2
+          exit 1
+        fi
+      done
+      npm run check:router-boundary
+      npm run typecheck
+      npm test
+      npm run build
+    waitFor: ["install"]
+
+  - id: render-workflows
+    name: node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+    automapSubstitutions: true
+    env:
+      - SEER_WORKFLOW_API_URL=${_SEER_API_URL}
+      - SEER_WORKFLOW_INTERNAL_SECRET_ID=${_INTERNAL_SECRET_ID}
+      - SEER_WORKFLOW_OUTPUT_DIRECTORY=/workspace/release/workflows
+      - SEER_WORKFLOW_PROJECT_ID=${PROJECT_ID}
+      - SEER_WORKFLOW_WORKER_URL=${_SEER_WORKER_URL}
+    script: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      if [[ "${_AUTO_DEPLOY}" != "true" ]]; then
+        echo "Automatic workflow release disabled."
+        exit 0
+      fi
+      node gcp/scripts/render-managed-workflows.mjs
+    waitFor: ["source-metadata"]
+
   - id: runtime-container
     name: gcr.io/cloud-builders/docker
     args:
@@ -174,6 +229,75 @@ steps:
       node gcp/scripts/write-release-manifest.mjs
     waitFor: ["resolve-digests"]
 
+  - id: deploy-runtime
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    automapSubstitutions: true
+    script: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      if [[ "${_AUTO_DEPLOY}" != "true" ]]; then
+        echo "Automatic runtime release disabled."
+        exit 0
+      fi
+      set -a
+      source /workspace/release/image.env
+      set +a
+      gcloud run jobs update seer-database-migration \
+        --image="${SEER_RELEASE_DATABASE_IMAGE}" \
+        --project="${PROJECT_ID}" \
+        --region="${_REGION}" \
+        --quiet
+      gcloud run jobs execute seer-database-migration \
+        --project="${PROJECT_ID}" \
+        --region="${_REGION}" \
+        --wait \
+        --quiet
+      for service in seer-api seer-worker seer-events
+      do
+        gcloud run services update "${service}" \
+          --image="${SEER_RELEASE_IMAGE}" \
+          --project="${PROJECT_ID}" \
+          --region="${_REGION}" \
+          --quiet
+      done
+      gcloud workflows deploy seer-pipeline \
+        --description="Durable 24-stage SEER calculation pipeline" \
+        --location="${_REGION}" \
+        --project="${PROJECT_ID}" \
+        --service-account="seer-workflow@${PROJECT_ID}.iam.gserviceaccount.com" \
+        --source=/workspace/release/workflows/pipeline.yaml \
+        --quiet
+      gcloud workflows deploy seer-maintenance \
+        --description="Scheduled SEER maintenance operations" \
+        --location="${_REGION}" \
+        --project="${PROJECT_ID}" \
+        --service-account="seer-workflow@${PROJECT_ID}.iam.gserviceaccount.com" \
+        --source=/workspace/release/workflows/maintenance.yaml \
+        --quiet
+      gcloud run services describe seer-api \
+        --project="${PROJECT_ID}" \
+        --region="${_REGION}" \
+        --format='value(status.latestReadyRevisionName)'
+      curl --fail --show-error --silent "${_SEER_API_URL}/readyz"
+    waitFor: ["release-manifest", "render-workflows"]
+
+  - id: deploy-web
+    name: us-docker.pkg.dev/firebase-cli/us/firebase
+    automapSubstitutions: true
+    env:
+      - SEER_FIREBASE_CHANNEL=${_HOSTING_CHANNEL}
+      - SEER_FIREBASE_PROJECT_ID=${PROJECT_ID}
+      - SEER_FIREBASE_SITE_ID=${_FIREBASE_SITE_ID}
+    script: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      if [[ "${_AUTO_DEPLOY}" != "true" ]]; then
+        echo "Automatic Firebase release disabled."
+        exit 0
+      fi
+      gcp/scripts/deploy-firebase-hosting.sh
+    waitFor: ["web-build", "deploy-runtime"]
+
 images:
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/runtime:${COMMIT_SHA}
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/database-migration:${COMMIT_SHA}
@@ -190,8 +314,17 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
+  _AUTO_DEPLOY: "false"
+  _FIREBASE_API_KEY: replace-with-firebase-api-key
+  _FIREBASE_APP_ID: replace-with-firebase-app-id
+  _FIREBASE_AUTH_DOMAIN: replace-with-firebase-auth-domain
+  _FIREBASE_SITE_ID: replace-with-firebase-site-id
+  _HOSTING_CHANNEL: live
+  _INTERNAL_SECRET_ID: seer-internal-service-token
   _REGION: europe-west2
   _REPOSITORY: seer-runtime
   _RELEASE_BUCKET: replace-with-release-metadata-bucket
+  _SEER_API_URL: replace-with-cloud-run-api-url
+  _SEER_WORKER_URL: replace-with-cloud-run-worker-url
 
 timeout: 1800s

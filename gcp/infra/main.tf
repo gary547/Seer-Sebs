@@ -57,7 +57,9 @@ locals {
       "roles/artifactregistry.writer",
       "roles/firebasehosting.admin",
       "roles/logging.logWriter",
+      "roles/run.admin",
       "roles/serviceusage.serviceUsageConsumer",
+      "roles/workflows.admin",
     ])
     dispatcher = toset([
       "roles/cloudsql.client",
@@ -137,6 +139,20 @@ resource "google_project_iam_member" "cloud_build_connection_secret_admin" {
   member  = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
 
   depends_on = [google_project_service.services]
+}
+
+resource "google_service_account_iam_member" "build_runtime_service_account_user" {
+  for_each = toset([
+    "api",
+    "events",
+    "migrator",
+    "worker",
+    "workflow",
+  ])
+
+  service_account_id = google_service_account.runtime[each.value].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.runtime["build"].email}"
 }
 
 resource "google_compute_network" "main" {
@@ -509,7 +525,7 @@ resource "google_workflows_workflow" "pipeline" {
   project             = var.project_id
   name                = "${var.name_prefix}-pipeline"
   region              = var.region
-  description         = "Durable 19-stage SEER calculation pipeline"
+  description         = "Durable 24-stage SEER calculation pipeline"
   service_account     = google_service_account.runtime["workflow"].id
   deletion_protection = var.deletion_protection
   labels              = local.labels

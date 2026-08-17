@@ -57,7 +57,13 @@ describe("managed database runtime contract", () => {
     );
     expect(main).toContain('role    = "roles/secretmanager.admin"');
     expect(main).toContain('"roles/firebasehosting.admin"');
+    expect(main).toContain('"roles/run.admin"');
     expect(main).toContain('"roles/serviceusage.serviceUsageConsumer"');
+    expect(main).toContain('"roles/workflows.admin"');
+    expect(main).toContain(
+      'resource "google_service_account_iam_member" "build_runtime_service_account_user"',
+    );
+    expect(main).toContain('role               = "roles/iam.serviceAccountUser"');
     expect(main).toContain(
       "service-${data.google_project.current.number}@gcp-sa-cloudbuild.iam.gserviceaccount.com",
     );
@@ -126,6 +132,54 @@ describe("managed database runtime contract", () => {
     expect(runtimeBuild).toContain(
       "npm ci --prefix gcp --ignore-scripts --fund=false --audit=false",
     );
+  });
+
+  it("deploys schema, runtime, workflows and Hosting only for automatic releases", async () => {
+    const runtimeBuild = await read("gcp/cloudbuild.runtime.yaml");
+
+    expect(runtimeBuild).toContain('_AUTO_DEPLOY: "false"');
+    expect(runtimeBuild).toContain("gcloud run jobs update seer-database-migration");
+    expect(runtimeBuild).toContain("gcloud run jobs execute seer-database-migration");
+    expect(runtimeBuild).toContain("for service in seer-api seer-worker seer-events");
+    expect(runtimeBuild).toContain("gcloud workflows deploy seer-pipeline");
+    expect(runtimeBuild).toContain("gcloud workflows deploy seer-maintenance");
+    expect(runtimeBuild).toContain("node gcp/scripts/render-managed-workflows.mjs");
+    expect(runtimeBuild).toContain("gcp/scripts/deploy-firebase-hosting.sh");
+    expect(runtimeBuild).toContain('waitFor: ["web-build", "deploy-runtime"]');
+  });
+
+  it("renders deployable workflow sources without Terraform placeholders", async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "seer-managed-workflows-"),
+    );
+
+    try {
+      await execFileAsync("node", ["gcp/scripts/render-managed-workflows.mjs"], {
+        cwd: repositoryRoot,
+        env: {
+          ...process.env,
+          SEER_WORKFLOW_API_URL: "https://seer-api.example.run.app",
+          SEER_WORKFLOW_INTERNAL_SECRET_ID: "seer-internal-service-token",
+          SEER_WORKFLOW_OUTPUT_DIRECTORY: temporaryDirectory,
+          SEER_WORKFLOW_PROJECT_ID: "secure-cipher-503913-f1",
+          SEER_WORKFLOW_WORKER_URL: "https://seer-worker.example.run.app",
+        },
+      });
+
+      const [pipeline, maintenance] = await Promise.all([
+        readFile(join(temporaryDirectory, "pipeline.yaml"), "utf8"),
+        readFile(join(temporaryDirectory, "maintenance.yaml"), "utf8"),
+      ]);
+      expect(pipeline).toContain("https://seer-worker.example.run.app/internal/tasks");
+      expect(pipeline).toContain("${not(\"runId\" in args)}");
+      expect(pipeline).not.toContain("${worker_url}");
+      expect(maintenance).toContain(
+        "https://seer-api.example.run.app/internal/maintenance/url-monitor",
+      );
+      expect(maintenance).not.toContain("${api_url}");
+    } finally {
+      await rm(temporaryDirectory, { force: true, recursive: true });
+    }
   });
 
   it("uses API-valid executable scripts in both Cloud Build pipelines", async () => {

@@ -82,6 +82,14 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Keep Cloud Build source uploads constrained by `.gcloudignore`, and deploy
   Firebase Hosting through the `web` target bound at build time to the
   OpenTofu-managed site ID.
+- The production `main` trigger uses `gcp/cloudbuild.runtime.yaml` with
+  `_AUTO_DEPLOY=true`. Keep its release order: schema migration, Cloud Run,
+  Workflows, API readiness, then Firebase Hosting. Manual builds must retain
+  the default `_AUTO_DEPLOY=false` and must not change live services.
+- Render Workflow templates through
+  `gcp/scripts/render-managed-workflows.mjs`; the renderer must preserve
+  Workflow expression syntax while resolving only the managed project, secret
+  and service URL placeholders.
 - Stage manual Cloud Build uploads only in the dedicated short-lived
   `seer-build-source` bucket; the build identity has read-only access there.
 - Cloud Build steps that use `script` must carry their own Bash shebang and
