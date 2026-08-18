@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { domainBrandTerms } from "./brand-terms.js";
+
 import {
   CALIBRATION_MODEL_VERSION,
   computeCalibration,
@@ -1309,8 +1311,7 @@ function derivedBrandTerms(fixture: ProjectPipelineSource): string[] {
     terms.add(companyWords.join(""));
     terms.add(companyWords.join(" "));
   }
-  const domainLabel = normaliseHost(fixture.client.domain).split(".")[0];
-  if (domainLabel && domainLabel.length >= 3) terms.add(domainLabel);
+  for (const term of domainBrandTerms(fixture.client.domain)) terms.add(term);
   return [...terms];
 }
 

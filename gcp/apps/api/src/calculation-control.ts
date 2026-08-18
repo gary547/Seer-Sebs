@@ -4,11 +4,13 @@ import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth.js";
+import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertAdministrator } from "./authorization.js";
 
 interface ProjectRow extends QueryResultRow {
   archived_at: Date | null;
   brand_terms: string[];
+  domain: string;
   id: string;
 }
 
@@ -158,7 +160,7 @@ async function getAdminProject(
   await assertAdministrator(database, userId);
   const result = await database.query<ProjectRow>(
     `
-      SELECT project.id, project.archived_at, client.brand_terms
+      SELECT project.id, project.archived_at, client.brand_terms, client.domain
       FROM navigator_projects AS project
       JOIN clients AS client ON client.id = project.client_id
       WHERE project.id = $1
@@ -616,7 +618,7 @@ export async function getProjectCalculationControl(
           FROM pipeline_stage_runs AS stage
           WHERE stage.run_id = run.id
             AND stage.state = 'failed'
-          ORDER BY stage.completed_at DESC NULLS LAST, stage.stage_id
+          ORDER BY stage.attempts DESC, stage.completed_at DESC NULLS LAST, stage.stage_id
           LIMIT 1
         ) AS failed ON true
         WHERE run.input->>'projectId' = $1
@@ -647,7 +649,7 @@ export async function getProjectCalculationControl(
       withRank: Number(keyword.with_base_rank_count),
     },
     brandClassification: {
-      brandTerms: project.brand_terms,
+      brandTerms: resolveBrandTerms(project.brand_terms, project.domain).terms,
       branded: Number(keyword.branded_count),
       total: Number(keyword.total_count),
       unbranded: Number(keyword.unbranded_count),

@@ -732,21 +732,35 @@ export async function updateClientBrandTerms(
     "brandTerms",
     1_000,
   );
-  const result = await pool.query(
-    `
-      UPDATE clients
-      SET
-        brand_terms = $2,
-        updated_at = now()
-      WHERE id = $1
-        AND archived_at IS NULL
-      RETURNING id
-    `,
-    [clientId, terms],
-  );
-  if (result.rowCount !== 1) {
-    throw new HttpError(404, "client_not_found", "Client not found.");
-  }
+  await withTransaction(pool, async (client) => {
+    const result = await client.query(
+      `
+        UPDATE clients
+        SET
+          brand_terms = $2,
+          updated_at = now()
+        WHERE id = $1
+          AND archived_at IS NULL
+        RETURNING id
+      `,
+      [clientId, terms],
+    );
+    if (result.rowCount !== 1) {
+      throw new HttpError(404, "client_not_found", "Client not found.");
+    }
+    await client.query(
+      `
+        UPDATE navigator_projects
+        SET
+          inputs_dirty = true,
+          last_dirty_at = now(),
+          updated_at = now()
+        WHERE client_id = $1
+          AND archived_at IS NULL
+      `,
+      [clientId],
+    );
+  });
   return getClient(pool, user, clientId);
 }
 

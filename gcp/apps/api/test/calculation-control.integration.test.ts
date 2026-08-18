@@ -25,7 +25,7 @@ function database(): DatabasePool {
     if (sql.includes("SELECT approval_status FROM profiles")) return result([{ approval_status: "approved" }]);
     if (sql.includes("FROM user_roles AS user_role")) return result([{ role: applicationRole }]);
     if (sql.includes("SELECT project.id, project.archived_at, client.brand_terms")) {
-      return result([{ archived_at: null, brand_terms: ["Seer"], id: projectId }]);
+      return result([{ archived_at: null, brand_terms: ["Seer"], domain: "seer.example", id: projectId }]);
     }
     if (sql.includes("FROM pipeline_runs") && sql.includes("status = 'succeeded'")) {
       return result([{ completed_at: new Date("2026-08-12T10:00:00Z"), id: runId }]);
@@ -114,6 +114,7 @@ describe("calculation control API", () => {
         sql.includes("DISTINCT ON (volume.keyword_id, volume.month)"),
       ),
     ).toHaveLength(2);
+    expect(executedSql.some((sql) => sql.includes("ORDER BY stage.attempts DESC"))).toBe(true);
   });
 
   it("deletes only a project-scoped GSC upload", async () => {

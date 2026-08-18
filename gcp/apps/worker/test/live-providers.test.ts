@@ -4,7 +4,9 @@ import {
   AhrefsClient,
   AnthropicSiteArchitectureClient,
   DataForSeoClient,
+  LivePipelineProviderHydrator,
 } from "../src/live-providers.js";
+import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 
 function dataForSeoResponse(items: unknown[]): Response {
   return new Response(
@@ -245,6 +247,74 @@ describe("managed pipeline providers", () => {
         ],
       ]),
     );
+  });
+
+  it("hydrates missing client authority before preflight", async () => {
+    const ahrefs = {
+      metrics: vi.fn(async () =>
+        new Map([
+          [
+            "pilltime.co.uk",
+            {
+              ahrefsRank: 120,
+              backlinks: 450,
+              domainRating: 38,
+              referringDomains: 90,
+              urlRating: null,
+            },
+          ],
+        ]),
+      ),
+    };
+    const query = vi.fn(async (sqlValue: string) => {
+      const sql = sqlValue.replace(/\s+/g, " ").trim();
+      if (sql.includes("SELECT input->>'mode' AS mode")) {
+        return { rowCount: 1, rows: [{ mode: "full" }] };
+      }
+      if (sql.includes("authority_domain_rating::text AS domain_rating")) {
+        return {
+          rowCount: 1,
+          rows: [{ backlinks: "0", domain_rating: "0", referring_domains: 0 }],
+        };
+      }
+      if (sql.includes("SELECT project.country, project.language, client.domain")) {
+        return {
+          rowCount: 1,
+          rows: [{ country: "GB", domain: "pilltime.co.uk", language: "en" }],
+        };
+      }
+      if (sql.includes("FROM authority_domain_cache")) {
+        return { rowCount: 0, rows: [] };
+      }
+      if (
+        sql.startsWith("UPDATE navigator_projects") ||
+        sql.startsWith("INSERT INTO authority_domain_cache")
+      ) {
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error(`Unexpected authority hydration SQL: ${sql}`);
+    });
+    const hydrator = new LivePipelineProviderHydrator(
+      {} as DataForSeoClient,
+      ahrefs as unknown as AhrefsClient,
+      {} as AnthropicSiteArchitectureClient,
+    );
+
+    await hydrator.hydrate(
+      { query } as unknown as DatabasePool,
+      "00000000-0000-4000-8000-000000000002",
+      "00000000-0000-4000-8000-000000000004",
+      "preflight",
+    );
+
+    expect(ahrefs.metrics).toHaveBeenCalledWith([
+      { mode: "domain", url: "pilltime.co.uk" },
+    ]);
+    expect(
+      query.mock.calls.some(([sql]) =>
+        String(sql).includes("INSERT INTO authority_domain_cache"),
+      ),
+    ).toBe(true);
   });
 
   it("uses direct Anthropic responses for site-architecture scoring", async () => {

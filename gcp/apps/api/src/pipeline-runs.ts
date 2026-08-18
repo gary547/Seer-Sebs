@@ -10,6 +10,7 @@ import {
   PIPELINE_STAGES,
   type PipelineStageId,
 } from "../../../packages/pipeline/src/definition.js";
+import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertProjectAccessByRole } from "./authorization.js";
 
 interface PipelineRunRow {
@@ -76,7 +77,11 @@ async function projectReadiness(
   client: PoolClient | DatabasePool,
   projectId: string,
 ): Promise<{
-  configuration: { brandTerms: string[] };
+  configuration: {
+    brandTerms: string[];
+    brandTermsSource: "domain_fallback" | "explicit" | "missing";
+    explicitBrandTerms: string[];
+  };
   gates: Array<{ id: string; label: string; ready: boolean }>;
   missing: string[];
   policy: {
@@ -184,24 +189,37 @@ async function projectReadiness(
   if (!row) {
     throw new HttpError(404, "project_not_found", "Project not found.");
   }
+  const brandTerms = resolveBrandTerms(row.brand_terms, row.domain);
+  const hasStoredAuthority =
+    Number(row.authority_domain_rating) > 0 ||
+    row.authority_referring_domains > 0 ||
+    Number(row.authority_backlinks) > 0;
+  const hasManualKeywords = Number(row.manual_keyword_count) > 0;
+  const hasQualifiedKeywords = Number(row.kept_keyword_count) > 0;
   const gates = [
     { id: "client_domain", label: "Client domain", ready: row.domain.trim().length > 0 },
     { id: "competitor_domains", label: "Competitor domains", ready: Number(row.competitor_count) > 0 },
-    { id: "explicit_brand_terms", label: "Explicit brand terms", ready: row.brand_terms.length > 0 },
+    { id: "explicit_brand_terms", label: "Brand terms", ready: brandTerms.terms.length > 0 },
     { id: "conversion_rate", label: "Conversion rate", ready: row.conversion_rate !== null },
     { id: "average_order_value", label: "Average order value", ready: row.aov !== null },
     {
       id: "client_domain_authority",
       label: "Client authority",
-      ready:
-        Number(row.authority_domain_rating) > 0 ||
-        row.authority_referring_domains > 0 ||
-        Number(row.authority_backlinks) > 0,
+      ready: hasStoredAuthority || row.domain.trim().length > 0,
+    },
+    {
+      id: "qualified_keywords",
+      label: "Qualified keywords",
+      ready: hasQualifiedKeywords || !hasManualKeywords,
     },
     { id: "active_scoring_config", label: "Scoring configuration", ready: Number(row.scoring_config_count) > 0 },
   ];
   return {
-    configuration: { brandTerms: row.brand_terms },
+    configuration: {
+      brandTerms: brandTerms.terms,
+      brandTermsSource: brandTerms.source,
+      explicitBrandTerms: row.brand_terms,
+    },
     gates,
     dirty: {
       inputs: row.inputs_dirty,

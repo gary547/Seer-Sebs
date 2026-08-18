@@ -6,6 +6,7 @@ import {
   createProject,
   listProjects,
   markProjectDirty,
+  updateClientBrandTerms,
   updateProject,
 } from "../src/tenancy.js";
 
@@ -128,5 +129,77 @@ describe("tenancy validation and authorization", () => {
       statusCode: 400,
     });
     expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it("marks every live project dirty when client brand terms change", async () => {
+    const transactionSql: string[] = [];
+    const client = {
+      query: vi.fn(async (sqlValue: string) => {
+        const sql = sqlValue.replace(/\s+/g, " ").trim();
+        transactionSql.push(sql);
+        if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+          return { rowCount: 0, rows: [] };
+        }
+        if (sql.startsWith("UPDATE clients")) {
+          return { rowCount: 1, rows: [{ id: clientId }] };
+        }
+        if (sql.startsWith("UPDATE navigator_projects")) {
+          return { rowCount: 1, rows: [] };
+        }
+        throw new Error(`Unexpected transaction SQL: ${sql}`);
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async (sqlValue: string) => {
+        const sql = sqlValue.replace(/\s+/g, " ").trim();
+        if (sql.includes("FROM user_roles AS user_role")) {
+          return { rowCount: 1, rows: [{ role: "super_admin" }] };
+        }
+        if (sql.includes("FROM clients") && sql.includes("WHERE id = $1")) {
+          return {
+            rowCount: 1,
+            rows: [{
+              analytics_connected: false,
+              archive_reason: null,
+              archived_at: null,
+              archived_by: null,
+              brand_terms: ["PillTime", "Pill Time"],
+              brand_type: null,
+              campaign_type: null,
+              company_name: "PillTime",
+              created_at: new Date("2026-08-18T10:00:00Z"),
+              domain: "pilltime.co.uk",
+              domain_normalized: "pilltime.co.uk",
+              gsc_connected: true,
+              id: clientId,
+              industry: "Pharmacy",
+              logo_url: null,
+              team_members: null,
+              updated_at: new Date("2026-08-18T10:00:00Z"),
+            }],
+          };
+        }
+        if (sql.includes("FROM competitors")) return { rowCount: 0, rows: [] };
+        if (sql.includes("FROM keyword_rules")) return { rowCount: 0, rows: [] };
+        throw new Error(`Unexpected pool SQL: ${sql}`);
+      }),
+    } as unknown as DatabasePool;
+
+    await expect(
+      updateClientBrandTerms(pool, user, clientId, {
+        brandTerms: ["PillTime", "Pill Time"],
+      }),
+    ).resolves.toMatchObject({
+      brand_terms: ["PillTime", "Pill Time"],
+      id: clientId,
+    });
+    expect(
+      transactionSql.some((sql) =>
+        sql.startsWith("UPDATE navigator_projects") &&
+        sql.includes("inputs_dirty = true"),
+      ),
+    ).toBe(true);
   });
 });

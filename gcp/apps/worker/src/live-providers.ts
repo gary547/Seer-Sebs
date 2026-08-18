@@ -681,12 +681,13 @@ export class AnthropicSiteArchitectureClient {
         .join("\n")
         .replace(/^```(?:json)?\s*/i, "")
         .replace(/\s*```$/, "");
-      let parsed: unknown = [];
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        parsed = [];
-      }
+      const parsed: unknown = (() => {
+        try {
+          return JSON.parse(text);
+        } catch {
+          return [];
+        }
+      })();
       for (const value of records(parsed)) {
         const index = numberOrNull(value.index);
         const score = numberOrNull(value.relevancyScore);
@@ -752,6 +753,9 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     );
     if (runResult.rows[0]?.mode === "recalculate") return;
     switch (stageId) {
+      case "preflight":
+        await this.hydrateAuthority(pool, projectId);
+        return;
       case "keyword-enrichment":
         await this.hydrateKeywordMetrics(pool, projectId);
         return;
@@ -1205,6 +1209,30 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     pool: DatabasePool,
     projectId: string,
   ): Promise<void> {
+    const current = await pool.query<{
+      backlinks: string;
+      domain_rating: string;
+      referring_domains: number;
+    }>(
+      `
+        SELECT
+          authority_domain_rating::text AS domain_rating,
+          authority_referring_domains AS referring_domains,
+          authority_backlinks::text AS backlinks
+        FROM navigator_projects
+        WHERE id = $1
+      `,
+      [projectId],
+    );
+    const stored = current.rows[0];
+    if (
+      stored &&
+      (Number(stored.domain_rating) > 0 ||
+        stored.referring_domains > 0 ||
+        Number(stored.backlinks) > 0)
+    ) {
+      return;
+    }
     const project = await this.project(pool, projectId);
     const domain = cleanDomain(project.domain);
     const cached = await pool.query<

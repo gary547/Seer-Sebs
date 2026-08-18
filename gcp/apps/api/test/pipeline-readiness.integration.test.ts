@@ -9,6 +9,7 @@ const userId = "00000000-0000-4000-8000-000000000001";
 const projectId = "00000000-0000-4000-8000-000000000002";
 const clientId = "00000000-0000-4000-8000-000000000003";
 const successfulRunId = "00000000-0000-4000-8000-000000000004";
+let readinessOverrides: Record<string, unknown> = {};
 
 function result(rows: unknown[], rowCount = rows.length) {
   return { rowCount, rows };
@@ -49,6 +50,7 @@ function database(): DatabasePool {
         promotable_gsc_query_count: "8400",
         scoring_config_count: "1",
         serp_dirty: false,
+        ...readinessOverrides,
       }]);
     }
     if (sql.includes("FROM pipeline_rollups AS rollup")) {
@@ -105,6 +107,7 @@ describe("autonomous pipeline readiness API", () => {
   const orchestrator = { start: vi.fn(async () => ({ executionName: "executions/test" })) };
 
   beforeEach(async () => {
+    readinessOverrides = {};
     orchestrator.start.mockClear();
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({ email: "admin@example.com", id: userId })),
@@ -134,6 +137,41 @@ describe("autonomous pipeline readiness API", () => {
       providerSummary: { cacheEntriesAvailable: 48, succeeded: 240 },
       rollups: [{ clusterDedupedExpectedIncrementalAnnual: 120000, doubleCountAnnual: 30000 }],
       substitutions: [{ count: 12, input: "content_fit", stageId: "har-readiness" }],
+    });
+  });
+
+  it("uses a safe domain fallback and resolves missing authority at run start", async () => {
+    readinessOverrides = {
+      authority_backlinks: "0",
+      authority_domain_rating: "0",
+      authority_referring_domains: 0,
+      brand_terms: [],
+      domain: "pilltime.co.uk",
+    };
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-readiness`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      configuration: {
+        brandTerms: ["pilltime"],
+        brandTermsSource: "domain_fallback",
+        explicitBrandTerms: [],
+      },
+      missing: [],
+      ready: true,
+    });
+  });
+
+  it("blocks an unqualified manual set before it can fail preflight", async () => {
+    readinessOverrides = {
+      kept_keyword_count: "0",
+      manual_keyword_count: "17561",
+      paid_eligible_keyword_count: "0",
+    };
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-readiness`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      missing: ["qualified_keywords"],
+      ready: false,
     });
   });
 

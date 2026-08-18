@@ -5,7 +5,11 @@ import AutonomousPipelinePanel from "./AutonomousPipelinePanel";
 import type { PipelineReadiness } from "@/integrations/gcp/pipeline";
 
 const readiness: PipelineReadiness = {
-  configuration: { brandTerms: ["Northstar", "Northstar Home"] },
+  configuration: {
+    brandTerms: ["Northstar", "Northstar Home"],
+    brandTermsSource: "explicit",
+    explicitBrandTerms: ["Northstar", "Northstar Home"],
+  },
   dirty: { inputs: false, keywords: false, serp: false },
   gates: [
     { id: "client_domain", label: "Client domain", ready: true },
@@ -69,12 +73,14 @@ describe("AutonomousPipelinePanel", () => {
     render(
       <AutonomousPipelinePanel
         archived={false}
+        onSaveBrandTerms={vi.fn()}
         onRun={vi.fn()}
         onSavePolicy={vi.fn()}
         onStampPrecurated={vi.fn()}
         readiness={readiness}
         run={null}
         running={false}
+        savingBrandTerms={false}
         savingPolicy={false}
         stampingPrecurated={false}
       />,
@@ -89,7 +95,8 @@ describe("AutonomousPipelinePanel", () => {
     expect(screen.getByText("900 paid-enrichment eligible")).toBeInTheDocument();
     expect(screen.getByText("Provider complete")).toBeInTheDocument();
     expect(screen.getByText("Fresh cache")).toBeInTheDocument();
-    expect(screen.getByText("Reviewed brand terms: Northstar, Northstar Home")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Northstar, Northstar Home")).toBeInTheDocument();
+    expect(screen.getByText("These terms are shared by every project for this client.")).toBeInTheDocument();
     expect(screen.getByText("Critical path")).toBeInTheDocument();
     expect(screen.getByText("Top clusters")).toBeInTheDocument();
     expect(screen.getByText("oled television")).toBeInTheDocument();
@@ -101,17 +108,20 @@ describe("AutonomousPipelinePanel", () => {
 
   it("starts a full server-side run and saves operator-controlled thresholds", () => {
     const onRun = vi.fn().mockResolvedValue(undefined);
+    const onSaveBrandTerms = vi.fn().mockResolvedValue(undefined);
     const onSavePolicy = vi.fn().mockResolvedValue(undefined);
     const onStampPrecurated = vi.fn().mockResolvedValue(undefined);
     render(
       <AutonomousPipelinePanel
         archived={false}
+        onSaveBrandTerms={onSaveBrandTerms}
         onRun={onRun}
         onSavePolicy={onSavePolicy}
         onStampPrecurated={onStampPrecurated}
         readiness={readiness}
         run={null}
         running={false}
+        savingBrandTerms={false}
         savingPolicy={false}
         stampingPrecurated={false}
       />,
@@ -131,6 +141,16 @@ describe("AutonomousPipelinePanel", () => {
       competitiveEnrichmentVolumeFloor: 500,
       gscPromotionImpressionsFloor: 25,
     });
+
+    fireEvent.change(screen.getByLabelText("Brand terms"), {
+      target: { value: "Northstar, Northstar Home, N Star" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save terms" }));
+    expect(onSaveBrandTerms).toHaveBeenCalledWith([
+      "Northstar",
+      "Northstar Home",
+      "N Star",
+    ]);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Mark manual set as pre-curated" }),

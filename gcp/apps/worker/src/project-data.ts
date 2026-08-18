@@ -31,6 +31,7 @@ import type {
   SerpCollectionStageData,
   SiteArchitectureStageData,
 } from "../../../packages/pipeline/src/stage-handlers.js";
+import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 
 interface ProjectSourceRow {
@@ -535,6 +536,8 @@ export async function loadProjectPipelineSource(
     ]);
   }
 
+  const brandTerms = resolveBrandTerms(project.brand_terms, project.domain);
+
   return {
     authority: {
       backlinks: Number(project.authority_backlinks),
@@ -542,7 +545,7 @@ export async function loadProjectPipelineSource(
       referringDomains: project.authority_referring_domains,
     },
     client: {
-      brandTerms: project.brand_terms,
+      brandTerms: brandTerms.terms,
       companyName: project.company_name,
       domain: project.domain,
       id: project.client_id,

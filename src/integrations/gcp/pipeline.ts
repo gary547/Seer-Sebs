@@ -59,7 +59,11 @@ export interface PipelineRun {
 }
 
 export interface PipelineReadiness {
-  configuration: { brandTerms: string[] };
+  configuration: {
+    brandTerms: string[];
+    brandTermsSource: "domain_fallback" | "explicit" | "missing";
+    explicitBrandTerms: string[];
+  };
   dirty: { inputs: boolean; keywords: boolean; serp: boolean };
   gates: Array<{ id: string; label: string; ready: boolean }>;
   missing: string[];

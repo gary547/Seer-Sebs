@@ -37,7 +37,10 @@ import {
   type PipelineRun,
   type PipelineReadiness,
 } from "@/integrations/gcp/pipeline";
-import { listProjects } from "@/integrations/gcp/tenancy";
+import {
+  listProjects,
+  updateClientBrandTerms,
+} from "@/integrations/gcp/tenancy";
 
 function dateTime(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString("en-GB") : "—";
@@ -50,6 +53,7 @@ export default function CalculationsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [running, setRunning] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
+  const [savingBrandTerms, setSavingBrandTerms] = useState(false);
   const [stampingPrecurated, setStampingPrecurated] = useState(false);
   const selectedProjectId = searchParams.get("projectId") ?? "";
 
@@ -95,8 +99,6 @@ export default function CalculationsPage() {
     enabled: Boolean(projectId) && !archived,
   });
 
-  if (!canManageUsers) return <Navigate to="/clients" replace />;
-
   const chooseProject = (value: string) => {
     const next = new URLSearchParams(searchParams);
     next.set("projectId", value);
@@ -132,6 +134,8 @@ export default function CalculationsPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "link-power-inspector", projectId] }),
     ]);
   }, [projectId, queryClient, terminalRunId]);
+
+  if (!canManageUsers) return <Navigate to="/clients" replace />;
 
   const runPipeline = async (mode: "full" | "recalculate" | "resume") => {
     if (!projectId || archived || running) return;
@@ -178,6 +182,20 @@ export default function CalculationsPage() {
       toast.error(error instanceof Error ? error.message : "Pre-curated action failed");
     } finally {
       setStampingPrecurated(false);
+    }
+  };
+
+  const saveBrandTerms = async (brandTerms: string[]) => {
+    if (!selectedProject?.client_id || archived || savingBrandTerms) return;
+    setSavingBrandTerms(true);
+    try {
+      await updateClientBrandTerms(selectedProject.client_id, brandTerms);
+      await refreshQueries();
+      toast.success("Brand terms saved");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Brand terms update failed");
+    } finally {
+      setSavingBrandTerms(false);
     }
   };
 
@@ -246,18 +264,10 @@ export default function CalculationsPage() {
               </Badge>
             )}
             <span>
-              Latest completion {dateTime(
-                latestRun?.status === "succeeded"
-                  ? latestRun.completedAt
-                  : control.data?.latestSuccessfulRun?.completedAt,
-              )}
+              Latest completion {dateTime(latestRun?.completedAt)}
             </span>
             <span className="font-mono">
-              {(
-                latestRun?.status === "succeeded"
-                  ? latestRun.id
-                  : control.data?.latestSuccessfulRun?.id
-              )?.slice(0, 8) ?? "—"}
+              {latestRun?.id.slice(0, 8) ?? "—"}
             </span>
           </div>
         )}
@@ -290,6 +300,7 @@ export default function CalculationsPage() {
       {projectId && !archived && (
         <AutonomousPipelinePanel
           archived={archived}
+          onSaveBrandTerms={saveBrandTerms}
           onRun={runPipeline}
           onSavePolicy={savePolicy}
           onStampPrecurated={stampPrecurated}
@@ -297,6 +308,7 @@ export default function CalculationsPage() {
           run={latestRun}
           running={running}
           savingPolicy={savingPolicy}
+          savingBrandTerms={savingBrandTerms}
           stampingPrecurated={stampingPrecurated}
         />
       )}

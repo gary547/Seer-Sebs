@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   Circle,
@@ -95,35 +95,57 @@ function money(value: number): string {
 
 interface Props {
   archived: boolean;
+  onSaveBrandTerms: (brandTerms: string[]) => Promise<void>;
   onRun: (mode: RunMode) => Promise<void>;
   onSavePolicy: (policy: PipelineReadiness["policy"]) => Promise<void>;
   onStampPrecurated: () => Promise<void>;
   readiness: PipelineReadiness | undefined;
   run: PipelineRun | null;
   running: boolean;
+  savingBrandTerms: boolean;
   savingPolicy: boolean;
   stampingPrecurated: boolean;
 }
 
 export default function AutonomousPipelinePanel({
   archived,
+  onSaveBrandTerms,
   onRun,
   onSavePolicy,
   onStampPrecurated,
   readiness,
   run,
   running,
+  savingBrandTerms,
   savingPolicy,
   stampingPrecurated,
 }: Props) {
   const [promotionFloor, setPromotionFloor] = useState<string | null>(null);
   const [competitiveFloor, setCompetitiveFloor] = useState<string | null>(null);
+  const [brandTermsText, setBrandTermsText] = useState("");
   const displayedPromotionFloor =
     promotionFloor ?? String(readiness?.policy.gscPromotionImpressionsFloor ?? 1);
   const displayedCompetitiveFloor =
     competitiveFloor ??
     String(readiness?.policy.competitiveEnrichmentVolumeFloor ?? 0);
   const canRun = Boolean(readiness?.ready) && !archived && !running;
+  const configuredBrandTerms = readiness?.configuration.explicitBrandTerms ?? [];
+  const displayedBrandTerms = configuredBrandTerms.length
+    ? configuredBrandTerms
+    : readiness?.configuration.brandTerms ?? [];
+  const displayedBrandTermsText = displayedBrandTerms.join(", ");
+
+  useEffect(() => {
+    setBrandTermsText(displayedBrandTermsText);
+  }, [displayedBrandTermsText, readiness?.projectId]);
+
+  const parsedBrandTerms = [...new Map(
+    brandTermsText
+      .split(",")
+      .map((term) => term.trim())
+      .filter(Boolean)
+      .map((term) => [term.toLowerCase(), term]),
+  ).values()];
 
   return (
     <section className="overflow-hidden rounded-xl border border-hairline bg-surface shadow-card">
@@ -153,11 +175,34 @@ export default function AutonomousPipelinePanel({
               </Badge>
             ))}
           </div>
-          {readiness?.configuration.brandTerms.length ? (
-            <p className="mt-3 text-xs text-ink-muted">
-              Reviewed brand terms: {readiness.configuration.brandTerms.join(", ")}
+          <div className="mt-4 rounded-lg border border-hairline bg-canvas/40 p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <label className="min-w-0 flex-1 space-y-1.5 text-xs text-ink-muted">
+                Brand terms
+                <Input
+                  aria-label="Brand terms"
+                  placeholder="brand, brand name, known variation"
+                  value={brandTermsText}
+                  onChange={(event) => setBrandTermsText(event.target.value)}
+                />
+              </label>
+              <Button
+                disabled={!readiness || archived || savingBrandTerms}
+                size="sm"
+                variant="outline"
+                onClick={() => void onSaveBrandTerms(parsedBrandTerms)}
+              >
+                {savingBrandTerms ? "Saving…" : "Save terms"}
+              </Button>
+            </div>
+            <p className="mt-2 text-[11px] leading-5 text-ink-muted">
+              {readiness?.configuration.brandTermsSource === "domain_fallback"
+                ? `Using ${readiness.configuration.brandTerms.join(", ")} from the client domain until explicit variations are saved.`
+                : readiness?.configuration.brandTermsSource === "explicit"
+                  ? "These terms are shared by every project for this client."
+                  : "Add at least one unambiguous brand term before classification."}
             </p>
-          ) : null}
+          </div>
         </div>
 
         <div className="border-t border-hairline bg-canvas/60 px-5 py-5 lg:border-l lg:border-t-0">
@@ -215,14 +260,18 @@ export default function AutonomousPipelinePanel({
             <span>{readiness?.preview.duplicateGscQueryCount ?? 0} existing duplicates</span>
             <span>{readiness?.preview.paidEligibleKeywordCount ?? 0} paid-enrichment eligible</span>
             <Button
-              className="ml-auto h-auto px-2 py-1 text-[11px]"
+              className={
+                readiness?.missing.includes("qualified_keywords")
+                  ? "ml-auto"
+                  : "ml-auto h-auto px-2 py-1 text-[11px]"
+              }
               disabled={
                 archived ||
                 stampingPrecurated ||
                 !readiness?.preview.manualKeywordCount
               }
               size="sm"
-              variant="ghost"
+              variant={readiness?.missing.includes("qualified_keywords") ? "outline" : "ghost"}
               onClick={() => void onStampPrecurated()}
             >
               {stampingPrecurated ? "Stamping…" : "Mark manual set as pre-curated"}
