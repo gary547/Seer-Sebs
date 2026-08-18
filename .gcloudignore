@@ -1,5 +1,6 @@
 .git
 .git/**
+.grog/**
 node_modules/**
 gcp/node_modules/**
 dist/**
