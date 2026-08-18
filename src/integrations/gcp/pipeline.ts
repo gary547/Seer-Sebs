@@ -152,10 +152,79 @@ export async function startProjectPipeline(
   });
 }
 
+export const PIPELINE_OUTPUT_BATCH_SIZE = 4;
+
+export interface PipelineStageOutput {
+  attempts: number;
+  completedAt: string | null;
+  id: PipelineStageId;
+  output?: Record<string, unknown> | null;
+  startedAt: string | null;
+  state: PipelineStageState;
+}
+
+export interface PipelineStageOutputPage {
+  runId: string;
+  stages: PipelineStageOutput[];
+}
+
+export function chunkPipelineStageIds(
+  stageIds: readonly PipelineStageId[] = PIPELINE_STAGE_IDS,
+  batchSize = PIPELINE_OUTPUT_BATCH_SIZE,
+): PipelineStageId[][] {
+  const size = Math.max(1, batchSize);
+  const batches: PipelineStageId[][] = [];
+  for (let index = 0; index < stageIds.length; index += size) {
+    batches.push(stageIds.slice(index, index + size));
+  }
+  return batches;
+}
+
+export function mergePipelineRunOutputs(
+  run: PipelineRun,
+  pages: readonly PipelineStageOutputPage[],
+): PipelineRun {
+  const outputs = new Map<PipelineStageId, Record<string, unknown> | null | undefined>();
+  for (const page of pages) {
+    for (const stage of page.stages) {
+      outputs.set(stage.id, stage.output);
+    }
+  }
+  return {
+    ...run,
+    stages: run.stages.map((stage) =>
+      outputs.has(stage.id)
+        ? { ...stage, output: outputs.get(stage.id) }
+        : stage,
+    ),
+  };
+}
+
 export async function getPipelineRun(runId: string): Promise<PipelineRun> {
   return authenticatedRequest<PipelineRun>(
     `/v1/pipeline-runs/${runId}?includeOutput=false`,
   );
+}
+
+export async function getPipelineRunStageOutputs(
+  runId: string,
+  stageIds: readonly PipelineStageId[],
+): Promise<PipelineStageOutputPage> {
+  const query = new URLSearchParams({ ids: stageIds.join(",") });
+  return authenticatedRequest<PipelineStageOutputPage>(
+    `/v1/pipeline-runs/${runId}/stages?${query.toString()}`,
+  );
+}
+
+export async function getPipelineRunWithOutputs(
+  runId: string,
+): Promise<PipelineRun> {
+  const run = await getPipelineRun(runId);
+  const pages: PipelineStageOutputPage[] = [];
+  for (const batch of chunkPipelineStageIds(run.stages.map((stage) => stage.id))) {
+    pages.push(await getPipelineRunStageOutputs(runId, batch));
+  }
+  return mergePipelineRunOutputs(run, pages);
 }
 
 export async function getLatestProjectPipelineRun(

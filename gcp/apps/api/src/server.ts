@@ -47,8 +47,10 @@ import {
   createPipelineRun,
   getLatestProjectPipelineRun,
   getPipelineRun,
+  getPipelineRunStageOutputs,
   getProjectPipelineReadiness,
   markProjectKeywordsPrecurated,
+  parsePipelineStageIds,
   updateProjectPipelinePolicy,
 } from "./pipeline-runs.js";
 import {
@@ -384,6 +386,11 @@ async function handleRequest(
   }
 
   const assetId = uuidPath(url.pathname, "/v1/assets/");
+  const runStagesId = uuidSubresourcePath(
+    url.pathname,
+    "/v1/pipeline-runs/",
+    "/stages",
+  );
   const runId = uuidPath(url.pathname, "/v1/pipeline-runs/");
   const projectId = uuidPath(url.pathname, "/v1/projects/");
   const clientProjectClientId = uuidSubresourcePath(
@@ -662,6 +669,7 @@ async function handleRequest(
     url.pathname === "/v1/reference-data/serp-features" ||
     url.pathname === "/v1/conversion-overrides" ||
     assetId !== null ||
+    runStagesId !== null ||
     runId !== null ||
     projectId !== null ||
     clientId !== null ||
@@ -2205,6 +2213,24 @@ async function handleRequest(
     return;
   }
 
+  if (runStagesId) {
+    if (method !== "GET") {
+      methodNotAllowed(response, ["GET"]);
+    }
+
+    sendJson(
+      response,
+      200,
+      await getPipelineRunStageOutputs(
+        runtime.pool,
+        user,
+        runStagesId,
+        parsePipelineStageIds(url.searchParams.get("ids")),
+      ),
+    );
+    return;
+  }
+
   if (runId) {
     if (method !== "GET") {
       methodNotAllowed(response, ["GET"]);
@@ -2217,7 +2243,7 @@ async function handleRequest(
         runtime.pool,
         user,
         runId,
-        url.searchParams.get("includeOutput") !== "false",
+        url.searchParams.get("includeOutput") === "true",
       ),
     );
     return;

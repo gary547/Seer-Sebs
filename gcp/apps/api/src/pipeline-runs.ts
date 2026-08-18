@@ -38,6 +38,47 @@ interface EventCountRow {
 
 export type PipelineRunMode = "full" | "recalculate" | "resume";
 
+export const PIPELINE_OUTPUT_BATCH_LIMIT = 6;
+
+const PIPELINE_STAGE_ID_SET = new Set<string>(
+  PIPELINE_STAGES.map((stage) => stage.id),
+);
+
+export function parsePipelineStageIds(value: string | null): PipelineStageId[] {
+  const ids = [
+    ...new Set(
+      (value ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0),
+    ),
+  ];
+  if (ids.length === 0) {
+    throw new HttpError(
+      400,
+      "invalid_pipeline_stages",
+      "Provide at least one pipeline stage id.",
+    );
+  }
+  if (ids.length > PIPELINE_OUTPUT_BATCH_LIMIT) {
+    throw new HttpError(
+      400,
+      "pipeline_stage_batch_too_large",
+      `Request at most ${PIPELINE_OUTPUT_BATCH_LIMIT} stages per batch.`,
+    );
+  }
+  for (const id of ids) {
+    if (!PIPELINE_STAGE_ID_SET.has(id)) {
+      throw new HttpError(
+        400,
+        "invalid_pipeline_stage",
+        `Unknown pipeline stage: ${id}.`,
+      );
+    }
+  }
+  return ids as PipelineStageId[];
+}
+
 function pipelineRunMode(value: unknown): PipelineRunMode {
   if (value === undefined) return "full";
   if (value === "full" || value === "resume" || value === "recalculate") {
@@ -552,12 +593,11 @@ export async function createPipelineRun(
   };
 }
 
-export async function getPipelineRun(
+async function loadAuthorizedPipelineRun(
   pool: DatabasePool,
   user: AuthenticatedUser,
   id: string,
-  includeOutput = true,
-): Promise<Record<string, unknown>> {
+): Promise<PipelineRunRow> {
   const runResult = await pool.query<PipelineRunRow>(
     `
       SELECT id, user_id, status, input, created_at, started_at, completed_at
@@ -586,6 +626,16 @@ export async function getPipelineRun(
     }
     await assertProjectAccessByRole(pool, user.id, projectId);
   }
+  return run;
+}
+
+export async function getPipelineRun(
+  pool: DatabasePool,
+  user: AuthenticatedUser,
+  id: string,
+  includeOutput = true,
+): Promise<Record<string, unknown>> {
+  const run = await loadAuthorizedPipelineRun(pool, user, id);
 
   const [stageResult, eventResult] = await Promise.all([
     pool.query<PipelineStageRow>(
@@ -639,6 +689,55 @@ export async function getPipelineRun(
     }),
     startedAt: run.started_at?.toISOString() ?? null,
     status: run.status,
+  };
+}
+
+export async function getPipelineRunStageOutputs(
+  pool: DatabasePool,
+  user: AuthenticatedUser,
+  id: string,
+  stageIds: readonly PipelineStageId[],
+): Promise<Record<string, unknown>> {
+  await loadAuthorizedPipelineRun(pool, user, id);
+  const stageResult = await pool.query<PipelineStageRow>(
+    `
+      SELECT
+        stage_id,
+        state,
+        attempts,
+        output,
+        started_at,
+        completed_at
+      FROM pipeline_stage_runs
+      WHERE run_id = $1
+        AND stage_id = ANY($2::text[])
+    `,
+    [id, stageIds],
+  );
+  const rowsByStage = new Map(
+    stageResult.rows.map((stage) => [stage.stage_id, stage]),
+  );
+
+  return {
+    runId: id,
+    stages: stageIds.map((stageId) => {
+      const stage = rowsByStage.get(stageId);
+      if (!stage) {
+        throw new HttpError(
+          404,
+          "pipeline_stage_not_found",
+          `Pipeline stage ${stageId} was not found.`,
+        );
+      }
+      return {
+        attempts: stage.attempts,
+        completedAt: stage.completed_at?.toISOString() ?? null,
+        id: stage.stage_id,
+        output: stage.output,
+        startedAt: stage.started_at?.toISOString() ?? null,
+        state: stage.state,
+      };
+    }),
   };
 }
 

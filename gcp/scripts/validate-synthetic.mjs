@@ -5,6 +5,7 @@ import {
   parseRepresentativeProjectFixture,
   summariseRepresentativeFixture,
 } from "../../dist/gcp/packages/fixtures/src/representative-project.js";
+import { attachPipelineRunOutputs } from "./pipeline-run-outputs.mjs";
 
 const apiBaseUrl = process.env.SEER_LOCAL_API_URL ?? "http://127.0.0.1:18080";
 const fixtureUrl = new URL("../fixtures/representative-project.json", import.meta.url);
@@ -57,7 +58,12 @@ async function waitForTerminalRun(token, runId) {
       run.status === "failed" ||
       (run.status === "succeeded" && run.deliveredEventCount === 24)
     ) {
-      return run;
+      return attachPipelineRunOutputs({
+        apiBaseUrl,
+        jsonRequest,
+        requestInit: authenticated(token),
+        run,
+      });
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }

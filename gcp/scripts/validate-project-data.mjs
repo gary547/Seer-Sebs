@@ -5,6 +5,7 @@ import {
   normaliseKeyword,
   parseRepresentativeProjectFixture,
 } from "../../dist/gcp/packages/fixtures/src/representative-project.js";
+import { attachPipelineRunOutputs } from "./pipeline-run-outputs.mjs";
 
 const apiBaseUrl = process.env.SEER_LOCAL_API_URL ?? "http://127.0.0.1:18080";
 const statePath =
@@ -58,7 +59,14 @@ async function waitForRun(token, runId) {
       `${apiBaseUrl}/v1/pipeline-runs/${runId}`,
       authenticated(token),
     );
-    if (run.status === "succeeded" && run.deliveredEventCount === 24) return run;
+    if (run.status === "succeeded" && run.deliveredEventCount === 24) {
+      return attachPipelineRunOutputs({
+        apiBaseUrl,
+        jsonRequest,
+        requestInit: authenticated(token),
+        run,
+      });
+    }
     if (run.status === "failed") {
       throw new Error(`Project-backed pipeline failed: ${JSON.stringify(run)}`);
     }

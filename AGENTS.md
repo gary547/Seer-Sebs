@@ -144,6 +144,10 @@ worker workflows, event delivery, object persistence, and restart persistence.
   manually curated keyword set. `POST /v1/projects/:projectId/pipeline-runs`
   accepts `full`, `resume` and `recalculate` modes; recalculation must not repeat
   paid provider stages.
+- `GET /v1/pipeline-runs/:id` returns run status without stage payloads.
+  `GET /v1/pipeline-runs/:id/stages?ids=a,b` returns a bounded output batch.
+  The web client assembles a full run from those batches instead of requesting
+  `includeOutput=true`, which exceeds the Cloud Run response limit.
 - Pipeline readiness resolves client brand terms from reviewed explicit terms
   first and may fall back only to a safe registrable-domain label. Short or
   generic labels such as `ao` and `tvs` must remain blocked until an operator
