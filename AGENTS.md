@@ -169,6 +169,10 @@ worker workflows, event delivery, object persistence, and restart persistence.
   category, quarter, trend, confidence and cannibalisation output. Client-facing
   totals must use the deduplicated value while retaining the naive total for
   auditability.
+- Categorisation taxonomies must be project-aware. The television-specific
+  taxonomy applies only to television/electronics projects; other industries
+  fall back to the configured project category focus rather than inheriting an
+  unrelated hardcoded category.
 - Migration `027_calculation_control_contract` materializes legacy v1 forecast
   values from the lossless migration archive into
   `legacy_keyword_forecasts` for read-only HAR/Revenue comparison and adds the

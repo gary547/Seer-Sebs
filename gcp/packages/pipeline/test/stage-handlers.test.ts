@@ -142,6 +142,34 @@ describe("data-driven pipeline handlers", () => {
     expect(categorisation.summary).toEqual(fixture.expected.summary);
   });
 
+  it("uses the project focus instead of the television taxonomy for other industries", () => {
+    const fixture = parseRepresentativeProjectFixture(rawFixture);
+    const projectFixture = {
+      ...fixture,
+      project: {
+        ...fixture.project,
+        categoryFocus: "Weightloss",
+      },
+    };
+    const intake = executeDataDrivenStage("intake", projectFixture, {}) as IntakeStageData;
+    const promotion = executeDataDrivenStage("gsc-promotion", projectFixture, {
+      intake,
+    }) as GscPromotionStageData;
+    const detox = executeDataDrivenStage("detox", projectFixture, {
+      "gsc-promotion": promotion,
+    }) as DetoxStageData;
+    const categorisation = executeDataDrivenStage("categorisation", projectFixture, {
+      detox,
+    }) as CategorisationStageData;
+
+    expect(
+      categorisation.keywords
+        .filter((keyword) => keyword.categorisation.category !== "Brand")
+        .filter((keyword) => keyword.categorisation.category !== "Competitor")
+        .every((keyword) => keyword.categorisation.category === "Weightloss"),
+    ).toBe(true);
+  });
+
   it("applies whitelist precedence before competitor removal", () => {
     const fixture = parseRepresentativeProjectFixture(rawFixture);
     const intake = executeDataDrivenStage("intake", fixture, {}) as IntakeStageData;

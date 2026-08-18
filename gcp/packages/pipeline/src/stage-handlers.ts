@@ -963,6 +963,10 @@ function tvTags(keyword: string): string[] {
   return tags.slice(0, 5);
 }
 
+function usesTelevisionTaxonomy(categoryFocus: string): boolean {
+  return /\b(?:electronics|televisions?|tvs?)\b/i.test(categoryFocus);
+}
+
 function categoriseKeyword(
   keyword: DetoxedKeyword,
   fixture: ProjectPipelineSource,
@@ -999,6 +1003,15 @@ function categoriseKeyword(
   }
 
   const intent = classifyIntent(text, fixture);
+  if (!usesTelevisionTaxonomy(fixture.project.categoryFocus)) {
+    return {
+      category: fixture.project.categoryFocus,
+      intent,
+      source: "taxonomy",
+      tags: [fixture.project.categoryFocus],
+      tier: decideTier(text, intent),
+    };
+  }
   if (/\b(repair|fix)\b/.test(text)) {
     return {
       category: "TV Repair",
