@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import { gzipSync } from "fflate";
+
 export interface ErrorBody {
   error: {
     code: string;
@@ -23,12 +25,21 @@ export function sendJson(
   response: ServerResponse,
   statusCode: number,
   body: unknown,
+  options: { gzip?: boolean } = {},
 ): void {
   response.statusCode = statusCode;
   response.setHeader("cache-control", "no-store");
   response.setHeader("content-type", "application/json; charset=utf-8");
   response.setHeader("x-content-type-options", "nosniff");
-  response.end(JSON.stringify(body));
+  const payload = Buffer.from(JSON.stringify(body));
+  if (options.gzip) {
+    const compressed = Buffer.from(gzipSync(new Uint8Array(payload)));
+    response.setHeader("content-encoding", "gzip");
+    response.setHeader("content-length", String(compressed.length));
+    response.end(compressed);
+    return;
+  }
+  response.end(payload);
 }
 
 export function sendError(

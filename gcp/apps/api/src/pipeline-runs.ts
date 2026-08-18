@@ -38,7 +38,7 @@ interface EventCountRow {
 
 export type PipelineRunMode = "full" | "recalculate" | "resume";
 
-export const PIPELINE_OUTPUT_BATCH_LIMIT = 6;
+export const PIPELINE_OUTPUT_BATCH_LIMIT = 1;
 
 const PIPELINE_STAGE_ID_SET = new Set<string>(
   PIPELINE_STAGES.map((stage) => stage.id),

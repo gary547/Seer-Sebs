@@ -101,9 +101,9 @@ describe("pipeline run stage batches", () => {
     );
   });
 
-  it("returns only the requested stage outputs", async () => {
+  it("returns only the requested stage output", async () => {
     const response = await fetch(
-      `${baseUrl}/v1/pipeline-runs/${runId}/stages?ids=rollup-output,categorisation`,
+      `${baseUrl}/v1/pipeline-runs/${runId}/stages?ids=rollup-output`,
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -117,21 +117,13 @@ describe("pipeline run stage batches", () => {
           startedAt: startedAt.toISOString(),
           state: "succeeded",
         },
-        {
-          attempts: 1,
-          completedAt: completedAt.toISOString(),
-          id: "categorisation",
-          output: { rows: 12, stageId: "categorisation" },
-          startedAt: startedAt.toISOString(),
-          state: "succeeded",
-        },
       ],
     });
   });
 
   it("rejects oversized or unknown batches", async () => {
     const oversized = await fetch(
-      `${baseUrl}/v1/pipeline-runs/${runId}/stages?ids=intake,detox,preflight,categorisation,clustering,authority,backlinks`,
+      `${baseUrl}/v1/pipeline-runs/${runId}/stages?ids=intake,detox`,
     );
     expect(oversized.status).toBe(400);
     await expect(oversized.json()).resolves.toMatchObject({

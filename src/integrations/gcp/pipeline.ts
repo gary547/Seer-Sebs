@@ -152,7 +152,7 @@ export async function startProjectPipeline(
   });
 }
 
-export const PIPELINE_OUTPUT_BATCH_SIZE = 4;
+export const PIPELINE_OUTPUT_BATCH_SIZE = 1;
 
 export interface PipelineStageOutput {
   attempts: number;

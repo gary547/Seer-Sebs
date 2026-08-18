@@ -2227,6 +2227,7 @@ async function handleRequest(
         runStagesId,
         parsePipelineStageIds(url.searchParams.get("ids")),
       ),
+      { gzip: true },
     );
     return;
   }
