@@ -144,6 +144,19 @@ worker workflows, event delivery, object persistence, and restart persistence.
   manually curated keyword set. `POST /v1/projects/:projectId/pipeline-runs`
   accepts `full`, `resume` and `recalculate` modes; recalculation must not repeat
   paid provider stages.
+- Pipeline readiness resolves client brand terms from reviewed explicit terms
+  first and may fall back only to a safe registrable-domain label. Short or
+  generic labels such as `ao` and `tvs` must remain blocked until an operator
+  supplies explicit terms. Updating client brand terms marks every live project
+  for that client input-dirty.
+- A project with manual keywords and zero kept keywords must fail the
+  `qualified_keywords` readiness gate before a paid run starts. Only the
+  explicit `pipeline-precurated` operator action may bypass detox for a curated
+  manual set.
+- Missing client domain authority is hydrated from Ahrefs during full-run
+  preflight and cached for later projects; existing positive authority metrics
+  must not be refetched. Provider failures must surface as failed preflight,
+  never as a permanently healthy readiness state.
 - Keep domain and URL authority caches shared across projects, preserve source
   and freshness provenance, and never overwrite a positive manually imported
   volume with an empty provider value. Competitive SERP fetching is performed
