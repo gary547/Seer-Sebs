@@ -367,4 +367,106 @@ describe("managed pipeline providers", () => {
     expect(headers.get("x-api-key")).toBe("anthropic-key");
     expect(headers.has("authorization")).toBe(false);
   });
+
+  it("persists keyword enrichment batches and retries remaining work", async () => {
+    let now = 0;
+    const enrichKeywords = vi.fn(async (keywords: readonly string[]) => {
+      now += 1;
+      return keywords.map((keyword) => ({
+        avgMonthlyVolume: 100,
+        coreKeyword: keyword,
+        intent: "commercial",
+        keyword,
+        keywordDifficulty: 20,
+        monthlyVolumes: [{ month: "2026-06-01", volume: 90 }],
+      }));
+    });
+    const clientQuery = vi.fn(async (sqlValue: string) => {
+      const sql = String(sqlValue).replace(/\s+/g, " ").trim();
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+        return { rowCount: 0, rows: [] };
+      }
+      if (
+        sql.includes("INSERT INTO local_provider_keyword_inputs") ||
+        sql.includes("INSERT INTO local_provider_keyword_monthly_volumes")
+      ) {
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error(`Unexpected persist SQL: ${sql}`);
+    });
+    const query = vi.fn(async (sqlValue: string) => {
+      const sql = String(sqlValue).replace(/\s+/g, " ").trim();
+      if (sql.includes("SELECT input->>'mode' AS mode")) {
+        return { rowCount: 1, rows: [{ mode: "full" }] };
+      }
+      if (sql.includes("SELECT project.country, project.language, client.domain")) {
+        return {
+          rowCount: 1,
+          rows: [{ country: "GB", domain: "ao.com", language: "en" }],
+        };
+      }
+      if (sql.includes("FROM keywords AS keyword")) {
+        return {
+          rowCount: 2,
+          rows: [
+            {
+              avg_monthly_volume: null,
+              id: "00000000-0000-4000-8000-000000000011",
+              keyword: "ao tv",
+              normalised_keyword: "ao tv",
+              provider_fetched_at: null,
+              ranking_lookup_checked_at: null,
+              ranking_url: null,
+            },
+            {
+              avg_monthly_volume: null,
+              id: "00000000-0000-4000-8000-000000000012",
+              keyword: "ao washing machine",
+              normalised_keyword: "ao washing machine",
+              provider_fetched_at: null,
+              ranking_lookup_checked_at: null,
+              ranking_url: null,
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected hydration SQL: ${sql}`);
+    });
+    const hydrator = new LivePipelineProviderHydrator(
+      { enrichKeywords } as unknown as DataForSeoClient,
+      {} as AhrefsClient,
+      {} as AnthropicSiteArchitectureClient,
+      async () => undefined,
+      () => now,
+      780_000,
+      1,
+      1,
+    );
+    const pool = {
+      connect: vi.fn(async () => ({
+        query: clientQuery,
+        release: vi.fn(),
+      })),
+      query,
+    } as unknown as DatabasePool;
+
+    await expect(
+      hydrator.hydrate(
+        pool,
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000004",
+        "keyword-enrichment",
+      ),
+    ).rejects.toMatchObject({
+      code: "provider_hydration_incomplete",
+      statusCode: 503,
+    });
+    expect(enrichKeywords).toHaveBeenCalledTimes(1);
+    expect(enrichKeywords).toHaveBeenCalledWith(["ao tv"], "GB", "en");
+    expect(
+      clientQuery.mock.calls.some(([sql]) =>
+        String(sql).includes("INSERT INTO local_provider_keyword_inputs"),
+      ),
+    ).toBe(true);
+  });
 });

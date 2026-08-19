@@ -118,7 +118,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
         cpu_idle = true
         limits = {
           cpu    = "2"
-          memory = each.key == "worker" ? "2Gi" : "1Gi"
+          memory = each.key == "worker" ? "4Gi" : "1Gi"
         }
       }
 

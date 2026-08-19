@@ -4,6 +4,7 @@ import { normaliseKeyword } from "../../../packages/fixtures/src/representative-
 import type { PipelineStageId } from "../../../packages/pipeline/src/definition.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
+import { HttpError } from "../../../packages/runtime/src/http.js";
 
 interface ProjectProviderRow {
   country: string | null;
@@ -729,6 +730,9 @@ export interface PipelineProviderHydrator {
   ): Promise<void>;
 }
 
+export const KEYWORD_ENRICHMENT_BATCH_SIZE = 200;
+export const KEYWORD_HYDRATION_BUDGET_MS = 720_000;
+
 export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
   constructor(
     private readonly dataForSeo: DataForSeoClient,
@@ -739,6 +743,8 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     ) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
     private readonly now: () => number = Date.now,
     private readonly serpWaitMilliseconds = 780_000,
+    private readonly keywordHydrationBudgetMs = KEYWORD_HYDRATION_BUDGET_MS,
+    private readonly keywordEnrichmentBatchSize = KEYWORD_ENRICHMENT_BATCH_SIZE,
   ) {}
 
   async hydrate(
@@ -834,18 +840,40 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       this.project(pool, projectId),
       this.keywords(pool, projectId),
     ]);
-    const staleBefore = Date.now() - 30 * 24 * 60 * 60 * 1_000;
+    const staleBefore = this.now() - 30 * 24 * 60 * 60 * 1_000;
     const requiresFetch = keywords.filter(
       (keyword) =>
         keyword.provider_fetched_at === null ||
         keyword.provider_fetched_at.getTime() < staleBefore,
     );
     if (requiresFetch.length === 0) return;
-    const values = await this.dataForSeo.enrichKeywords(
-      requiresFetch.map((keyword) => keyword.keyword),
-      project.country,
-      project.language,
-    );
+    const deadline = this.now() + this.keywordHydrationBudgetMs;
+    const groups = batches(requiresFetch, this.keywordEnrichmentBatchSize);
+    let remaining = requiresFetch.length;
+    for (const group of groups) {
+      if (this.now() >= deadline) {
+        throw new HttpError(
+          503,
+          "provider_hydration_incomplete",
+          `Keyword enrichment paused after persisting progress. ${remaining} keywords remaining.`,
+        );
+      }
+      const values = await this.dataForSeo.enrichKeywords(
+        group.map((keyword) => keyword.keyword),
+        project.country,
+        project.language,
+      );
+      await this.persistEnrichedKeywords(pool, projectId, values);
+      remaining -= group.length;
+    }
+  }
+
+  private async persistEnrichedKeywords(
+    pool: DatabasePool,
+    projectId: string,
+    values: readonly EnrichedKeyword[],
+  ): Promise<void> {
+    if (values.length === 0) return;
     await withTransaction(pool, async (client) => {
       for (const value of values) {
         const key = normaliseKeyword(value.keyword);

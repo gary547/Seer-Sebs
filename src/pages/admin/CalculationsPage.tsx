@@ -32,6 +32,7 @@ import {
   getLatestProjectPipelineRun,
   getProjectPipelineReadiness,
   markProjectKeywordsPrecurated,
+  resolvePipelineFailure,
   startProjectPipeline,
   updateProjectPipelinePolicy,
   type PipelineRun,
@@ -200,7 +201,11 @@ export default function CalculationsPage() {
   };
 
   const latestRun = latestPipeline.data?.run ?? null;
-  const failedStage = latestRun?.stages.find((stage) => stage.state === "failed");
+  const pipelineFailure = latestRun ? resolvePipelineFailure(latestRun) : null;
+  const failedStage = pipelineFailure
+    ? latestRun?.stages.find((stage) => stage.id === pipelineFailure.stageId) ??
+      latestRun?.stages.find((stage) => stage.state === "failed")
+    : null;
 
   return (
     <div className="mx-auto max-w-[1380px] space-y-5 pb-12">
@@ -285,7 +290,10 @@ export default function CalculationsPage() {
         <Alert variant="destructive">
           <TriangleAlert className="h-4 w-4" />
           <AlertTitle>Latest pipeline failed at {failedStage.id}</AlertTitle>
-          <AlertDescription>The stage exhausted {failedStage.attempts} attempts. The next run can resume safely.</AlertDescription>
+          <AlertDescription>
+            {pipelineFailure?.message ??
+              `The stage exhausted ${failedStage.attempts} attempts. The next run can resume safely.`}
+          </AlertDescription>
         </Alert>
       )}
 

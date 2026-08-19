@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PIPELINE_STAGES } from "../../../packages/pipeline/src/definition.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
+import { resolvePipelineRunFailure } from "../src/pipeline-runs.js";
 import { createApiServer } from "../src/server.js";
 
 const userId = "00000000-0000-4000-8000-000000000001";
@@ -72,6 +73,34 @@ function database(): DatabasePool {
   });
   return { connect: vi.fn(), query } as unknown as DatabasePool;
 }
+
+describe("pipeline failure attribution", () => {
+  it("prefers the recorded failed stage over cascaded zeros", () => {
+    expect(
+      resolvePipelineRunFailure([
+        {
+          attempts: 0,
+          id: "categorisation",
+          output: { failedStage: "keyword-enrichment", reason: "pipeline_failed" },
+          state: "failed",
+        },
+        {
+          attempts: 2,
+          id: "keyword-enrichment",
+          output: {
+            failedStage: "keyword-enrichment",
+            message: "Provider API failed after five attempts.",
+          },
+          state: "failed",
+        },
+      ]),
+    ).toEqual({
+      attempts: 2,
+      message: "Provider API failed after five attempts.",
+      stageId: "keyword-enrichment",
+    });
+  });
+});
 
 describe("pipeline run stage batches", () => {
   let server: ReturnType<typeof createApiServer>;
@@ -143,8 +172,10 @@ describe("pipeline run stage batches", () => {
     const response = await fetch(`${baseUrl}/v1/pipeline-runs/${runId}`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
+      failure: unknown;
       stages: Array<{ output?: unknown }>;
     };
     expect(body.stages[0]?.output).toBeUndefined();
+    expect(body.failure).toBeNull();
   });
 });

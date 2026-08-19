@@ -113,6 +113,20 @@ describe("managed database runtime contract", () => {
     expect(workflow).toContain("raise: $${stageError}");
   });
 
+  it("runs categorisation in parallel with enrichment instead of after it", async () => {
+    const workflow = await read("gcp/workflows/pipeline.yaml.tftpl");
+    const detox = workflow.indexOf('stageId: "detox"');
+    const categorisation = workflow.indexOf('stageId: "categorisation"');
+    const preflight = workflow.indexOf('stageId: "preflight"');
+    const enrichment = workflow.indexOf('stageId: "keyword-enrichment"');
+
+    expect(detox).toBeGreaterThan(-1);
+    expect(categorisation).toBeGreaterThan(detox);
+    expect(preflight).toBeGreaterThan(categorisation);
+    expect(enrichment).toBeGreaterThan(preflight);
+    expect(workflow).toContain("categorisationTrack:");
+  });
+
   it("exposes the API without an allUsers IAM binding blocked by domain policy", async () => {
     const runtime = await read("gcp/infra/runtime.tf");
 

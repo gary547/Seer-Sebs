@@ -40,6 +40,46 @@ export type PipelineRunMode = "full" | "recalculate" | "resume";
 
 export const PIPELINE_OUTPUT_BATCH_LIMIT = 1;
 
+export interface PipelineRunFailure {
+  attempts: number;
+  message: string | null;
+  stageId: PipelineStageId;
+}
+
+function outputRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function resolvePipelineRunFailure(
+  stages: ReadonlyArray<{
+    attempts: number;
+    id: PipelineStageId;
+    output?: unknown;
+    state: string;
+  }>,
+): PipelineRunFailure | null {
+  const failed = stages.filter((stage) => stage.state === "failed");
+  if (failed.length === 0) return null;
+  const recorded = failed
+    .map((stage) => {
+      const failedStage = outputRecord(stage.output)?.failedStage;
+      return typeof failedStage === "string" ? failedStage : null;
+    })
+    .find((stageId): stageId is string => Boolean(stageId));
+  const actual =
+    stages.find((stage) => stage.id === recorded) ??
+    failed.find((stage) => stage.attempts > 0) ??
+    failed[0]!;
+  const message = outputRecord(actual.output)?.message;
+  return {
+    attempts: actual.attempts,
+    message: typeof message === "string" && message.trim() ? message : null,
+    stageId: actual.id,
+  };
+}
+
 const PIPELINE_STAGE_ID_SET = new Set<string>(
   PIPELINE_STAGES.map((stage) => stage.id),
 );
@@ -644,7 +684,18 @@ export async function getPipelineRun(
           stage_id,
           state,
           attempts,
-          ${includeOutput ? "output" : "NULL::jsonb AS output"},
+          ${
+            includeOutput
+              ? "output"
+              : `CASE
+            WHEN state = 'failed' THEN jsonb_strip_nulls(jsonb_build_object(
+              'failedStage', output->>'failedStage',
+              'message', left(output->>'message', 500),
+              'reason', output->>'reason'
+            ))
+            ELSE NULL
+          END AS output`
+          },
           started_at,
           completed_at
         FROM pipeline_stage_runs
@@ -662,31 +713,34 @@ export async function getPipelineRun(
     ),
   ]);
   const rowsByStage = new Map(stageResult.rows.map((stage) => [stage.stage_id, stage]));
+  const stages = PIPELINE_STAGES.map((definition) => {
+    const stage = rowsByStage.get(definition.id);
+
+    if (!stage) {
+      throw new Error(`Missing stage row for ${definition.id}.`);
+    }
+
+    const compactFailure = !includeOutput && stage.state === "failed" && outputRecord(stage.output);
+    return {
+      attempts: stage.attempts,
+      completedAt: stage.completed_at?.toISOString() ?? null,
+      dependencies: definition.dependencies,
+      execution: definition.execution,
+      id: definition.id,
+      ...(includeOutput || compactFailure ? { output: stage.output } : {}),
+      startedAt: stage.started_at?.toISOString() ?? null,
+      state: stage.state,
+    };
+  });
 
   return {
     completedAt: run.completed_at?.toISOString() ?? null,
     createdAt: run.created_at.toISOString(),
     deliveredEventCount: Number(eventResult.rows[0]?.count ?? "0"),
+    failure: resolvePipelineRunFailure(stages),
     id: run.id,
     input: run.input,
-    stages: PIPELINE_STAGES.map((definition) => {
-      const stage = rowsByStage.get(definition.id);
-
-      if (!stage) {
-        throw new Error(`Missing stage row for ${definition.id}.`);
-      }
-
-      return {
-        attempts: stage.attempts,
-        completedAt: stage.completed_at?.toISOString() ?? null,
-        dependencies: definition.dependencies,
-        execution: definition.execution,
-        id: definition.id,
-        ...(includeOutput ? { output: stage.output } : {}),
-        startedAt: stage.started_at?.toISOString() ?? null,
-        state: stage.state,
-      };
-    }),
+    stages,
     startedAt: run.started_at?.toISOString() ?? null,
     status: run.status,
   };

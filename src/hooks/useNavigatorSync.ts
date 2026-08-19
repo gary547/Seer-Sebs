@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   getPipelineRun,
   PIPELINE_STAGE_IDS,
+  resolvePipelineFailure,
   startProjectPipeline,
   type PipelineRun,
   type PipelineStageId,
@@ -181,10 +182,11 @@ export function useNavigatorSync({ projectId }: Options) {
         }
 
         if (run.status === "failed") {
-          const failedStage = run.stages.find((stage) => stage.state === "failed");
+          const failedStage = resolvePipelineFailure(run);
           throw new Error(
             failedStage
-              ? `${failedStage.id} failed after ${failedStage.attempts} attempts`
+              ? failedStage.message ??
+                  `${failedStage.stageId} failed after ${failedStage.attempts} attempts`
               : "The pipeline failed.",
           );
         }

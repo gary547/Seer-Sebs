@@ -785,19 +785,30 @@ async function persistDetox(
   }
 }
 
+function uniqueById<T extends { id: string }>(items: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (!item.id || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
 async function persistCategorisation(
   client: PoolClient,
   projectId: string,
   output: CategorisationStageData,
 ): Promise<void> {
-  const classifications = output.keywords.map((keyword) => ({
-    category: keyword.categorisation.category,
-    id: keyword.id,
-    intent: keyword.categorisation.intent,
-    source: keyword.categorisation.source,
-    tags: keyword.categorisation.tags,
-    tier: keyword.categorisation.tier,
-  }));
+  const classifications = uniqueById(
+    output.keywords.map((keyword) => ({
+      category: keyword.categorisation.category,
+      id: keyword.id,
+      intent: keyword.categorisation.intent,
+      source: keyword.categorisation.source,
+      tags: keyword.categorisation.tags,
+      tier: keyword.categorisation.tier,
+    })),
+  );
   const result = await client.query(
     `
       UPDATE keywords AS keyword
@@ -834,7 +845,7 @@ async function persistKeywordEnrichment(
   projectId: string,
   output: KeywordEnrichmentStageData,
 ): Promise<void> {
-  const values = output.keywords.map((keyword) => ({
+  const values = uniqueById(output.keywords.map((keyword) => ({
     avg_monthly_volume: keyword.enrichment.avgMonthlyVolume,
     category: keyword.category,
     competitive_eligible: keyword.enrichment.competitiveEligible,
@@ -846,7 +857,7 @@ async function persistKeywordEnrichment(
     keyword_difficulty: keyword.enrichment.keywordDifficulty,
     source: keyword.enrichment.source,
     volume_source: keyword.enrichment.volumeSource,
-  }));
+  })));
   const result = await client.query(
     `
       UPDATE keywords AS keyword

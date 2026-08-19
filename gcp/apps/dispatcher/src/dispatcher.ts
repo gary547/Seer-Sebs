@@ -10,7 +10,8 @@ import {
 } from "../../../packages/pipeline/src/definition.js";
 
 const MAXIMUM_ATTEMPTS = 5;
-const LEASE_SECONDS = 30;
+const LEASE_SECONDS = 900;
+const WORKER_TIMEOUT_MS = 840_000;
 
 interface RunRow {
   id: string;
@@ -320,7 +321,7 @@ export async function dispatchTask(
         "x-seer-internal-token": config.internalToken,
       },
       method: "POST",
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(WORKER_TIMEOUT_MS),
     });
 
     if (!response.ok) {

@@ -21,15 +21,6 @@ main:
     - detox:
         call: runStage
         args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "detox" }
-    - preflight:
-        call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "preflight" }
-    - keywordEnrichment:
-        call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "keyword-enrichment" }
-    - clustering:
-        call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "clustering" }
     - parallelTracks:
         parallel:
           exception_policy: continueAll
@@ -41,6 +32,15 @@ main:
                       args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "categorisation" }
             - forecastTrack:
                 steps:
+                  - preflight:
+                      call: runStage
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "preflight" }
+                  - keywordEnrichment:
+                      call: runStage
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "keyword-enrichment" }
+                  - clustering:
+                      call: runStage
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "clustering" }
                   - calculationTracks:
                       parallel:
                         exception_policy: continueAll

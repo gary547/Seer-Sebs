@@ -10,6 +10,7 @@ import {
   chunkPipelineStageIds,
   getPipelineRunWithOutputs,
   mergePipelineRunOutputs,
+  resolvePipelineFailure,
   type PipelineRun,
   type PipelineStage,
   type PipelineStageOutputPage,
@@ -28,7 +29,10 @@ function stage(id: PipelineStage["id"], output?: PipelineStage["output"]): Pipel
   };
 }
 
-function run(stages: PipelineStage[]): PipelineRun {
+function run(
+  stages: PipelineStage[],
+  status: PipelineRun["status"] = "succeeded",
+): PipelineRun {
   return {
     completedAt: "2026-08-18T12:00:00.000Z",
     createdAt: "2026-08-18T10:00:00.000Z",
@@ -37,7 +41,7 @@ function run(stages: PipelineStage[]): PipelineRun {
     input: { projectId: "project-1" },
     stages,
     startedAt: "2026-08-18T11:00:00.000Z",
-    status: "succeeded",
+    status,
   };
 }
 
@@ -109,5 +113,31 @@ describe("pipeline output batching", () => {
     expect(assembled.stages).toHaveLength(24);
     expect(assembled.stages[0]?.output).toEqual({ id: "intake" });
     expect(assembled.stages.at(-1)?.output).toEqual({ id: "rollup-output" });
+  });
+});
+
+describe("pipeline failure attribution", () => {
+  it("uses the recorded failed stage instead of the first cascaded failure", () => {
+    const failed = run(
+      [
+        { ...stage("categorisation"), attempts: 0, state: "failed", output: {
+          failedStage: "keyword-enrichment",
+          reason: "pipeline_failed",
+        } },
+        { ...stage("keyword-enrichment"), attempts: 3, state: "failed", output: {
+          failedStage: "keyword-enrichment",
+          message: "Keyword enrichment paused after persisting progress. 18000 keywords remaining.",
+          reason: "pipeline_failed",
+        } },
+      ],
+      "failed",
+    );
+
+    expect(resolvePipelineFailure(failed)).toEqual({
+      attempts: 3,
+      message:
+        "Keyword enrichment paused after persisting progress. 18000 keywords remaining.",
+      stageId: "keyword-enrichment",
+    });
   });
 });

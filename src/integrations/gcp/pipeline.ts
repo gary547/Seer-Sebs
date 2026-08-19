@@ -47,15 +47,45 @@ export interface PipelineStage {
   state: PipelineStageState;
 }
 
+export interface PipelineRunFailure {
+  attempts: number;
+  message: string | null;
+  stageId: PipelineStageId;
+}
+
 export interface PipelineRun {
   completedAt: string | null;
   createdAt: string;
   deliveredEventCount: number;
+  failure?: PipelineRunFailure | null;
   id: string;
   input: unknown;
   stages: PipelineStage[];
   startedAt: string | null;
   status: "failed" | "pending" | "running" | "succeeded";
+}
+
+export function resolvePipelineFailure(run: PipelineRun): PipelineRunFailure | null {
+  if (run.failure) return run.failure;
+  const failed = run.stages.filter((stage) => stage.state === "failed");
+  if (failed.length === 0) return null;
+  const recorded = failed
+    .map((stage) => {
+      const failedStage = stage.output?.failedStage;
+      return typeof failedStage === "string" ? failedStage : null;
+    })
+    .find((stageId): stageId is string => Boolean(stageId));
+  const actual =
+    run.stages.find((stage) => stage.id === recorded) ??
+    failed.find((stage) => stage.attempts > 0) ??
+    failed[0];
+  if (!actual) return null;
+  const message = actual.output?.message;
+  return {
+    attempts: actual.attempts,
+    message: typeof message === "string" && message.trim() ? message : null,
+    stageId: actual.id,
+  };
 }
 
 export interface PipelineReadiness {
