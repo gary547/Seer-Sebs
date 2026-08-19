@@ -107,6 +107,7 @@ describe("managed pipeline providers", () => {
     const tooLong =
       "0 coming soon meaco cirro® 12000 btu super quiet smart portable air conditioner - cooling only";
     expect(isGoogleAdsKeywordEligible(tooLong)).toBe(false);
+    expect(isGoogleAdsKeywordEligible("0% finance ipad")).toBe(false);
     expect(isGoogleAdsKeywordEligible("ao tv deals")).toBe(true);
 
     const fetchImplementation = vi.fn<typeof fetch>(async () =>
@@ -153,7 +154,7 @@ describe("managed pipeline providers", () => {
         if (keywords.includes(rejected)) {
           return dataForSeoFailure(
             40501,
-            `Invalid Field: 'keywords'. Keyword text exceeds the allowed limit: '${rejected}'.`,
+            `Invalid Field: 'keywords'. Keyword text has invalid characters or symbols: '${rejected}'.`,
           );
         }
         return dataForSeoResponse(

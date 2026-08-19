@@ -122,7 +122,7 @@ export function isGoogleAdsKeywordEligible(keyword: string): boolean {
   if (trimmed.split(/\s+/).filter(Boolean).length > GOOGLE_ADS_KEYWORD_MAX_WORDS) {
     return false;
   }
-  return !/[^\x09\x0a\x0d\x20-\x7e]/.test(trimmed);
+  return /^[a-z0-9\s\-'&.]+$/i.test(trimmed);
 }
 
 function emptyEnrichment(keyword: string): EnrichedKeyword {
@@ -139,7 +139,7 @@ function emptyEnrichment(keyword: string): EnrichedKeyword {
 function rejectedKeywordFromError(error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
   const match = message.match(
-    /Keyword text exceeds the allowed limit:\s*'([^']+)'/i,
+    /Invalid Field: 'keywords'\.[^']*'([^']+)'/i,
   );
   return match?.[1]?.trim() || null;
 }
