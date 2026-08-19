@@ -132,7 +132,7 @@ runStage:
           result: stageResponse
         retry:
           predicate: $${http.default_retry_predicate}
-          max_retries: 30
+          max_retries: 80
           backoff:
             initial_delay: 1
             max_delay: 60

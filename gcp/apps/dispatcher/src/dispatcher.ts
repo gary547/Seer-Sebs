@@ -10,8 +10,8 @@ import {
 } from "../../../packages/pipeline/src/definition.js";
 
 const MAXIMUM_ATTEMPTS = 5;
-const LEASE_SECONDS = 900;
-const WORKER_TIMEOUT_MS = 840_000;
+const LEASE_SECONDS = 1800;
+const WORKER_TIMEOUT_MS = 1_700_000;
 
 interface RunRow {
   id: string;

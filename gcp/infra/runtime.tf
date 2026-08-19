@@ -47,7 +47,7 @@ locals {
       ingress         = "INGRESS_TRAFFIC_INTERNAL_ONLY"
       service_account = google_service_account.runtime["worker"].email
       environment = {
-        DATABASE_STATEMENT_TIMEOUT_MS = "120000"
+        DATABASE_STATEMENT_TIMEOUT_MS = "300000"
         SEER_ENVIRONMENT              = var.environment
         DATABASE_URL                  = "postgresql://${urlencode(trimsuffix(google_service_account.runtime["worker"].email, ".gserviceaccount.com"))}@127.0.0.1:5432/seer"
       }
@@ -86,7 +86,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
     }
 
     service_account = each.value.service_account
-    timeout         = "1800s"
+    timeout         = "3600s"
 
     scaling {
       min_instance_count = 0
@@ -223,7 +223,7 @@ resource "google_cloud_run_v2_service" "dispatcher" {
     }
 
     service_account = google_service_account.runtime["dispatcher"].email
-    timeout         = "1800s"
+    timeout         = "3600s"
 
     scaling {
       min_instance_count = var.runtime_min_instances.dispatcher
@@ -373,7 +373,7 @@ resource "google_cloud_run_v2_service" "events" {
     }
 
     service_account = google_service_account.runtime["events"].email
-    timeout         = "1800s"
+    timeout         = "3600s"
 
     scaling {
       min_instance_count = var.runtime_min_instances.events

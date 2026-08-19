@@ -112,7 +112,7 @@ describe("managed database runtime contract", () => {
     expect(workflow).toContain("logFailureRecordError:");
     expect(workflow).toContain("raise: $${stageError}");
     expect(workflow).toContain("timeout: 1800");
-    expect(workflow).toContain("max_retries: 30");
+    expect(workflow).toContain("max_retries: 80");
   });
 
   it("runs categorisation in parallel with enrichment instead of after it", async () => {

@@ -19,7 +19,7 @@ export function createDatabasePool(
   const statementTimeout =
     Number.isInteger(configuredStatementTimeout) &&
     configuredStatementTimeout >= 1_000 &&
-    configuredStatementTimeout <= 300_000
+    configuredStatementTimeout <= 600_000
       ? configuredStatementTimeout
       : 10_000;
   return new Pool({

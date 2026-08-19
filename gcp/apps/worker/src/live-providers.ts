@@ -794,11 +794,11 @@ export interface PipelineProviderHydrator {
   ): Promise<void>;
 }
 
-export const KEYWORD_ENRICHMENT_BATCH_SIZE = 200;
-export const KEYWORD_HYDRATION_BUDGET_MS = 720_000;
-export const SERP_SUBMIT_CHUNK = 100;
-export const SERP_RESULT_CONCURRENCY = 3;
-export const SERP_HYDRATION_BUDGET_MS = 1_200_000;
+export const KEYWORD_ENRICHMENT_BATCH_SIZE = 700;
+export const KEYWORD_HYDRATION_BUDGET_MS = 1_700_000;
+export const SERP_SUBMIT_CHUNK = 500;
+export const SERP_RESULT_CONCURRENCY = 8;
+export const SERP_HYDRATION_BUDGET_MS = 1_700_000;
 
 export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
   constructor(
@@ -1093,7 +1093,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     ]);
     const keywords = keywordResult.rows;
     if (keywords.length === 0) return;
-    for (const group of batches(keywords, 500)) {
+    for (const group of batches(keywords, 2_000)) {
       await pool.query(
         `
           INSERT INTO provider_work_items (
@@ -1135,7 +1135,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           itemKey: item.item_key,
           keyword: byKey.get(item.item_key)?.keyword ?? item.item_key,
         }));
-      if (unsubmitted.length > 0 && deadline - this.now() > 60_000) {
+      if (unsubmitted.length > 0 && deadline - this.now() > 20_000) {
         await this.submitSerpChunk(
           pool,
           project,

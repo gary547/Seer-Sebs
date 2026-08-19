@@ -99,7 +99,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_STATEMENT_TIMEOUT_MS: "120000"
+      DATABASE_STATEMENT_TIMEOUT_MS: "300000"
       DATABASE_URL: postgresql://seer_worker_local:local-worker-only@postgres:5432/seer
       INTERNAL_SERVICE_TOKEN: seer-local-internal-token
       PORT: "8080"
