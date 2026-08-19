@@ -546,4 +546,115 @@ describe("managed pipeline providers", () => {
       ),
     ).toBe(true);
   });
+
+  it("collects SERP results in chunks and resumes remaining work", async () => {
+    let now = 0;
+    const work = [
+      { item_key: "ao tv", provider_task_id: "t1", state: "submitted" },
+      { item_key: "oled tv", provider_task_id: "t2", state: "submitted" },
+    ];
+    const dataForSeo = {
+      readySerpTaskIds: vi.fn(async () => new Set(["t1"])),
+      serpTaskResult: vi.fn(async () => {
+        now += 10;
+        return { features: [], results: [] };
+      }),
+      submitSerpTasks: vi.fn(),
+    };
+    const clientQuery = vi.fn(async (sqlValue: string) => {
+      const sql = String(sqlValue).replace(/\s+/g, " ").trim();
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+        return { rowCount: 0, rows: [] };
+      }
+      if (
+        sql.includes("INSERT INTO local_provider_serp_keywords") ||
+        sql.includes("DELETE FROM local_provider_serp_results") ||
+        sql.includes("DELETE FROM project_serp_features") ||
+        sql.includes("UPDATE provider_work_items")
+      ) {
+        if (sql.includes("state = 'succeeded'")) {
+          work[0] = { ...work[0]!, state: "succeeded" };
+        }
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error(`Unexpected SERP persist SQL: ${sql}`);
+    });
+    const query = vi.fn(async (sqlValue: string) => {
+      const sql = String(sqlValue).replace(/\s+/g, " ").trim();
+      if (sql.includes("SELECT input->>'mode' AS mode")) {
+        return { rowCount: 1, rows: [{ mode: "full" }] };
+      }
+      if (sql.includes("SELECT project.country, project.language, client.domain")) {
+        return {
+          rowCount: 1,
+          rows: [{ country: "GB", domain: "ao.com", language: "en" }],
+        };
+      }
+      if (sql.includes("FROM keyword_clusters")) {
+        return {
+          rowCount: 2,
+          rows: [
+            {
+              avg_monthly_volume: 100,
+              id: "00000000-0000-4000-8000-000000000021",
+              keyword: "ao tv",
+              normalised_keyword: "ao tv",
+              provider_fetched_at: null,
+              ranking_lookup_checked_at: null,
+              ranking_url: null,
+            },
+            {
+              avg_monthly_volume: 80,
+              id: "00000000-0000-4000-8000-000000000022",
+              keyword: "oled tv",
+              normalised_keyword: "oled tv",
+              provider_fetched_at: null,
+              ranking_lookup_checked_at: null,
+              ranking_url: null,
+            },
+          ],
+        };
+      }
+      if (sql.includes("INSERT INTO provider_work_items")) {
+        return { rowCount: 2, rows: [] };
+      }
+      if (sql.includes("FROM provider_work_items")) {
+        return { rowCount: work.length, rows: work };
+      }
+      throw new Error(`Unexpected SERP hydration SQL: ${sql}`);
+    });
+    const hydrator = new LivePipelineProviderHydrator(
+      dataForSeo as unknown as DataForSeoClient,
+      {} as AhrefsClient,
+      {} as AnthropicSiteArchitectureClient,
+      async () => undefined,
+      () => now,
+      780_000,
+      720_000,
+      200,
+      5,
+      100,
+    );
+    const pool = {
+      connect: vi.fn(async () => ({
+        query: clientQuery,
+        release: vi.fn(),
+      })),
+      query,
+    } as unknown as DatabasePool;
+
+    await expect(
+      hydrator.hydrate(
+        pool,
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000004",
+        "serp-collection",
+      ),
+    ).rejects.toMatchObject({
+      code: "provider_hydration_incomplete",
+      statusCode: 503,
+    });
+    expect(dataForSeo.serpTaskResult).toHaveBeenCalledTimes(1);
+    expect(dataForSeo.submitSerpTasks).not.toHaveBeenCalled();
+  });
 });

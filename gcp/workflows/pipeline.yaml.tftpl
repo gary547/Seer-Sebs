@@ -118,7 +118,7 @@ runStage:
           call: http.post
           args:
             url: "${worker_url}/internal/tasks"
-            timeout: 900
+            timeout: 1800
             auth:
               type: OIDC
               audience: "${worker_url}"
@@ -132,7 +132,7 @@ runStage:
           result: stageResponse
         retry:
           predicate: $${http.default_retry_predicate}
-          max_retries: 5
+          max_retries: 30
           backoff:
             initial_delay: 1
             max_delay: 60

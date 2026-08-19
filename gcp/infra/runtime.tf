@@ -86,7 +86,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
     }
 
     service_account = each.value.service_account
-    timeout         = "900s"
+    timeout         = "1800s"
 
     scaling {
       min_instance_count = 0
@@ -223,7 +223,7 @@ resource "google_cloud_run_v2_service" "dispatcher" {
     }
 
     service_account = google_service_account.runtime["dispatcher"].email
-    timeout         = "900s"
+    timeout         = "1800s"
 
     scaling {
       min_instance_count = var.runtime_min_instances.dispatcher
@@ -373,7 +373,7 @@ resource "google_cloud_run_v2_service" "events" {
     }
 
     service_account = google_service_account.runtime["events"].email
-    timeout         = "900s"
+    timeout         = "1800s"
 
     scaling {
       min_instance_count = var.runtime_min_instances.events

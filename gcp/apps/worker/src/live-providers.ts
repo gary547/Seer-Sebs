@@ -136,6 +136,11 @@ function emptyEnrichment(keyword: string): EnrichedKeyword {
   };
 }
 
+function isProviderRateLimit(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /40202/.test(message) || /rates? limit per minute/i.test(message);
+}
+
 function rejectedKeywordFromError(error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
   const match = message.match(
@@ -791,6 +796,9 @@ export interface PipelineProviderHydrator {
 
 export const KEYWORD_ENRICHMENT_BATCH_SIZE = 200;
 export const KEYWORD_HYDRATION_BUDGET_MS = 720_000;
+export const SERP_SUBMIT_CHUNK = 100;
+export const SERP_RESULT_CONCURRENCY = 3;
+export const SERP_HYDRATION_BUDGET_MS = 1_200_000;
 
 export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
   constructor(
@@ -804,6 +812,8 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     private readonly serpWaitMilliseconds = 780_000,
     private readonly keywordHydrationBudgetMs = KEYWORD_HYDRATION_BUDGET_MS,
     private readonly keywordEnrichmentBatchSize = KEYWORD_ENRICHMENT_BATCH_SIZE,
+    private readonly serpHydrationBudgetMs = SERP_HYDRATION_BUDGET_MS,
+    private readonly serpSubmitChunk = SERP_SUBMIT_CHUNK,
   ) {}
 
   async hydrate(
@@ -1083,98 +1093,169 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     ]);
     const keywords = keywordResult.rows;
     if (keywords.length === 0) return;
-    await pool.query(
-      `
-        INSERT INTO provider_work_items (
-          pipeline_run_id,
-          project_id,
-          stage_id,
-          item_key,
-          provider
-        )
-        SELECT $1, $2, 'serp-collection', input.item_key, 'dataforseo'
-        FROM jsonb_to_recordset($3::jsonb) AS input(item_key text)
-        ON CONFLICT (pipeline_run_id, stage_id, item_key) DO NOTHING
-      `,
-      [
-        runId,
-        projectId,
-        JSON.stringify(
-          keywords.map((keyword) => ({
-            item_key: keyword.normalised_keyword,
-          })),
-        ),
-      ],
-    );
-    let work = await this.serpWork(pool, runId);
+    for (const group of batches(keywords, 500)) {
+      await pool.query(
+        `
+          INSERT INTO provider_work_items (
+            pipeline_run_id,
+            project_id,
+            stage_id,
+            item_key,
+            provider
+          )
+          SELECT $1, $2, 'serp-collection', input.item_key, 'dataforseo'
+          FROM jsonb_to_recordset($3::jsonb) AS input(item_key text)
+          ON CONFLICT (pipeline_run_id, stage_id, item_key) DO NOTHING
+        `,
+        [
+          runId,
+          projectId,
+          JSON.stringify(
+            group.map((keyword) => ({
+              item_key: keyword.normalised_keyword,
+            })),
+          ),
+        ],
+      );
+    }
     const byKey = new Map(
       keywords.map((keyword) => [keyword.normalised_keyword, keyword]),
     );
-    const unsubmitted = work
-      .filter(
-        (item) => item.state === "pending" && !item.provider_task_id,
-      )
-      .map((item) => ({
-        itemKey: item.item_key,
-        keyword: byKey.get(item.item_key)?.keyword ?? item.item_key,
-      }));
-    if (unsubmitted.length > 0) {
-      const submitted = await this.dataForSeo.submitSerpTasks(
-        unsubmitted,
-        project.country,
-        project.language,
-      );
-      await withTransaction(pool, async (client) => {
-        for (const task of submitted) {
-          await client.query(
-            `
-              UPDATE provider_work_items
-              SET
-                provider_task_id = $4,
-                state = 'submitted',
-                attempt_count = attempt_count + 1,
-                submitted_at = now(),
-                updated_at = now()
-              WHERE pipeline_run_id = $1
-                AND stage_id = 'serp-collection'
-                AND item_key = $2
-                AND project_id = $3
-            `,
-            [runId, task.itemKey, projectId, task.providerTaskId],
-          );
-        }
-      });
-    }
-    const deadline = this.now() + this.serpWaitMilliseconds;
+    const deadline = this.now() + this.serpHydrationBudgetMs;
     while (this.now() < deadline) {
-      work = await this.serpWork(pool, runId);
+      const work = await this.serpWork(pool, runId);
       const remaining = work.filter((item) => item.state !== "succeeded");
       if (remaining.length === 0) return;
       if (remaining.some((item) => item.state === "failed")) {
         throw new Error("A DataForSEO SERP work item failed.");
       }
-      const ready = await this.dataForSeo.readySerpTaskIds();
-      const readyItems = remaining.filter(
-        (item) =>
-          item.provider_task_id && ready.has(item.provider_task_id),
-      );
-      await concurrently(readyItems, 10, async (item) => {
-        const snapshot = await this.dataForSeo.serpTaskResult(
-          item.provider_task_id!,
-        );
-        const keyword = byKey.get(item.item_key);
-        if (!keyword) throw new Error("SERP work item lost its keyword.");
-        await this.persistSerp(
+      const unsubmitted = remaining
+        .filter((item) => item.state === "pending" && !item.provider_task_id)
+        .map((item) => ({
+          itemKey: item.item_key,
+          keyword: byKey.get(item.item_key)?.keyword ?? item.item_key,
+        }));
+      if (unsubmitted.length > 0 && deadline - this.now() > 60_000) {
+        await this.submitSerpChunk(
           pool,
+          project,
           projectId,
           runId,
-          keyword,
-          snapshot,
+          unsubmitted.slice(0, this.serpSubmitChunk),
         );
-      });
-      if (readyItems.length === 0) await this.wait(3_000);
+      }
+      const submitted = remaining.filter(
+        (item) => item.state === "submitted" && item.provider_task_id,
+      );
+      const collected = await this.collectReadySerps(
+        pool,
+        projectId,
+        runId,
+        submitted,
+        byKey,
+      );
+      if (
+        unsubmitted.length === 0 &&
+        submitted.length === 0
+      ) {
+        break;
+      }
+      if (collected === 0) await this.wait(3_000);
     }
-    throw new Error("DataForSEO SERP tasks are still pending.");
+    const leftover = (await this.serpWork(pool, runId)).filter(
+      (item) => item.state !== "succeeded",
+    ).length;
+    if (leftover > 0) {
+      throw new HttpError(
+        503,
+        "provider_hydration_incomplete",
+        `SERP collection paused after persisting progress. ${leftover} keywords remaining.`,
+      );
+    }
+  }
+
+  private async submitSerpChunk(
+    pool: DatabasePool,
+    project: ProjectProviderRow,
+    projectId: string,
+    runId: string,
+    items: Array<{ itemKey: string; keyword: string }>,
+  ): Promise<void> {
+    if (items.length === 0) return;
+    let submitted: SerpTask[] = [];
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      try {
+        submitted = await this.dataForSeo.submitSerpTasks(
+          items,
+          project.country,
+          project.language,
+        );
+        break;
+      } catch (error) {
+        if (!isProviderRateLimit(error) || attempt === 4) throw error;
+        await this.wait(35_000);
+      }
+    }
+    await withTransaction(pool, async (client) => {
+      for (const task of submitted) {
+        await client.query(
+          `
+            UPDATE provider_work_items
+            SET
+              provider_task_id = $4,
+              state = 'submitted',
+              attempt_count = attempt_count + 1,
+              submitted_at = now(),
+              updated_at = now()
+            WHERE pipeline_run_id = $1
+              AND stage_id = 'serp-collection'
+              AND item_key = $2
+              AND project_id = $3
+          `,
+          [runId, task.itemKey, projectId, task.providerTaskId],
+        );
+      }
+    });
+  }
+
+  private async collectReadySerps(
+    pool: DatabasePool,
+    projectId: string,
+    runId: string,
+    submitted: ProviderWorkItemRow[],
+    byKey: Map<string, KeywordProviderRow>,
+  ): Promise<number> {
+    if (submitted.length === 0) return 0;
+    let ready: Set<string>;
+    try {
+      ready = await this.dataForSeo.readySerpTaskIds();
+    } catch (error) {
+      if (isProviderRateLimit(error)) {
+        await this.wait(35_000);
+        return 0;
+      }
+      throw error;
+    }
+    const readyItems = submitted.filter(
+      (item) => item.provider_task_id && ready.has(item.provider_task_id),
+    );
+    await concurrently(readyItems, SERP_RESULT_CONCURRENCY, async (item) => {
+      const keyword = byKey.get(item.item_key);
+      if (!keyword) throw new Error("SERP work item lost its keyword.");
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          const snapshot = await this.dataForSeo.serpTaskResult(
+            item.provider_task_id!,
+          );
+          await this.persistSerp(pool, projectId, runId, keyword, snapshot);
+          return;
+        } catch (error) {
+          if (!isProviderRateLimit(error) || attempt === 4) throw error;
+          await this.wait(35_000);
+        }
+      }
+    });
+    return readyItems.length;
   }
 
   private async serpWork(
