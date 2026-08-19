@@ -749,7 +749,11 @@ async function persistDetox(
       SET detox_status = decision.decision,
           detox_reason = decision.reason,
           detox_rule = decision.rule,
-          human_reviewed = false,
+          human_reviewed = CASE
+            WHEN decision.rule = 'pre-curated' THEN true
+            WHEN decision.decision = 'keep' THEN keyword.human_reviewed
+            ELSE false
+          END,
           categorisation_status = CASE
             WHEN decision.decision = 'keep' THEN keyword.categorisation_status
             ELSE 'skipped'
