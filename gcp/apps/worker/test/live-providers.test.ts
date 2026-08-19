@@ -4,6 +4,7 @@ import {
   AhrefsClient,
   AnthropicSiteArchitectureClient,
   DataForSeoClient,
+  isGoogleAdsKeywordEligible,
   LivePipelineProviderHydrator,
 } from "../src/live-providers.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
@@ -99,6 +100,81 @@ describe("managed pipeline providers", () => {
     const request = fetchImplementation.mock.calls[0]?.[1];
     expect(new Headers(request?.headers).get("authorization")).toBe(
       `Basic ${Buffer.from("login:password").toString("base64")}`,
+    );
+  });
+
+  it("skips Google Ads keywords that exceed DataForSEO limits", async () => {
+    const tooLong =
+      "0 coming soon meaco cirro® 12000 btu super quiet smart portable air conditioner - cooling only";
+    expect(isGoogleAdsKeywordEligible(tooLong)).toBe(false);
+    expect(isGoogleAdsKeywordEligible("ao tv deals")).toBe(true);
+
+    const fetchImplementation = vi.fn<typeof fetch>(async () =>
+      dataForSeoResponse([
+        {
+          keyword: "ao tv deals",
+          search_volume: 90,
+        },
+      ]),
+    );
+    const client = new DataForSeoClient("login:password", fetchImplementation);
+
+    await expect(
+      client.enrichKeywords([tooLong, "ao tv deals"], "GB", "en"),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          avgMonthlyVolume: null,
+          keyword: tooLong,
+        }),
+        expect.objectContaining({
+          avgMonthlyVolume: 90,
+          keyword: "ao tv deals",
+        }),
+      ]),
+    );
+    const sent = fetchImplementation.mock.calls.map(([, request]) =>
+      JSON.parse(String(request?.body))[0].keywords,
+    );
+    expect(sent.every((keywords: string[]) => !keywords.includes(tooLong))).toBe(
+      true,
+    );
+  });
+
+  it("retries a batch after dropping a keyword rejected by DataForSEO", async () => {
+    const rejected =
+      "0 coming soon meaco cirro 12000 btu super quiet";
+    let searchVolumeCalls = 0;
+    const fetchImplementation = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.includes("search_volume/live")) {
+        searchVolumeCalls += 1;
+        const keywords = JSON.parse(String(init?.body))[0].keywords as string[];
+        if (keywords.includes(rejected)) {
+          return dataForSeoFailure(
+            40501,
+            `Invalid Field: 'keywords'. Keyword text exceeds the allowed limit: '${rejected}'.`,
+          );
+        }
+        return dataForSeoResponse(
+          keywords.map((keyword) => ({ keyword, search_volume: 40 })),
+        );
+      }
+      return dataForSeoResponse([]);
+    });
+    const client = new DataForSeoClient("login:password", fetchImplementation);
+
+    const values = await client.enrichKeywords(
+      [rejected, "ao tv deals"],
+      "GB",
+      "en",
+    );
+    expect(searchVolumeCalls).toBeGreaterThanOrEqual(2);
+    expect(values).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ avgMonthlyVolume: null, keyword: rejected }),
+        expect.objectContaining({ avgMonthlyVolume: 40, keyword: "ao tv deals" }),
+      ]),
     );
   });
 

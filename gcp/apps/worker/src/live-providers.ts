@@ -112,6 +112,38 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+export const GOOGLE_ADS_KEYWORD_MAX_CHARS = 80;
+export const GOOGLE_ADS_KEYWORD_MAX_WORDS = 10;
+
+export function isGoogleAdsKeywordEligible(keyword: string): boolean {
+  const trimmed = keyword.trim();
+  if (!trimmed) return false;
+  if ([...trimmed].length > GOOGLE_ADS_KEYWORD_MAX_CHARS) return false;
+  if (trimmed.split(/\s+/).filter(Boolean).length > GOOGLE_ADS_KEYWORD_MAX_WORDS) {
+    return false;
+  }
+  return !/[^\x09\x0a\x0d\x20-\x7e]/.test(trimmed);
+}
+
+function emptyEnrichment(keyword: string): EnrichedKeyword {
+  return {
+    avgMonthlyVolume: null,
+    coreKeyword: null,
+    intent: null,
+    keyword,
+    keywordDifficulty: null,
+    monthlyVolumes: [],
+  };
+}
+
+function rejectedKeywordFromError(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = message.match(
+    /Keyword text exceeds the allowed limit:\s*'([^']+)'/i,
+  );
+  return match?.[1]?.trim() || null;
+}
+
 function batches<T>(values: readonly T[], size: number): T[][] {
   const result: T[][] = [];
   for (let offset = 0; offset < values.length; offset += size) {
@@ -320,115 +352,142 @@ export class DataForSeoClient {
     language: string | null,
   ): Promise<EnrichedKeyword[]> {
     const result = new Map<string, EnrichedKeyword>();
-    for (const group of batches(keywords, 200)) {
-      const request = {
-        keywords: group,
-        language_code: languageCode(language),
-        ...locationTarget(country),
-      };
-      const [volumeItems, historicalItems, difficultyItems, intentItems] = await Promise.all([
-        this.liveItems(
-          "/v3/keywords_data/google_ads/search_volume/live",
-          request,
-        ),
-        this.optionalLiveItems(
-          "/v3/dataforseo_labs/google/historical_search_volume/live",
-          request,
-        ),
-        this.optionalLiveItems(
-          "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live",
-          request,
-        ),
-        this.optionalLiveItems("/v3/dataforseo_labs/google/search_intent/live", {
-          keywords: group,
-          language_code: languageCode(language),
-        }),
-      ]);
-      for (const keyword of group) {
-        result.set(normaliseKeyword(keyword), {
-          avgMonthlyVolume: null,
-          coreKeyword: null,
-          intent: null,
-          keyword,
-          keywordDifficulty: null,
-          monthlyVolumes: [],
-        });
+    const eligible: string[] = [];
+    for (const keyword of keywords) {
+      if (isGoogleAdsKeywordEligible(keyword)) {
+        eligible.push(keyword);
+        continue;
       }
-      for (const item of volumeItems) {
-        const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
-        const value = result.get(key);
-        if (!value) continue;
-        const properties = record(item.keyword_properties);
-        value.avgMonthlyVolume = numberOrNull(item.search_volume);
-        value.coreKeyword = stringOrNull(properties.core_keyword);
-        value.monthlyVolumes = records(item.monthly_searches)
-          .map((point) => {
-            const year = numberOrNull(point.year);
-            const month = numberOrNull(point.month);
-            const volume = numberOrNull(point.search_volume);
-            return year &&
-              month &&
-              month <= 12 &&
-              volume !== null
-              ? {
-                  month: `${year}-${String(month).padStart(2, "0")}-01`,
-                  volume,
-                }
-              : null;
-          })
-          .filter(
-            (
-              point,
-            ): point is {
-              month: string;
-              volume: number;
-            } => point !== null,
-          );
-      }
-      for (const item of historicalItems) {
-        const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
-        const value = result.get(key);
-        if (!value) continue;
-        const keywordInfo = record(item.keyword_info);
-        const properties = record(item.keyword_properties);
-        value.coreKeyword =
-          stringOrNull(properties.core_keyword) ?? value.coreKeyword;
-        value.avgMonthlyVolume =
-          value.avgMonthlyVolume ?? numberOrNull(keywordInfo.search_volume);
-        const history = records(keywordInfo.monthly_searches)
-          .map((point) => {
-            const year = numberOrNull(point.year);
-            const month = numberOrNull(point.month);
-            const volume = numberOrNull(point.search_volume);
-            return year && month && month <= 12 && volume !== null
-              ? {
-                  month: `${year}-${String(month).padStart(2, "0")}-01`,
-                  volume,
-                }
-              : null;
-          })
-          .filter(
-            (point): point is { month: string; volume: number } =>
-              point !== null,
-          );
-        if (history.length > value.monthlyVolumes.length) {
-          value.monthlyVolumes = history;
+      result.set(normaliseKeyword(keyword), emptyEnrichment(keyword));
+    }
+    for (const group of batches(eligible, 200)) {
+      let remaining = group;
+      while (remaining.length > 0) {
+        try {
+          await this.enrichEligibleGroup(remaining, country, language, result);
+          break;
+        } catch (error) {
+          const rejected = rejectedKeywordFromError(error);
+          const rejectedKey = rejected ? normaliseKeyword(rejected) : "";
+          const next = rejectedKey
+            ? remaining.filter((keyword) => normaliseKeyword(keyword) !== rejectedKey)
+            : remaining;
+          if (!rejected || next.length === remaining.length) throw error;
+          result.set(rejectedKey, emptyEnrichment(rejected));
+          remaining = next;
         }
-      }
-      for (const item of difficultyItems) {
-        const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
-        const value = result.get(key);
-        if (value) {
-          value.keywordDifficulty = numberOrNull(item.keyword_difficulty);
-        }
-      }
-      for (const item of intentItems) {
-        const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
-        const value = result.get(key);
-        if (value) value.intent = searchIntent(item);
       }
     }
     return [...result.values()];
+  }
+
+  private async enrichEligibleGroup(
+    group: readonly string[],
+    country: string | null,
+    language: string | null,
+    result: Map<string, EnrichedKeyword>,
+  ): Promise<void> {
+    const request = {
+      keywords: group,
+      language_code: languageCode(language),
+      ...locationTarget(country),
+    };
+    const [volumeItems, historicalItems, difficultyItems, intentItems] = await Promise.all([
+      this.liveItems(
+        "/v3/keywords_data/google_ads/search_volume/live",
+        request,
+      ),
+      this.optionalLiveItems(
+        "/v3/dataforseo_labs/google/historical_search_volume/live",
+        request,
+      ),
+      this.optionalLiveItems(
+        "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live",
+        request,
+      ),
+      this.optionalLiveItems("/v3/dataforseo_labs/google/search_intent/live", {
+        keywords: group,
+        language_code: languageCode(language),
+      }),
+    ]);
+    for (const keyword of group) {
+      if (!result.has(normaliseKeyword(keyword))) {
+        result.set(normaliseKeyword(keyword), emptyEnrichment(keyword));
+      }
+    }
+    for (const item of volumeItems) {
+      const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
+      const value = result.get(key);
+      if (!value) continue;
+      const properties = record(item.keyword_properties);
+      value.avgMonthlyVolume = numberOrNull(item.search_volume);
+      value.coreKeyword = stringOrNull(properties.core_keyword);
+      value.monthlyVolumes = records(item.monthly_searches)
+        .map((point) => {
+          const year = numberOrNull(point.year);
+          const month = numberOrNull(point.month);
+          const volume = numberOrNull(point.search_volume);
+          return year &&
+            month &&
+            month <= 12 &&
+            volume !== null
+            ? {
+                month: `${year}-${String(month).padStart(2, "0")}-01`,
+                volume,
+              }
+            : null;
+        })
+        .filter(
+          (
+            point,
+          ): point is {
+            month: string;
+            volume: number;
+          } => point !== null,
+        );
+    }
+    for (const item of historicalItems) {
+      const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
+      const value = result.get(key);
+      if (!value) continue;
+      const keywordInfo = record(item.keyword_info);
+      const properties = record(item.keyword_properties);
+      value.coreKeyword =
+        stringOrNull(properties.core_keyword) ?? value.coreKeyword;
+      value.avgMonthlyVolume =
+        value.avgMonthlyVolume ?? numberOrNull(keywordInfo.search_volume);
+      const history = records(keywordInfo.monthly_searches)
+        .map((point) => {
+          const year = numberOrNull(point.year);
+          const month = numberOrNull(point.month);
+          const volume = numberOrNull(point.search_volume);
+          return year && month && month <= 12 && volume !== null
+            ? {
+                month: `${year}-${String(month).padStart(2, "0")}-01`,
+                volume,
+              }
+            : null;
+        })
+        .filter(
+          (point): point is { month: string; volume: number } =>
+            point !== null,
+        );
+      if (history.length > value.monthlyVolumes.length) {
+        value.monthlyVolumes = history;
+      }
+    }
+    for (const item of difficultyItems) {
+      const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
+      const value = result.get(key);
+      if (value) {
+        value.keywordDifficulty = numberOrNull(item.keyword_difficulty);
+      }
+    }
+    for (const item of intentItems) {
+      const key = normaliseKeyword(stringOrNull(item.keyword) ?? "");
+      const value = result.get(key);
+      if (value) value.intent = searchIntent(item);
+    }
   }
 
   async rankingUrls(
