@@ -44,6 +44,7 @@ import {
 import { parseGscWorkbookImport } from "./gsc-workbook.js";
 import type { ObjectStore } from "./object-store-client.js";
 import {
+  cancelPipelineRun,
   createPipelineRun,
   getLatestProjectPipelineRun,
   getPipelineRun,
@@ -391,6 +392,11 @@ async function handleRequest(
     "/v1/pipeline-runs/",
     "/stages",
   );
+  const runCancelId = uuidSubresourcePath(
+    url.pathname,
+    "/v1/pipeline-runs/",
+    "/cancel",
+  );
   const runId = uuidPath(url.pathname, "/v1/pipeline-runs/");
   const projectId = uuidPath(url.pathname, "/v1/projects/");
   const clientProjectClientId = uuidSubresourcePath(
@@ -670,6 +676,7 @@ async function handleRequest(
     url.pathname === "/v1/conversion-overrides" ||
     assetId !== null ||
     runStagesId !== null ||
+    runCancelId !== null ||
     runId !== null ||
     projectId !== null ||
     clientId !== null ||
@@ -2228,6 +2235,18 @@ async function handleRequest(
         parsePipelineStageIds(url.searchParams.get("ids")),
       ),
       { gzip: true },
+    );
+    return;
+  }
+
+  if (runCancelId) {
+    if (method !== "POST") {
+      methodNotAllowed(response, ["POST"]);
+    }
+    sendJson(
+      response,
+      200,
+      await cancelPipelineRun(runtime.pool, user, runCancelId),
     );
     return;
   }

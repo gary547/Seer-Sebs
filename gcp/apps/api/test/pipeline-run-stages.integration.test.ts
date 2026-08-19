@@ -178,4 +178,101 @@ describe("pipeline run stage batches", () => {
     expect(body.stages[0]?.output).toBeUndefined();
     expect(body.failure).toBeNull();
   });
+
+  it("cancels a running pipeline run from the API", async () => {
+    let cancelled = false;
+    const query = vi.fn(async (sqlValue: string) => {
+      const sql = sqlValue.replace(/\s+/g, " ").trim();
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result([]);
+      if (sql.includes("SELECT approval_status FROM profiles")) {
+        return result([{ approval_status: "approved" }]);
+      }
+      if (sql.includes("SELECT id, user_id, status, input, created_at, started_at, completed_at")) {
+        return result([
+          {
+            completed_at: cancelled ? completedAt : null,
+            created_at: startedAt,
+            id: runId,
+            input: { projectId: "00000000-0000-4000-8000-000000000002" },
+            started_at: startedAt,
+            status: cancelled ? "failed" : "running",
+            user_id: userId,
+          },
+        ]);
+      }
+      if (sql.includes("SELECT client_id FROM navigator_projects")) {
+        return result([{ client_id: "00000000-0000-4000-8000-000000000003" }]);
+      }
+      if (sql.includes("SELECT user_role.role FROM user_roles")) {
+        return result([{ role: "super_admin" }]);
+      }
+      if (sql.includes("SELECT stage_id, state FROM pipeline_stage_runs")) {
+        return result([
+          { stage_id: "serp-collection", state: "running" },
+          { stage_id: "authority", state: "pending" },
+        ]);
+      }
+      if (sql.includes("UPDATE pipeline_runs")) {
+        cancelled = true;
+        return result([], 1);
+      }
+      if (sql.includes("UPDATE pipeline_stage_runs")) {
+        return result([], 1);
+      }
+      if (sql.includes("FROM pipeline_stage_runs")) {
+        return result(
+          PIPELINE_STAGES.map((definition) => ({
+            attempts: definition.id === "serp-collection" ? 1 : 0,
+            completed_at: completedAt,
+            output:
+              definition.id === "serp-collection"
+                ? { failedStage: "serp-collection", reason: "pipeline_cancelled" }
+                : null,
+            stage_id: definition.id,
+            started_at: startedAt,
+            state: ["intake", "detox", "preflight", "categorisation"].includes(
+              definition.id,
+            )
+              ? "succeeded"
+              : "failed",
+          })),
+        );
+      }
+      if (sql.includes("FROM event_deliveries")) {
+        return result([{ count: "3" }]);
+      }
+      throw new Error(`Unexpected SQL in cancel test: ${sql}`);
+    });
+    const client = { query, release: vi.fn() };
+    server.close();
+    server = createApiServer({
+      authenticateRequest: vi.fn(async () => ({
+        email: "admin@example.com",
+        id: userId,
+      })),
+      objectStore: {
+        assertReady: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+        get: vi.fn(async () => Buffer.alloc(0)),
+        put: vi.fn(async () => undefined),
+      },
+      pool: {
+        connect: vi.fn(async () => client),
+        query,
+      } as unknown as DatabasePool,
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const response = await fetch(`${baseUrl}/v1/pipeline-runs/${runId}/cancel`, {
+      method: "POST",
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      failure: { stageId: string } | null;
+      status: string;
+    };
+    expect(body.status).toBe("failed");
+    expect(body.failure?.stageId).toBe("serp-collection");
+  });
 });

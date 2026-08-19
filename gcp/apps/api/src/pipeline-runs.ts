@@ -795,6 +795,78 @@ export async function getPipelineRunStageOutputs(
   };
 }
 
+export async function cancelPipelineRun(
+  pool: DatabasePool,
+  user: AuthenticatedUser,
+  id: string,
+  reason = "Cancelled by operator.",
+): Promise<Record<string, unknown>> {
+  const run = await loadAuthorizedPipelineRun(pool, user, id);
+  const input =
+    run.input && typeof run.input === "object" && !Array.isArray(run.input)
+      ? (run.input as Record<string, unknown>)
+      : {};
+  if (typeof input.projectId === "string") {
+    await assertProjectAccessByRole(pool, user.id, input.projectId, true);
+  } else if (run.user_id !== user.id) {
+    throw new HttpError(403, "forbidden", "You cannot cancel this pipeline run.");
+  }
+
+  await withTransaction(pool, async (client) => {
+    const stages = await client.query<{ stage_id: PipelineStageId; state: string }>(
+      `
+        SELECT stage_id, state
+        FROM pipeline_stage_runs
+        WHERE run_id = $1
+        ORDER BY stage_id
+      `,
+      [id],
+    );
+    const failedStage =
+      stages.rows.find((stage) => stage.state === "running" || stage.state === "queued")
+        ?.stage_id ??
+      stages.rows.find((stage) => stage.state === "pending")?.stage_id ??
+      "intake";
+    await client.query(
+      `
+        UPDATE pipeline_stage_runs
+        SET state = 'failed',
+            output = COALESCE(
+              output,
+              jsonb_build_object(
+                'reason', 'pipeline_cancelled',
+                'failedStage', $2::text,
+                'message', $3::text
+              )
+            ),
+            completed_at = COALESCE(completed_at, now())
+        WHERE run_id = $1
+          AND state <> 'succeeded'
+      `,
+      [id, failedStage, reason],
+    );
+    const result = await client.query(
+      `
+        UPDATE pipeline_runs
+        SET status = 'failed',
+            completed_at = COALESCE(completed_at, now())
+        WHERE id = $1
+          AND status IN ('pending', 'running')
+      `,
+      [id],
+    );
+    if ((result.rowCount ?? 0) === 0 && run.status !== "failed") {
+      throw new HttpError(
+        409,
+        "pipeline_run_not_cancellable",
+        "Only pending or running pipeline runs can be cancelled.",
+      );
+    }
+  });
+
+  return getPipelineRun(pool, user, id, false);
+}
+
 export async function getLatestProjectPipelineRun(
   pool: DatabasePool,
   user: AuthenticatedUser,
