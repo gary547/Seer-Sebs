@@ -2,7 +2,12 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { vi } from "vitest";
 
 import AutonomousPipelinePanel from "./AutonomousPipelinePanel";
-import type { PipelineReadiness } from "@/integrations/gcp/pipeline";
+import {
+  PIPELINE_STAGE_IDS,
+  type PipelineReadiness,
+  type PipelineRun,
+  type PipelineStage,
+} from "@/integrations/gcp/pipeline";
 
 const readiness: PipelineReadiness = {
   configuration: {
@@ -68,6 +73,43 @@ const readiness: PipelineReadiness = {
   ],
 };
 
+function pipelineRun(): PipelineRun {
+  const stages: PipelineStage[] = PIPELINE_STAGE_IDS.map((id) => ({
+    attempts: id === "site-architecture" ? 3 : 1,
+    completedAt: id === "site-architecture" ? null : "2026-08-20T07:10:00.000Z",
+    dependencies: [],
+    execution: "tasks",
+    id,
+    progress: {
+      done: id === "serp-collection" ? 8839 : 1,
+      failed: 0,
+      message:
+        id === "site-architecture"
+          ? "Scoring content-fit for ranking URLs · 62m elapsed · attempt 3"
+          : id === "serp-collection"
+            ? "Completed in 18m · 8,839 items"
+            : "Completed in 6s",
+      pending: 0,
+      percent: id === "site-architecture" ? null : 100,
+      submitted: 0,
+      total: id === "serp-collection" ? 8839 : 1,
+      unit: id === "serp-collection" ? "items" : null,
+    },
+    startedAt: "2026-08-20T06:45:00.000Z",
+    state: id === "site-architecture" ? "running" : "succeeded",
+  }));
+  return {
+    completedAt: null,
+    createdAt: "2026-08-20T06:43:56.000Z",
+    deliveredEventCount: 0,
+    id: "36467606-c900-4048-a5c3-49a01bcad268",
+    input: { mode: "full", projectId: "project-id" },
+    stages,
+    startedAt: "2026-08-20T06:43:59.000Z",
+    status: "running",
+  };
+}
+
 describe("AutonomousPipelinePanel", () => {
   it("shows readiness, four tracks, operator preview and deduplicated output", () => {
     render(
@@ -104,6 +146,36 @@ describe("AutonomousPipelinePanel", () => {
     expect(screen.getByText("Quarter plan")).toBeInTheDocument();
     expect(screen.getByText("Demand trend")).toBeInTheDocument();
     expect(screen.getByText(/neutral with confidence penalty/)).toBeInTheDocument();
+    expect(screen.getByText("Stage activity")).toBeInTheDocument();
+    expect(screen.getAllByText("intake").length).toBeGreaterThan(0);
+  });
+
+  it("shows per-stage percent and live log lines for the running pipeline", () => {
+    render(
+      <AutonomousPipelinePanel
+        archived={false}
+        onSaveBrandTerms={vi.fn()}
+        onRun={vi.fn()}
+        onSavePolicy={vi.fn()}
+        onStampPrecurated={vi.fn()}
+        readiness={readiness}
+        run={pipelineRun()}
+        running={false}
+        savingBrandTerms={false}
+        savingPolicy={false}
+        stampingPrecurated={false}
+      />,
+    );
+
+    expect(screen.getByText("23/24 complete")).toBeInTheDocument();
+    expect(
+      screen.getAllByText(
+        "Scoring content-fit for ranking URLs · 62m elapsed · attempt 3",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("Completed in 18m · 8,839 items").length,
+    ).toBeGreaterThan(0);
   });
 
   it("starts a full server-side run and saves operator-controlled thresholds", () => {

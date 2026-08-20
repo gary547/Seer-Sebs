@@ -12,6 +12,10 @@ import {
 } from "../../../packages/pipeline/src/definition.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertProjectAccessByRole } from "./authorization.js";
+import {
+  buildStageProgress,
+  type StageWorkCounts,
+} from "./stage-progress.js";
 
 interface PipelineRunRow {
   completed_at: Date | null;
@@ -34,6 +38,16 @@ interface PipelineStageRow {
 
 interface EventCountRow {
   count: string;
+}
+
+interface StageWorkRow {
+  failed: string;
+  last_error: string | null;
+  pending: string;
+  stage_id: PipelineStageId;
+  submitted: string;
+  succeeded: string;
+  total: string;
 }
 
 export type PipelineRunMode = "full" | "recalculate" | "resume";
@@ -677,7 +691,7 @@ export async function getPipelineRun(
 ): Promise<Record<string, unknown>> {
   const run = await loadAuthorizedPipelineRun(pool, user, id);
 
-  const [stageResult, eventResult] = await Promise.all([
+  const [stageResult, eventResult, workResult] = await Promise.all([
     pool.query<PipelineStageRow>(
       `
         SELECT
@@ -711,8 +725,46 @@ export async function getPipelineRun(
       `,
       [id],
     ),
+    pool.query<StageWorkRow>(
+      `
+        SELECT
+          stage_id,
+          count(*)::text AS total,
+          count(*) FILTER (WHERE state = 'pending')::text AS pending,
+          count(*) FILTER (WHERE state = 'submitted')::text AS submitted,
+          count(*) FILTER (WHERE state = 'succeeded')::text AS succeeded,
+          count(*) FILTER (WHERE state = 'failed')::text AS failed,
+          (
+            SELECT item.last_error
+            FROM provider_work_items AS item
+            WHERE item.pipeline_run_id = $1
+              AND item.stage_id = provider_work_items.stage_id
+              AND item.last_error IS NOT NULL
+            ORDER BY item.updated_at DESC
+            LIMIT 1
+          ) AS last_error
+        FROM provider_work_items
+        WHERE pipeline_run_id = $1
+        GROUP BY stage_id
+      `,
+      [id],
+    ),
   ]);
   const rowsByStage = new Map(stageResult.rows.map((stage) => [stage.stage_id, stage]));
+  const workByStage = new Map<PipelineStageId, StageWorkCounts>(
+    workResult.rows.map((row) => [
+      row.stage_id,
+      {
+        failed: Number(row.failed),
+        lastError: row.last_error,
+        pending: Number(row.pending),
+        submitted: Number(row.submitted),
+        succeeded: Number(row.succeeded),
+        total: Number(row.total),
+      },
+    ]),
+  );
+  const now = new Date();
   const stages = PIPELINE_STAGES.map((definition) => {
     const stage = rowsByStage.get(definition.id);
 
@@ -721,6 +773,10 @@ export async function getPipelineRun(
     }
 
     const compactFailure = !includeOutput && stage.state === "failed" && outputRecord(stage.output);
+    const waitingOn = definition.dependencies.filter((dependencyId) => {
+      const dependency = rowsByStage.get(dependencyId);
+      return dependency?.state !== "succeeded";
+    });
     return {
       attempts: stage.attempts,
       completedAt: stage.completed_at?.toISOString() ?? null,
@@ -728,6 +784,20 @@ export async function getPipelineRun(
       execution: definition.execution,
       id: definition.id,
       ...(includeOutput || compactFailure ? { output: stage.output } : {}),
+      progress: buildStageProgress({
+        attempts: stage.attempts,
+        completedAt: stage.completed_at,
+        id: definition.id,
+        now,
+        outputMessage:
+          typeof outputRecord(stage.output)?.message === "string"
+            ? String(outputRecord(stage.output)?.message)
+            : null,
+        startedAt: stage.started_at,
+        state: stage.state,
+        waitingOn,
+        work: workByStage.get(definition.id) ?? null,
+      }),
       startedAt: stage.started_at?.toISOString() ?? null,
       state: stage.state,
     };

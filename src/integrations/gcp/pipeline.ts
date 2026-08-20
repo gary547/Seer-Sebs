@@ -36,6 +36,17 @@ export type PipelineStageState =
   | "running"
   | "succeeded";
 
+export interface PipelineStageProgress {
+  done: number | null;
+  failed: number;
+  message: string;
+  pending: number;
+  percent: number | null;
+  submitted: number;
+  total: number | null;
+  unit: "items" | null;
+}
+
 export interface PipelineStage {
   attempts: number;
   completedAt: string | null;
@@ -43,6 +54,7 @@ export interface PipelineStage {
   execution: "api" | "job" | "tasks";
   id: PipelineStageId;
   output?: Record<string, unknown> | null;
+  progress?: PipelineStageProgress;
   startedAt: string | null;
   state: PipelineStageState;
 }

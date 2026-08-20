@@ -69,6 +69,9 @@ function database(): DatabasePool {
     if (sql.includes("FROM event_deliveries")) {
       return result([{ count: "3" }]);
     }
+    if (sql.includes("FROM provider_work_items")) {
+      return result([]);
+    }
     throw new Error(`Unexpected SQL in pipeline stage batch test: ${sql}`);
   });
   return { connect: vi.fn(), query } as unknown as DatabasePool;
@@ -240,6 +243,9 @@ describe("pipeline run stage batches", () => {
       }
       if (sql.includes("FROM event_deliveries")) {
         return result([{ count: "3" }]);
+      }
+      if (sql.includes("FROM provider_work_items")) {
+        return result([]);
       }
       throw new Error(`Unexpected SQL in cancel test: ${sql}`);
     });

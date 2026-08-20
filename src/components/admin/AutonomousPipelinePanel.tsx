@@ -16,11 +16,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type {
-  PipelineReadiness,
-  PipelineRun,
-  PipelineStageId,
-  PipelineStageState,
+import { Progress } from "@/components/ui/progress";
+import {
+  PIPELINE_STAGE_IDS,
+  type PipelineReadiness,
+  type PipelineRun,
+  type PipelineStage,
+  type PipelineStageId,
+  type PipelineStageState,
 } from "@/integrations/gcp/pipeline";
 
 type RunMode = "full" | "recalculate" | "resume";
@@ -91,6 +94,22 @@ function money(value: number): string {
     maximumFractionDigits: 0,
     style: "currency",
   }).format(value);
+}
+
+function stageLabel(id: PipelineStageId): string {
+  return id.replace(/-/g, " ");
+}
+
+function StageMeter({ stage }: { stage: PipelineStage | undefined }) {
+  const percent = stage?.progress?.percent ?? (stage?.state === "succeeded" ? 100 : 0);
+  const indeterminate = stage?.state === "running" && stage.progress?.percent == null;
+  return (
+    <Progress
+      aria-label={`${stageLabel(stage?.id ?? "intake")} progress`}
+      className={`h-1.5 bg-canvas ${indeterminate ? "animate-pulse" : ""}`}
+      value={indeterminate ? 35 : percent}
+    />
+  );
 }
 
 interface Props {
@@ -304,19 +323,24 @@ export default function AutonomousPipelinePanel({
                 <p className="mt-1 min-h-10 text-xs leading-5 text-ink-muted">
                   {track.description}
                 </p>
-                <div className="mt-3 space-y-1.5 border-t border-hairline pt-3">
+                <div className="mt-3 space-y-2 border-t border-hairline pt-3">
                   {track.stages.map((stageId) => {
                     const stage = run?.stages.find((item) => item.id === stageId);
                     return (
-                      <div
-                        key={stageId}
-                        className="flex items-center justify-between gap-2 text-[11px] text-ink-muted"
-                      >
-                        <span>{stageId.replace(/-/g, " ")}</span>
-                        <span className="flex items-center gap-1.5">
-                          {stage && stage.attempts > 1 ? ` · ${stage.attempts} attempts` : null}
-                          <span>{stage?.state ?? "idle"}</span>
-                        </span>
+                      <div key={stageId} className="space-y-1 text-[11px] text-ink-muted">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="capitalize">{stageLabel(stageId)}</span>
+                          <span className="flex items-center gap-1.5 font-mono">
+                            {stage?.progress?.percent != null ? `${stage.progress.percent}%` : null}
+                            <span>{stage?.state ?? "idle"}</span>
+                          </span>
+                        </div>
+                        <StageMeter stage={stage ? { ...stage, id: stageId } : undefined} />
+                        {stage?.progress?.message ? (
+                          <p className="leading-4 text-[10px]">{stage.progress.message}</p>
+                        ) : stage && stage.attempts > 1 ? (
+                          <p className="leading-4 text-[10px]">{stage.attempts} attempts</p>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -324,6 +348,53 @@ export default function AutonomousPipelinePanel({
               </div>
             );
           })}
+        </div>
+
+        <div className="mt-4 rounded-lg border border-hairline bg-canvas/40 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-muted">
+              Stage activity
+            </p>
+            {run ? (
+              <span className="font-mono text-[11px] text-ink-muted">
+                {run.stages.filter((stage) => stage.state === "succeeded").length}/
+                {run.stages.length} complete
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-3 divide-y divide-hairline">
+            {PIPELINE_STAGE_IDS.map((stageId) => {
+              const stage = run?.stages.find((item) => item.id === stageId);
+              return (
+                <div key={stageId} className="grid gap-2 py-2.5 sm:grid-cols-[minmax(0,1fr)_7.5rem]">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <StateMark state={stage?.state ?? "idle"} />
+                      <span className="text-xs font-medium capitalize text-ink">
+                        {stageLabel(stageId)}
+                      </span>
+                      {stage?.progress?.percent != null ? (
+                        <span className="font-mono text-[11px] text-ink-muted">
+                          {stage.progress.percent}%
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-[11px] leading-5 text-ink-muted">
+                      {stage?.progress?.message ??
+                        (stage?.state === "running"
+                          ? "In progress"
+                          : "Waiting to start")}
+                    </p>
+                  </div>
+                  <div className="flex flex-col justify-center gap-1">
+                    <StageMeter
+                      stage={stage ?? { attempts: 0, completedAt: null, dependencies: [], execution: "job", id: stageId, startedAt: null, state: "pending" }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         {readiness ? (
