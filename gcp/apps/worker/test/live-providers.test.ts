@@ -554,8 +554,9 @@ describe("managed pipeline providers", () => {
       { item_key: "oled tv", provider_task_id: "t2", state: "submitted" },
     ];
     const dataForSeo = {
-      readySerpTaskIds: vi.fn(async () => new Set(["t1"])),
-      serpTaskResult: vi.fn(async () => {
+      readySerpTaskIds: vi.fn(async () => new Set<string>()),
+      serpTaskSnapshot: vi.fn(async (id: string) => {
+        if (id !== "t1") return "pending";
         now += 10;
         return { features: [], results: [] };
       }),
@@ -654,7 +655,7 @@ describe("managed pipeline providers", () => {
       code: "provider_hydration_incomplete",
       statusCode: 503,
     });
-    expect(dataForSeo.serpTaskResult).toHaveBeenCalledTimes(1);
+    expect(dataForSeo.serpTaskSnapshot).toHaveBeenCalled();
     expect(dataForSeo.submitSerpTasks).not.toHaveBeenCalled();
   });
 });

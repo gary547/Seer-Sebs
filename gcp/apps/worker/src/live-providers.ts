@@ -594,6 +594,7 @@ export class DataForSeoClient {
   async readySerpTaskIds(): Promise<Set<string>> {
     const response = await this.http.json(
       "https://api.dataforseo.com/v3/serp/google/organic/tasks_ready",
+      { method: "POST", body: JSON.stringify([]) },
     );
     const ready = new Set<string>();
     for (const task of records(response.tasks)) {
@@ -605,12 +606,16 @@ export class DataForSeoClient {
     return ready;
   }
 
-  async serpTaskResult(providerTaskId: string): Promise<SerpSnapshot> {
-    const items = dataForSeoItems(
-      await this.http.json(
-        `https://api.dataforseo.com/v3/serp/google/organic/task_get/advanced/${encodeURIComponent(providerTaskId)}`,
-      ),
+  async serpTaskSnapshot(
+    providerTaskId: string,
+  ): Promise<SerpSnapshot | "pending"> {
+    const raw = await this.http.json(
+      `https://api.dataforseo.com/v3/serp/google/organic/task_get/advanced/${encodeURIComponent(providerTaskId)}`,
     );
+    const task = records(raw.tasks)[0];
+    const code = numberOrNull(task?.status_code);
+    if (code === 40601 || code === 40602) return "pending";
+    const items = dataForSeoItems(raw);
     const results = items
       .filter((item) => item.type === "organic")
       .map((item) => {
@@ -639,6 +644,14 @@ export class DataForSeoClient {
       ),
     ];
     return { features, results };
+  }
+
+  async serpTaskResult(providerTaskId: string): Promise<SerpSnapshot> {
+    const snapshot = await this.serpTaskSnapshot(providerTaskId);
+    if (snapshot === "pending") {
+      throw new Error("DataForSEO SERP task is still pending.");
+    }
+    return snapshot;
   }
 }
 
@@ -1135,13 +1148,20 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           itemKey: item.item_key,
           keyword: byKey.get(item.item_key)?.keyword ?? item.item_key,
         }));
-      if (unsubmitted.length > 0 && deadline - this.now() > 20_000) {
+      const inFlight = remaining.filter(
+        (item) => item.state === "submitted" && item.provider_task_id,
+      ).length;
+      if (
+        unsubmitted.length > 0 &&
+        inFlight < this.serpSubmitChunk &&
+        deadline - this.now() > 20_000
+      ) {
         await this.submitSerpChunk(
           pool,
           project,
           projectId,
           runId,
-          unsubmitted.slice(0, this.serpSubmitChunk),
+          unsubmitted.slice(0, this.serpSubmitChunk - inFlight),
         );
       }
       const submitted = remaining.filter(
@@ -1153,6 +1173,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         runId,
         submitted,
         byKey,
+        deadline,
       );
       if (
         unsubmitted.length === 0 &&
@@ -1224,30 +1245,36 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     runId: string,
     submitted: ProviderWorkItemRow[],
     byKey: Map<string, KeywordProviderRow>,
+    deadline: number,
   ): Promise<number> {
     if (submitted.length === 0) return 0;
-    let ready: Set<string>;
+    let ready = new Set<string>();
     try {
       ready = await this.dataForSeo.readySerpTaskIds();
     } catch (error) {
-      if (isProviderRateLimit(error)) {
-        await this.wait(35_000);
-        return 0;
-      }
-      throw error;
+      if (!isProviderRateLimit(error)) throw error;
+      await this.wait(35_000);
     }
     const readyItems = submitted.filter(
       (item) => item.provider_task_id && ready.has(item.provider_task_id),
     );
-    await concurrently(readyItems, SERP_RESULT_CONCURRENCY, async (item) => {
+    const candidates =
+      readyItems.length > 0
+        ? readyItems
+        : submitted.filter((item) => item.provider_task_id);
+    let collected = 0;
+    await concurrently(candidates, SERP_RESULT_CONCURRENCY, async (item) => {
+      if (this.now() >= deadline) return;
       const keyword = byKey.get(item.item_key);
-      if (!keyword) throw new Error("SERP work item lost its keyword.");
+      if (!keyword) return;
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         try {
-          const snapshot = await this.dataForSeo.serpTaskResult(
+          const snapshot = await this.dataForSeo.serpTaskSnapshot(
             item.provider_task_id!,
           );
+          if (snapshot === "pending") return;
           await this.persistSerp(pool, projectId, runId, keyword, snapshot);
+          collected += 1;
           return;
         } catch (error) {
           if (!isProviderRateLimit(error) || attempt === 4) throw error;
@@ -1255,7 +1282,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         }
       }
     });
-    return readyItems.length;
+    return collected;
   }
 
   private async serpWork(
