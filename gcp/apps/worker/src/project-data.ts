@@ -1127,15 +1127,31 @@ async function persistSerpCollection(
   if ((statusResult.rowCount ?? 0) !== statuses.length) {
     throw new Error("SERP collection did not update every kept keyword.");
   }
+  // Replacing SERP rows cascades into link_power_scores. A second full run
+  // on a large project times out at the default 10s statement_timeout.
+  await client.query("SET LOCAL statement_timeout = '600s'");
+  const replaceable = JSON.stringify(
+    statuses.filter((status) => status.status !== "missing-provider"),
+  );
+  await client.query(
+    `
+      DELETE FROM link_power_scores AS score
+      USING serp_results AS result,
+        jsonb_to_recordset($2::jsonb) AS status(id uuid)
+      WHERE score.serp_result_id = result.id
+        AND result.project_id = $1
+        AND result.keyword_id = status.id
+    `,
+    [projectId, replaceable],
+  );
   await client.query(
     `
       DELETE FROM serp_results AS result
-      USING jsonb_to_recordset($2::jsonb) AS status(id uuid, status text)
+      USING jsonb_to_recordset($2::jsonb) AS status(id uuid)
       WHERE result.project_id = $1
         AND result.keyword_id = status.id
-        AND status.status <> 'missing-provider'
     `,
-    [projectId, JSON.stringify(statuses)],
+    [projectId, replaceable],
   );
   for (const keyword of output.keywords) {
     if (keyword.status !== "missing-provider") {
