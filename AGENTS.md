@@ -112,6 +112,10 @@ worker workflows, event delivery, object persistence, and restart persistence.
   device before persistence. Sum clicks and impressions, recompute CTR, and
   use impression-weighted position; report the merged row count as an import
   warning.
+- Standard GSC exports may use the aggregate `all` device. Preserve it through
+  import, fixtures, pipeline output, and `ctr_curves`; the database device
+  constraint must accept `all`, `desktop`, `mobile`, and `tablet`. Prefer an
+  exact device curve and use `all` as the first deterministic fallback.
 - The admin calculation control room reads paginated, searchable results from
   `GET /v1/projects/:projectId/calculation-inspector` and
   `GET /v1/projects/:projectId/link-power-inspector`. Both routes require an
