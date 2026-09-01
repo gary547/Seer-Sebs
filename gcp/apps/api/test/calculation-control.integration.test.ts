@@ -54,7 +54,7 @@ function database(): DatabasePool {
     if (sql.includes("WITH rows AS")) {
       return result([{ average_score: "72.5", matched_count: "9", missing_count: "1", scored_count: "9", total_count: "10", zero_count: "1", zero_rows: [{ keyword: "missing page", rankingUrl: null, tacticalStatus: "create_content" }] }]);
     }
-    if (sql.includes("WITH comparison AS")) {
+    if (sql.includes("WITH aggregate AS")) {
       return result([{ average_har_delta: "1.5", comparable_har_count: "8", comparable_revenue_count: "7", items: [{ currentRevenueV1: 100, currentRevenueV2: 120, harV1: 7, harV2: 5, keyword: "seo agency", keywordId: "00000000-0000-4000-8000-000000000006", targetIncrementalRevenueV1: 500, targetIncrementalRevenueV2: 650 }], keyword_count: "10" }]);
     }
     if (sql.includes("LEFT JOIN LATERAL")) {

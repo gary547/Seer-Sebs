@@ -542,7 +542,38 @@ export async function getProjectCalculationControl(
     ),
     pool.query<ComparisonSummaryRow>(
       `
-        WITH comparison AS (
+        WITH aggregate AS (
+          SELECT
+            count(*)::text AS keyword_count,
+            count(*) FILTER (
+              WHERE legacy.har IS NOT NULL AND har.har_position IS NOT NULL
+            )::text AS comparable_har_count,
+            avg(abs(har.har_position - legacy.har)) FILTER (
+              WHERE legacy.har IS NOT NULL AND har.har_position IS NOT NULL
+            )::text AS average_har_delta,
+            count(*) FILTER (
+              WHERE legacy.target_incremental_revenue_annual IS NOT NULL
+                AND revenue.target_incremental_revenue_annual IS NOT NULL
+            )::text AS comparable_revenue_count
+          FROM har_forecasts AS har
+          LEFT JOIN legacy_keyword_forecasts AS legacy
+            ON legacy.keyword_id = har.keyword_id
+          LEFT JOIN revenue_forecasts AS revenue
+            ON revenue.pipeline_run_id = har.pipeline_run_id
+           AND revenue.keyword_id = har.keyword_id
+           AND revenue.scenario = har.scenario
+          WHERE har.project_id = $1
+            AND har.pipeline_run_id = $2::uuid
+            AND har.scenario = 'realistic'
+        ), sample_keys AS (
+          SELECT har.keyword_id
+          FROM har_forecasts AS har
+          WHERE har.project_id = $1
+            AND har.pipeline_run_id = $2::uuid
+            AND har.scenario = 'realistic'
+          ORDER BY har.keyword_id
+          LIMIT 50
+        ), sample AS (
           SELECT
             keyword.id AS keyword_id,
             keyword.keyword,
@@ -554,35 +585,24 @@ export async function getProjectCalculationControl(
               AS target_incremental_revenue_v1,
             revenue.target_incremental_revenue_annual
               AS target_incremental_revenue_v2
-          FROM har_forecasts AS har
-          JOIN keywords AS keyword ON keyword.id = har.keyword_id
+          FROM sample_keys AS key
+          JOIN har_forecasts AS har
+            ON har.pipeline_run_id = $2::uuid
+           AND har.keyword_id = key.keyword_id
+           AND har.scenario = 'realistic'
+          JOIN keywords AS keyword ON keyword.id = key.keyword_id
           LEFT JOIN legacy_keyword_forecasts AS legacy
-            ON legacy.keyword_id = har.keyword_id
+            ON legacy.keyword_id = key.keyword_id
           LEFT JOIN revenue_forecasts AS revenue
-            ON revenue.pipeline_run_id = har.pipeline_run_id
-           AND revenue.keyword_id = har.keyword_id
-           AND revenue.scenario = har.scenario
-          WHERE har.project_id = $1
-            AND har.pipeline_run_id = $2::uuid
-            AND har.scenario = 'realistic'
-        ), sample AS (
-          SELECT *
-          FROM comparison
-          ORDER BY keyword
-          LIMIT 50
+            ON revenue.pipeline_run_id = $2::uuid
+           AND revenue.keyword_id = key.keyword_id
+           AND revenue.scenario = 'realistic'
         )
         SELECT
-          count(*)::text AS keyword_count,
-          count(*) FILTER (
-            WHERE har_v1 IS NOT NULL AND har_v2 IS NOT NULL
-          )::text AS comparable_har_count,
-          avg(abs(har_v2 - har_v1)) FILTER (
-            WHERE har_v1 IS NOT NULL AND har_v2 IS NOT NULL
-          )::text AS average_har_delta,
-          count(*) FILTER (
-            WHERE target_incremental_revenue_v1 IS NOT NULL
-              AND target_incremental_revenue_v2 IS NOT NULL
-          )::text AS comparable_revenue_count,
+          aggregate.keyword_count,
+          aggregate.comparable_har_count,
+          aggregate.average_har_delta,
+          aggregate.comparable_revenue_count,
           COALESCE(
             (
               SELECT jsonb_agg(jsonb_build_object(
@@ -599,7 +619,7 @@ export async function getProjectCalculationControl(
             ),
             '[]'::jsonb
           ) AS items
-        FROM comparison
+        FROM aggregate
       `,
       [projectId, runId],
     ),

@@ -2790,27 +2790,24 @@ export async function getProjectCalculationInspector(
             keyword.keyword,
             keyword.normalised_keyword,
             keyword.device,
-            max(har.base_rank) AS base_rank,
-            max(revenue.expected_incremental_annual)
-              FILTER (WHERE har.scenario = 'realistic') AS realistic_uplift
-          FROM har_forecasts AS har
-          JOIN keywords AS keyword ON keyword.id = har.keyword_id
-          LEFT JOIN revenue_forecasts AS revenue
-            ON revenue.pipeline_run_id = har.pipeline_run_id
-           AND revenue.keyword_id = har.keyword_id
-           AND revenue.scenario = har.scenario
-          WHERE har.project_id = $1
-            AND har.pipeline_run_id = $2
+            har.base_rank,
+            realistic.expected_incremental_annual AS realistic_uplift
+          FROM revenue_forecasts AS realistic
+          JOIN har_forecasts AS har
+            ON har.pipeline_run_id = realistic.pipeline_run_id
+           AND har.keyword_id = realistic.keyword_id
+           AND har.scenario = 'realistic'
+          JOIN keywords AS keyword ON keyword.id = realistic.keyword_id
+          WHERE realistic.project_id = $1
+            AND realistic.pipeline_run_id = $2
+            AND realistic.scenario = 'realistic'
             AND (
               $3 = ''
               OR keyword.normalised_keyword LIKE '%' || $3 || '%'
             )
-          GROUP BY
-            keyword.id,
-            keyword.keyword,
-            keyword.normalised_keyword,
-            keyword.device
-          ORDER BY realistic_uplift DESC NULLS LAST, keyword.normalised_keyword
+          ORDER BY
+            realistic.expected_incremental_annual DESC NULLS LAST,
+            realistic.keyword_id
           LIMIT $4 OFFSET $5
         )
         SELECT
@@ -2843,7 +2840,7 @@ export async function getProjectCalculationInspector(
          AND revenue.scenario = har.scenario
         ORDER BY
           page.realistic_uplift DESC NULLS LAST,
-          page.normalised_keyword,
+          page.keyword_id,
           CASE har.scenario
             WHEN 'conservative' THEN 1
             WHEN 'realistic' THEN 2
@@ -2854,11 +2851,12 @@ export async function getProjectCalculationInspector(
     ),
     pool.query<CountRow>(
       `
-        SELECT count(DISTINCT har.keyword_id)::text AS count
+        SELECT count(*)::text AS count
         FROM har_forecasts AS har
         JOIN keywords AS keyword ON keyword.id = har.keyword_id
         WHERE har.project_id = $1
           AND har.pipeline_run_id = $2
+          AND har.scenario = 'realistic'
           AND (
             $3 = ''
             OR keyword.normalised_keyword LIKE '%' || $3 || '%'

@@ -115,6 +115,9 @@ docker compose -f "$compose_file" exec -T postgres \
   -f /docker-entrypoint-initdb.d/030_ctr_curves_all_device.sql
 docker compose -f "$compose_file" exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
+  -f /docker-entrypoint-initdb.d/031_calculation_inspector_indexes.sql
+docker compose -f "$compose_file" exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
   -f /docker-entrypoint-initdb.d/999_local_runtime_users.sql
 docker compose -f "$compose_file" up -d --wait
 

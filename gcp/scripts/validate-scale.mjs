@@ -61,7 +61,7 @@ const suffix = `${Date.now()}-${keywordCount}`;
 const email = `scale-${suffix}@example.dev`;
 const password = "Local-scale-2026";
 const identity = await jsonRequest(`${apiBaseUrl}/v1/local-auth/register`, {
-  body: JSON.stringify({ email, password }),
+  body: JSON.stringify({ email, password, role: "super_admin" }),
   headers: { "content-type": "application/json" },
   method: "POST",
 });
@@ -121,11 +121,33 @@ const keywords = Array.from({ length: keywordCount }, (_, index) => ({
   rankingUrl: `https://${domain}/products/tv-model-${index + 1}`,
   text: `tv model s${index + 1}`,
 }));
+const readinessKeywordText = keywords[0].text;
 await jsonRequest(
   `${apiBaseUrl}/v1/projects/${project.id}/keywords`,
   authenticated(identity.token, {
     body: JSON.stringify({ keywords }),
     method: "POST",
+  }),
+);
+const readinessKeywords = await jsonRequest(
+  `${apiBaseUrl}/v1/projects/${project.id}/keywords?detoxStatus=pending&search=${encodeURIComponent(readinessKeywordText)}&limit=100`,
+  authenticated(identity.token),
+);
+const readinessKeywordId = readinessKeywords.items.find(
+  (keyword) => keyword.text === readinessKeywordText,
+)?.id;
+if (!readinessKeywordId) {
+  throw new Error("Scale readiness keyword was not returned.");
+}
+await jsonRequest(
+  `${apiBaseUrl}/v1/projects/${project.id}/keywords`,
+  authenticated(identity.token, {
+    body: JSON.stringify({
+      action: "updateDetox",
+      detoxStatus: "keep",
+      ids: [readinessKeywordId],
+    }),
+    method: "PATCH",
   }),
 );
 await jsonRequest(
@@ -138,9 +160,9 @@ await jsonRequest(
           ctr: 0.02,
           device: "mobile",
           impressions: 1_000,
-          page: `https://${domain}/products/tv-model-1`,
+          page: keywords[0].rankingUrl,
           position: 10,
-          query: "tv model s1",
+          query: readinessKeywordText,
         },
       ],
       sourceName: "scale-validation.csv",
@@ -194,6 +216,23 @@ const portfolio = await jsonRequest(
   authenticated(identity.token),
 );
 const portfolioElapsedMs = Date.now() - portfolioStartedAt;
+const calculationStartedAt = Date.now();
+const [calculationControl, calculationInspector, linkPowerInspector] =
+  await Promise.all([
+    jsonRequest(
+      `${apiBaseUrl}/v1/projects/${project.id}/calculation-control`,
+      authenticated(identity.token),
+    ),
+    jsonRequest(
+      `${apiBaseUrl}/v1/projects/${project.id}/calculation-inspector?limit=50&offset=0&search=`,
+      authenticated(identity.token),
+    ),
+    jsonRequest(
+      `${apiBaseUrl}/v1/projects/${project.id}/link-power-inspector?limit=50&offset=0&search=`,
+      authenticated(identity.token),
+    ),
+  ]);
+const calculationElapsedMs = Date.now() - calculationStartedAt;
 const expectedScenarioCount = keywordCount * 3;
 if (
   persisted.keywordCount !== keywordCount ||
@@ -217,9 +256,23 @@ if (
     `Scale portfolio validation failed after ${portfolioElapsedMs}ms.`,
   );
 }
+if (
+  calculationElapsedMs >= 5_000 ||
+  calculationControl.latestSuccessfulRun?.id !== run.id ||
+  calculationControl.clustering?.clusterCount !== keywordCount ||
+  calculationInspector.total !== keywordCount ||
+  calculationInspector.items.length !== 50 ||
+  linkPowerInspector.total < keywordCount ||
+  linkPowerInspector.items.length !== 50
+) {
+  throw new Error(
+    `Scale calculation inspection failed after ${calculationElapsedMs}ms.`,
+  );
+}
 process.stdout.write(
   `${JSON.stringify({
     calculationCounts: persisted.calculationCounts,
+    calculationElapsedMs,
     elapsedMs: Date.now() - startedAt,
     keywordCount,
     portfolioElapsedMs,

@@ -57,7 +57,11 @@ function database(): DatabasePool {
           },
         ]);
       }
-      if (sql.includes("count(DISTINCT har.keyword_id)")) {
+      if (
+        sql.includes("SELECT count(*)::text AS count") &&
+        sql.includes("FROM har_forecasts AS har") &&
+        sql.includes("har.scenario = 'realistic'")
+      ) {
         return result([{ count: "1" }]);
       }
       if (sql.includes("percentile_cont(0.1)")) {
