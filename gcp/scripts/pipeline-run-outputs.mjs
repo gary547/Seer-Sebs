@@ -1,4 +1,4 @@
-const PIPELINE_OUTPUT_BATCH_SIZE = 4;
+const PIPELINE_OUTPUT_BATCH_SIZE = 1;
 
 export async function attachPipelineRunOutputs({
   apiBaseUrl,

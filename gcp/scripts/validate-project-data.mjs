@@ -383,6 +383,29 @@ async function validateEndToEnd() {
     throw new Error("Duplicate keyword validation did not fail closed.");
   }
 
+  const readinessKeywordPage = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${project.id}/keywords?detoxStatus=pending&search=cheap%20tv%20stand`,
+    authenticated(identity.token),
+  );
+  const readinessKeywordId = readinessKeywordPage.items[0]?.id;
+  if (readinessKeywordPage.total !== 1 || !readinessKeywordId) {
+    throw new Error("Pipeline readiness keyword fixture was not returned.");
+  }
+  const qualifiedKeywords = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${project.id}/keywords`,
+    authenticated(identity.token, {
+      body: JSON.stringify({
+        action: "updateDetox",
+        detoxStatus: "keep",
+        ids: [readinessKeywordId],
+      }),
+      method: "PATCH",
+    }),
+  );
+  if (qualifiedKeywords.affectedKeywordCount !== 1) {
+    throw new Error("Pipeline readiness review did not qualify the fixture.");
+  }
+
   await jsonRequest(
     `${apiBaseUrl}/v1/projects/${project.id}/gsc-imports`,
     authenticated(identity.token, {

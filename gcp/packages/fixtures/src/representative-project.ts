@@ -23,7 +23,7 @@ export interface SyntheticKeyword {
 export interface SyntheticGscRow {
   clicks: number;
   ctr: number;
-  device: "desktop" | "mobile" | "tablet";
+  device: "all" | "desktop" | "mobile" | "tablet";
   impressions: number;
   page: string;
   position: number;
@@ -335,7 +335,11 @@ function parseGscRow(value: unknown, index: number): SyntheticGscRow {
   return {
     clicks: number(item.clicks, `${path}.clicks`),
     ctr,
-    device: literal(item.device, ["desktop", "mobile", "tablet"] as const, `${path}.device`),
+    device: literal(
+      item.device,
+      ["all", "desktop", "mobile", "tablet"] as const,
+      `${path}.device`,
+    ),
     impressions: number(item.impressions, `${path}.impressions`),
     page: string(item.page, `${path}.page`),
     position: number(item.position, `${path}.position`),

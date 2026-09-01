@@ -1997,7 +1997,12 @@ function curveCtr(
         if (left.device === device && right.device !== device) return -1;
         if (right.device === device && left.device !== device) return 1;
       }
-      const order = { mobile: 0, desktop: 1, tablet: 2 };
+      const order: Record<SyntheticGscRow["device"], number> = {
+        all: 0,
+        mobile: 1,
+        desktop: 2,
+        tablet: 3,
+      };
       return order[left.device] - order[right.device];
     });
   const point = candidates[0]?.points.find(

@@ -65,6 +65,17 @@ describe("representative project fixture", () => {
     ).toBe(12);
   });
 
+  it("accepts all-device GSC rows from standard exports", () => {
+    const input = structuredClone(rawFixture) as {
+      gscRows: Array<{ device: string }>;
+    };
+    input.gscRows[0]!.device = "all";
+
+    expect(parseRepresentativeProjectFixture(input).gscRows[0]?.device).toBe(
+      "all",
+    );
+  });
+
   it("rejects duplicate source keywords before a run can start", () => {
     const invalid = structuredClone(rawFixture) as {
       keywords: Array<{ id: string; text: string }>;

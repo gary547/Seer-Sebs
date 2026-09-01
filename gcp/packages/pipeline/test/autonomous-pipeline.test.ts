@@ -121,6 +121,19 @@ describe("autonomous pipeline acceptance contract", () => {
     ).toBe(true);
   });
 
+  it("builds CTR curves for all-device GSC exports", () => {
+    const fixture = parseRepresentativeProjectFixture(rawFixture);
+    fixture.gscRows = fixture.gscRows.map((row) => ({
+      ...row,
+      device: "all",
+    }));
+    const outputs = execute(fixture, "ctr-curves");
+    const ctr = outputs["ctr-curves"] as CtrCurvesStageData;
+
+    expect(ctr.curves.length).toBeGreaterThan(0);
+    expect(ctr.curves.every((curve) => curve.device === "all")).toBe(true);
+  });
+
   it("uses Revenue-only SERP visibility and returns a defensible deduplicated rollup", () => {
     const fixture = parseRepresentativeProjectFixture(rawFixture);
     const serpKeyword = fixture.providerInputs.serpKeywords.find(
