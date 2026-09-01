@@ -126,6 +126,13 @@ worker workflows, event delivery, object persistence, and restart persistence.
   recent runs capped at 20, comparison rows capped at 50, and detail samples
   capped at 20. The route is administrator-only and may inspect archived
   projects; archived UI state must remain read-only.
+- Keep calculation-control and calculation-inspector bounded on 18,000-keyword
+  projects. Select the realistic revenue page before expanding the three HAR
+  scenarios, and select comparison sample keys before joining detail rows.
+  Migration `031_calculation_inspector_indexes` supplies the canonical monthly
+  volume, realistic HAR, and realistic revenue covering indexes. The scale gate
+  must call calculation-control, calculation-inspector, and Link Power
+  concurrently and complete the group in under five seconds.
 - Monthly-volume reads must resolve one canonical migrated row per keyword and
   month. Prefer the latest `fetched_at`, then use source and row ID as stable
   tie-breakers; live-provider data may fill only months absent from migrated
