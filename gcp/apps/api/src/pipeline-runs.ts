@@ -10,6 +10,7 @@ import {
   PIPELINE_STAGES,
   type PipelineStageId,
 } from "../../../packages/pipeline/src/definition.js";
+import { userFacingPipelineFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertProjectAccessByRole } from "./authorization.js";
 import {
@@ -89,7 +90,10 @@ export function resolvePipelineRunFailure(
   const message = outputRecord(actual.output)?.message;
   return {
     attempts: actual.attempts,
-    message: typeof message === "string" && message.trim() ? message : null,
+    message: userFacingPipelineFailureMessage(
+      actual.id,
+      typeof message === "string" ? message : null,
+    ),
     stageId: actual.id,
   };
 }
@@ -702,7 +706,7 @@ export async function getPipelineRun(
             includeOutput
               ? "output"
               : `CASE
-            WHEN state = 'failed' THEN jsonb_strip_nulls(jsonb_build_object(
+            WHEN state IN ('failed', 'running') THEN jsonb_strip_nulls(jsonb_build_object(
               'failedStage', output->>'failedStage',
               'message', left(output->>'message', 500),
               'reason', output->>'reason'
@@ -772,7 +776,7 @@ export async function getPipelineRun(
       throw new Error(`Missing stage row for ${definition.id}.`);
     }
 
-    const compactFailure = !includeOutput && stage.state === "failed" && outputRecord(stage.output);
+    const compactOutput = !includeOutput && outputRecord(stage.output);
     const waitingOn = definition.dependencies.filter((dependencyId) => {
       const dependency = rowsByStage.get(dependencyId);
       return dependency?.state !== "succeeded";
@@ -783,7 +787,7 @@ export async function getPipelineRun(
       dependencies: definition.dependencies,
       execution: definition.execution,
       id: definition.id,
-      ...(includeOutput || compactFailure ? { output: stage.output } : {}),
+      ...(includeOutput || compactOutput ? { output: stage.output } : {}),
       progress: buildStageProgress({
         attempts: stage.attempts,
         completedAt: stage.completed_at,

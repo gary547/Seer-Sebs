@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   AhrefsClient,
+  ANTHROPIC_MAX_ATTEMPTS,
+  ANTHROPIC_RETRY_WAIT_MS,
   AnthropicSiteArchitectureClient,
   DataForSeoClient,
   isGoogleAdsKeywordEligible,
@@ -443,6 +445,67 @@ describe("managed pipeline providers", () => {
     const headers = new Headers(request?.headers);
     expect(headers.get("x-api-key")).toBe("anthropic-key");
     expect(headers.has("authorization")).toBe(false);
+  });
+
+  it("retries transient Claude failures 30 times at two-second intervals", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const wait = vi.fn(async () => undefined);
+    const reportRetry = vi.fn(async () => undefined);
+    let attempt = 0;
+    const fetchImplementation = vi.fn<typeof fetch>(async () => {
+      attempt += 1;
+      if (attempt < ANTHROPIC_MAX_ATTEMPTS) {
+        return new Response("temporarily unavailable", { status: 503 });
+      }
+      return new Response(
+        JSON.stringify({
+          content: [
+            {
+              text: JSON.stringify([
+                {
+                  contentStatus: "green",
+                  index: 0,
+                  relevancyScore: 91,
+                  tacticalStatus: "no_action_needed",
+                },
+              ]),
+              type: "text",
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+    const client = new AnthropicSiteArchitectureClient(
+      "anthropic-key",
+      fetchImplementation,
+      wait,
+    );
+
+    const scores = await client.score(
+      [
+        {
+          keyword: "buy television",
+          rankingUrl: "https://example.test/televisions",
+        },
+      ],
+      reportRetry,
+    );
+
+    expect(scores.size).toBe(1);
+    expect(fetchImplementation).toHaveBeenCalledTimes(ANTHROPIC_MAX_ATTEMPTS);
+    expect(wait).toHaveBeenCalledTimes(ANTHROPIC_MAX_ATTEMPTS - 1);
+    expect(wait).toHaveBeenLastCalledWith(ANTHROPIC_RETRY_WAIT_MS);
+    expect(reportRetry).toHaveBeenCalledTimes(ANTHROPIC_MAX_ATTEMPTS - 1);
+    expect(reportRetry).toHaveBeenLastCalledWith({
+      attempt: ANTHROPIC_MAX_ATTEMPTS,
+      batch: 1,
+      batchCount: 1,
+      maxAttempts: ANTHROPIC_MAX_ATTEMPTS,
+      waitMilliseconds: ANTHROPIC_RETRY_WAIT_MS,
+    });
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("503");
+    warning.mockRestore();
   });
 
   it("persists keyword enrichment batches and retries remaining work", async () => {

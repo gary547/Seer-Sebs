@@ -17,6 +17,7 @@ import {
   type PipelineStageDefinition,
   type PipelineStageId,
 } from "../../../packages/pipeline/src/definition.js";
+import { pipelineStageFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 import { executeDataDrivenStage } from "../../../packages/pipeline/src/stage-handlers.js";
 import {
   loadProjectPipelineSource,
@@ -113,24 +114,23 @@ export async function failPipelineRun(
   pool: DatabasePool,
   failure: PipelineFailure,
 ): Promise<Record<string, unknown>> {
+  const userMessage = pipelineStageFailureMessage(failure.stageId);
   await withTransaction(pool, async (client) => {
     await client.query(
       `
         UPDATE pipeline_stage_runs
         SET state = 'failed',
-            output = COALESCE(
-              output,
+            output = COALESCE(output, '{}'::jsonb) ||
               jsonb_build_object(
                 'reason', 'pipeline_failed',
                 'failedStage', $2::text,
                 'message', $3::text
-              )
-            ),
+              ),
             completed_at = COALESCE(completed_at, now())
         WHERE run_id = $1
           AND state <> 'succeeded'
       `,
-      [failure.runId, failure.stageId, failure.reason],
+      [failure.runId, failure.stageId, userMessage],
     );
     const result = await client.query(
       `

@@ -75,8 +75,45 @@ describe("stage progress", () => {
         work: null,
       }).message,
     ).toBe(
-      "Scoring content-fit for ranking URLs · 30m elapsed · attempt 3",
+      "Scoring ranking-page content fit with Claude; transient failures retry every 2s · 30m elapsed · attempt 3",
     );
+  });
+
+  it("shows live Claude retry progress without exposing provider status codes", () => {
+    expect(
+      buildStageProgress({
+        attempts: 1,
+        completedAt: null,
+        id: "site-architecture",
+        now,
+        outputMessage:
+          "Claude is scoring content-fit batch 2 of 8; retrying attempt 4 of 30 in 2s.",
+        startedAt: new Date("2026-08-20T07:49:30.000Z"),
+        state: "running",
+        waitingOn: [],
+        work: null,
+      }).message,
+    ).toBe(
+      "Claude is scoring content-fit batch 2 of 8; retrying attempt 4 of 30 in 2s. · 30s elapsed",
+    );
+  });
+
+  it("replaces raw infrastructure failures with a useful stage message", () => {
+    const progress = buildStageProgress({
+      attempts: 81,
+      completedAt: now,
+      id: "detox",
+      now,
+      outputMessage:
+        '{"code":500,"message":"HTTP server responded with error code 500","headers":{"x-cloud-trace":"secret"}}',
+      startedAt: new Date("2026-08-20T06:20:00.000Z"),
+      state: "failed",
+      waitingOn: [],
+      work: null,
+    });
+
+    expect(progress.message).toContain("Keyword qualification did not finish");
+    expect(progress.message).not.toContain("500");
   });
 
   it("marks succeeded stages complete with duration", () => {

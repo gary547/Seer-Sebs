@@ -711,90 +711,171 @@ export class AhrefsClient {
   }
 }
 
-export class AnthropicSiteArchitectureClient {
-  private readonly http: ProviderHttpClient;
+export const ANTHROPIC_MAX_ATTEMPTS = 30;
+export const ANTHROPIC_RETRY_WAIT_MS = 2_000;
 
-  constructor(apiKey: string, fetchImplementation: typeof fetch = fetch) {
+export interface AnthropicRetryProgress {
+  attempt: number;
+  batch: number;
+  batchCount: number;
+  maxAttempts: number;
+  waitMilliseconds: number;
+}
+
+type AnthropicRetryReporter = (
+  progress: AnthropicRetryProgress,
+) => Promise<void> | void;
+
+export class AnthropicSiteArchitectureClient {
+  constructor(
+    private readonly apiKey: string,
+    private readonly fetchImplementation: typeof fetch = fetch,
+    private readonly wait: (milliseconds: number) => Promise<void> = (
+      milliseconds,
+    ) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  ) {
     if (!apiKey.trim()) throw new Error("Anthropic API key is required.");
-    this.http = new ProviderHttpClient(apiKey, async (input, init) => {
-      const headers = new Headers(init?.headers);
-      headers.delete("authorization");
-      headers.set("x-api-key", apiKey);
-      headers.set("anthropic-version", "2023-06-01");
-      return fetchImplementation(input, { ...init, headers });
-    });
   }
 
   async score(
     rows: readonly { keyword: string; rankingUrl: string }[],
+    reportRetry: AnthropicRetryReporter = () => undefined,
   ): Promise<Map<string, Omit<SiteArchitectureResult, "keyword" | "matchedUrl">>> {
     const output = new Map<
       string,
       Omit<SiteArchitectureResult, "keyword" | "matchedUrl">
     >();
-    for (const group of batches(rows, 40)) {
-      const response = await this.http.json(
-        "https://api.anthropic.com/v1/messages",
-        {
-          body: JSON.stringify({
-            max_tokens: 4_000,
-            messages: [
-              {
-                content: JSON.stringify(
-                  group.map((row, index) => ({ index, ...row })),
-                ),
-                role: "user",
-              },
-            ],
-            model: "claude-sonnet-4-6",
-            system:
-              "Return only a JSON array. For each input index return index, relevancyScore from 0 to 100, contentStatus as green/amber/red, and tacticalStatus as no_action_needed/optimise_content/create_content/new_content.",
-          }),
-          method: "POST",
-        },
+    const groups = batches(rows, 40);
+    for (const [batchIndex, group] of groups.entries()) {
+      const scores = await this.scoreGroup(
+        group,
+        batchIndex + 1,
+        groups.length,
+        reportRetry,
       );
-      const text = records(response.content)
-        .map((content) => stringOrNull(content.text))
-        .filter((value): value is string => value !== null)
-        .join("\n")
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/, "");
-      const parsed: unknown = (() => {
-        try {
-          return JSON.parse(text);
-        } catch {
-          return [];
-        }
-      })();
-      for (const value of records(parsed)) {
-        const index = numberOrNull(value.index);
-        const score = numberOrNull(value.relevancyScore);
-        const contentStatus = stringOrNull(value.contentStatus);
-        const tacticalStatus = stringOrNull(value.tacticalStatus);
-        const row = index === null ? null : group[Math.round(index)];
-        if (
-          !row ||
-          score === null ||
-          score > 100 ||
-          !["amber", "green", "red"].includes(contentStatus ?? "") ||
-          ![
-            "create_content",
-            "green",
-            "new_content",
-            "no_action_needed",
-            "optimise_content",
-          ].includes(tacticalStatus ?? "")
-        ) {
-          continue;
-        }
-        output.set(normaliseKeyword(row.keyword), {
-          contentStatus: contentStatus as "amber" | "green" | "red",
-          relevancyScore: score,
-          tacticalStatus: tacticalStatus as SiteArchitectureResult["tacticalStatus"],
-        });
-      }
+      for (const [keyword, score] of scores) output.set(keyword, score);
     }
     return output;
+  }
+
+  private async scoreGroup(
+    group: readonly { keyword: string; rankingUrl: string }[],
+    batch: number,
+    batchCount: number,
+    reportRetry: AnthropicRetryReporter,
+  ): Promise<Map<string, Omit<SiteArchitectureResult, "keyword" | "matchedUrl">>> {
+    for (let attempt = 1; attempt <= ANTHROPIC_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await this.fetchImplementation(
+          "https://api.anthropic.com/v1/messages",
+          {
+            body: JSON.stringify({
+              max_tokens: 4_000,
+              messages: [
+                {
+                  content: JSON.stringify(
+                    group.map((row, index) => ({ index, ...row })),
+                  ),
+                  role: "user",
+                },
+              ],
+              model: "claude-sonnet-4-6",
+              system:
+                "Return only a JSON array. For each input index return index, relevancyScore from 0 to 100, contentStatus as green/amber/red, and tacticalStatus as no_action_needed/optimise_content/create_content/new_content.",
+            }),
+            headers: {
+              "anthropic-version": "2023-06-01",
+              "content-type": "application/json",
+              "x-api-key": this.apiKey,
+            },
+            method: "POST",
+            signal: AbortSignal.timeout(120_000),
+          },
+        );
+        if (!response.ok) {
+          if (response.status !== 429 && response.status < 500) {
+            throw new HttpError(
+              424,
+              "anthropic_request_rejected",
+              "Claude content-fit scoring could not start. Check the Anthropic provider configuration.",
+            );
+          }
+          throw new Error("Claude content-fit scoring is temporarily unavailable.");
+        }
+        const payload = record(await response.json());
+        const text = records(payload.content)
+          .map((content) => stringOrNull(content.text))
+          .filter((value): value is string => value !== null)
+          .join("\n")
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```$/, "");
+        const parsed: unknown = (() => {
+          try {
+            return JSON.parse(text);
+          } catch {
+            return [];
+          }
+        })();
+        const scores = new Map<
+          string,
+          Omit<SiteArchitectureResult, "keyword" | "matchedUrl">
+        >();
+        for (const value of records(parsed)) {
+          const index = numberOrNull(value.index);
+          const score = numberOrNull(value.relevancyScore);
+          const contentStatus = stringOrNull(value.contentStatus);
+          const tacticalStatus = stringOrNull(value.tacticalStatus);
+          const row = index === null ? null : group[Math.round(index)];
+          if (
+            !row ||
+            score === null ||
+            score > 100 ||
+            !["amber", "green", "red"].includes(contentStatus ?? "") ||
+            ![
+              "create_content",
+              "new_content",
+              "no_action_needed",
+              "optimise_content",
+            ].includes(tacticalStatus ?? "")
+          ) {
+            continue;
+          }
+          scores.set(normaliseKeyword(row.keyword), {
+            contentStatus: contentStatus as "amber" | "green" | "red",
+            relevancyScore: score,
+            tacticalStatus: tacticalStatus as SiteArchitectureResult["tacticalStatus"],
+          });
+        }
+        if (scores.size !== group.length) {
+          throw new Error("Claude returned an incomplete content-fit result.");
+        }
+        return scores;
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
+        if (attempt === ANTHROPIC_MAX_ATTEMPTS) break;
+        const progress: AnthropicRetryProgress = {
+          attempt: attempt + 1,
+          batch,
+          batchCount,
+          maxAttempts: ANTHROPIC_MAX_ATTEMPTS,
+          waitMilliseconds: ANTHROPIC_RETRY_WAIT_MS,
+        };
+        console.warn(
+          `Claude content-fit batch ${batch}/${batchCount} did not return a usable result; retrying attempt ${progress.attempt}/${progress.maxAttempts} in 2s.`,
+        );
+        try {
+          await reportRetry(progress);
+        } catch {
+          console.warn("Claude retry progress could not be recorded.");
+        }
+        await this.wait(ANTHROPIC_RETRY_WAIT_MS);
+      }
+    }
+    throw new HttpError(
+      424,
+      "anthropic_retry_exhausted",
+      "Claude content-fit scoring did not return a usable result after 30 attempts.",
+    );
   }
 }
 
@@ -860,7 +941,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         await this.hydrateBacklinks(pool, projectId);
         return;
       case "site-architecture":
-        await this.hydrateSiteArchitecture(pool, projectId);
+        await this.hydrateSiteArchitecture(pool, projectId, runId);
         return;
       default:
         return;
@@ -1630,6 +1711,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
   private async hydrateSiteArchitecture(
     pool: DatabasePool,
     projectId: string,
+    runId: string,
   ): Promise<void> {
     const keywords = await this.keywords(pool, projectId);
     const requiresScoring = keywords.filter(
@@ -1651,6 +1733,24 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         keyword: keyword.keyword,
         rankingUrl: keyword.ranking_url,
       })),
+      async (progress) => {
+        await pool.query(
+          `
+            UPDATE pipeline_stage_runs
+            SET output = COALESCE(output, '{}'::jsonb) || jsonb_build_object(
+              'message', $3::text
+            )
+            WHERE run_id = $1
+              AND stage_id = $2
+              AND state = 'running'
+          `,
+          [
+            runId,
+            "site-architecture",
+            `Claude is scoring content-fit batch ${progress.batch} of ${progress.batchCount}; retrying attempt ${progress.attempt} of ${progress.maxAttempts} in 2s.`,
+          ],
+        );
+      },
     );
     const values: SiteArchitectureResult[] = requiresScoring.map((keyword) => {
       const score = scores.get(keyword.normalised_keyword);

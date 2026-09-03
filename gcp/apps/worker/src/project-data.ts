@@ -174,6 +174,7 @@ interface ConversionOverrideSourceRow {
   scope_value: string | null;
 }
 
+export const DETOX_PERSISTENCE_BATCH_SIZE = 2_000;
 const FORECAST_PERSISTENCE_BATCH_SIZE = 2_000;
 
 function batches<T>(values: readonly T[], size: number): T[][] {
@@ -743,48 +744,53 @@ async function persistDetox(
     reason: keyword.detox.reason,
     rule: keyword.detox.rule,
   }));
-  const result = await client.query(
-    `
-      UPDATE keywords AS keyword
-      SET detox_status = decision.decision,
-          detox_reason = decision.reason,
-          detox_rule = decision.rule,
-          human_reviewed = CASE
-            WHEN decision.rule = 'pre-curated' THEN true
-            WHEN decision.decision = 'keep' THEN keyword.human_reviewed
-            ELSE false
-          END,
-          categorisation_status = CASE
-            WHEN decision.decision = 'keep' THEN keyword.categorisation_status
-            ELSE 'skipped'
-          END,
-          category = CASE WHEN decision.decision = 'keep' THEN keyword.category ELSE NULL END,
-          tags = CASE WHEN decision.decision = 'keep' THEN keyword.tags ELSE NULL END,
-          search_intent = CASE
-            WHEN decision.decision = 'keep' THEN keyword.search_intent
-            ELSE NULL
-          END,
-          categorisation_tier = CASE
-            WHEN decision.decision = 'keep' THEN keyword.categorisation_tier
-            ELSE NULL
-          END,
-          categorisation_source = CASE
-            WHEN decision.decision = 'keep' THEN keyword.categorisation_source
-            ELSE NULL
-          END,
-          updated_at = now()
-      FROM jsonb_to_recordset($2::jsonb) AS decision(
-        id uuid,
-        decision text,
-        reason text,
-        rule text
-      )
-      WHERE keyword.project_id = $1
-        AND keyword.id = decision.id
-    `,
-    [projectId, JSON.stringify(decisions)],
-  );
-  if ((result.rowCount ?? 0) !== decisions.length) {
+  await client.query("SET LOCAL statement_timeout = '600s'");
+  let updatedCount = 0;
+  for (const batch of batches(decisions, DETOX_PERSISTENCE_BATCH_SIZE)) {
+    const result = await client.query(
+      `
+        UPDATE keywords AS keyword
+        SET detox_status = decision.decision,
+            detox_reason = decision.reason,
+            detox_rule = decision.rule,
+            human_reviewed = CASE
+              WHEN decision.rule = 'pre-curated' THEN true
+              WHEN decision.decision = 'keep' THEN keyword.human_reviewed
+              ELSE false
+            END,
+            categorisation_status = CASE
+              WHEN decision.decision = 'keep' THEN keyword.categorisation_status
+              ELSE 'skipped'
+            END,
+            category = CASE WHEN decision.decision = 'keep' THEN keyword.category ELSE NULL END,
+            tags = CASE WHEN decision.decision = 'keep' THEN keyword.tags ELSE NULL END,
+            search_intent = CASE
+              WHEN decision.decision = 'keep' THEN keyword.search_intent
+              ELSE NULL
+            END,
+            categorisation_tier = CASE
+              WHEN decision.decision = 'keep' THEN keyword.categorisation_tier
+              ELSE NULL
+            END,
+            categorisation_source = CASE
+              WHEN decision.decision = 'keep' THEN keyword.categorisation_source
+              ELSE NULL
+            END,
+            updated_at = now()
+        FROM jsonb_to_recordset($2::jsonb) AS decision(
+          id uuid,
+          decision text,
+          reason text,
+          rule text
+        )
+        WHERE keyword.project_id = $1
+          AND keyword.id = decision.id
+      `,
+      [projectId, JSON.stringify(batch)],
+    );
+    updatedCount += result.rowCount ?? 0;
+  }
+  if (updatedCount !== decisions.length) {
     throw new Error("Detox persistence did not update every processing keyword.");
   }
 }

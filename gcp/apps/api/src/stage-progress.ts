@@ -1,4 +1,5 @@
 import type { PipelineStageId } from "../../../packages/pipeline/src/definition.js";
+import { userFacingPipelineFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 
 export interface StageWorkCounts {
   failed: number;
@@ -23,7 +24,7 @@ export interface StageProgress {
 const RUNNING_HINT: Record<PipelineStageId, string> = {
   intake: "Loading project inputs",
   "gsc-promotion": "Promoting GSC queries into keywords",
-  detox: "Applying keep / remove rules",
+  detox: "Applying qualification rules and saving keyword decisions in batches",
   preflight: "Checking authority and provider readiness",
   categorisation: "Assigning keyword categories",
   "brand-classification": "Detecting brand terms",
@@ -35,7 +36,8 @@ const RUNNING_HINT: Record<PipelineStageId, string> = {
   "serp-collection": "Collecting Google SERP results",
   authority: "Refreshing client domain authority",
   backlinks: "Fetching URL ratings and backlinks",
-  "site-architecture": "Scoring content-fit for ranking URLs",
+  "site-architecture":
+    "Scoring ranking-page content fit with Claude; transient failures retry every 2s",
   "link-power-score": "Computing link-power scores",
   "demand-signals": "Measuring demand trend and seasonality",
   "ctr-curves": "Building CTR curves",
@@ -105,7 +107,9 @@ export function buildStageProgress(input: {
     if (work) parts.push(`${formatCount(work.succeeded)} items`);
   } else if (input.state === "failed") {
     parts.push(
-      compactError(input.outputMessage) ??
+      compactError(
+        userFacingPipelineFailureMessage(input.id, input.outputMessage),
+      ) ??
         compactError(work?.lastError ?? null) ??
         `Failed after ${input.attempts} attempt${input.attempts === 1 ? "" : "s"}`,
     );
@@ -126,13 +130,17 @@ export function buildStageProgress(input: {
         parts.push(`${formatCount(work.failed)} failed`);
       }
     } else {
-      parts.push(RUNNING_HINT[input.id] ?? "In progress");
+      parts.push(
+        compactError(input.outputMessage) ??
+          RUNNING_HINT[input.id] ??
+          "In progress",
+      );
     }
     if (input.startedAt) {
       parts.push(`${formatElapsed(input.startedAt, input.now)} elapsed`);
     }
     if (input.attempts > 1) parts.push(`attempt ${input.attempts}`);
-    const liveError = compactError(work?.lastError ?? input.outputMessage);
+    const liveError = compactError(work?.lastError ?? null);
     if (liveError && work) parts.push(liveError);
   }
 

@@ -103,6 +103,28 @@ describe("pipeline failure attribution", () => {
       stageId: "keyword-enrichment",
     });
   });
+
+  it("does not expose legacy workflow payloads for failed runs", () => {
+    expect(
+      resolvePipelineRunFailure([
+        {
+          attempts: 81,
+          id: "detox",
+          output: {
+            failedStage: "detox",
+            message:
+              '{"code":500,"message":"HTTP server responded with error code 500","headers":{"x-cloud-trace":"secret"}}',
+          },
+          state: "failed",
+        },
+      ]),
+    ).toEqual({
+      attempts: 81,
+      message:
+        "Keyword qualification did not finish after automatic retries. Project data was left unchanged; resume the pipeline to try again.",
+      stageId: "detox",
+    });
+  });
 });
 
 describe("pipeline run stage batches", () => {
