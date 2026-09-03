@@ -105,6 +105,17 @@ worker workflows, event delivery, object persistence, and restart persistence.
   run, stage, status, and optional idempotency flag. Stage outputs are persisted
   in PostgreSQL and must never be echoed through Workflows or dispatcher HTTP
   responses.
+- Large detox results are persisted transactionally in batches of at most 2,000
+  keyword decisions with a stage-local extended statement timeout. Preserve the
+  total updated-row assertion so a partial qualification write rolls back.
+- Anthropic content-fit batches retry transient transport failures and unusable
+  model responses up to 30 attempts with a fixed two-second delay. Retry state
+  is written to the running `site-architecture` stage output for operator
+  visibility; terminal exhaustion uses a non-retryable dependency response so
+  the managed Workflow does not multiply the 30 provider attempts.
+- Workflow failure payloads are internal diagnostics and must never be exposed
+  by run-status APIs or the admin calculation UI. Store curated stage-specific
+  failure messages and sanitize legacy HTTP/trace payloads at the API boundary.
 - GSC CSV and XLSX imports skip individual queries longer than 200 characters
   and report the skipped count as an import warning. One malformed SAFS row
   must not reject an otherwise valid upload.
