@@ -1,6 +1,8 @@
 import type { PipelineStageId } from "./definition.js";
 
 const STAGE_FAILURE_MESSAGES: Partial<Record<PipelineStageId, string>> = {
+  backlinks:
+    "Ahrefs backlink metrics could not be retrieved after automatic retries. Saved progress is preserved; resume after checking Ahrefs API access and usage.",
   detox:
     "Keyword qualification did not finish after automatic retries. Project data was left unchanged; resume the pipeline to try again.",
   "site-architecture":

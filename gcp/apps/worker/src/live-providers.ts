@@ -223,6 +223,9 @@ class ProviderHttpClient {
   constructor(
     private readonly authorization: string,
     private readonly fetchImplementation: typeof fetch = fetch,
+    private readonly wait: (milliseconds: number) => Promise<void> = (
+      milliseconds,
+    ) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   ) {}
 
   async json(
@@ -233,6 +236,7 @@ class ProviderHttpClient {
   ): Promise<Record<string, unknown>> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 5; attempt += 1) {
+      let retryAfterMilliseconds: number | null = null;
       try {
         const response = await this.fetchImplementation(url, {
           ...init,
@@ -246,37 +250,81 @@ class ProviderHttpClient {
           signal: AbortSignal.timeout(120_000),
         });
         if (!response.ok) {
-          if (
-            (response.status === 429 || response.status >= 500) &&
-            attempt < 5
-          ) {
-            const retryAfter = Number(response.headers.get("retry-after"));
-            await new Promise((resolve) =>
-              setTimeout(
-                resolve,
-                Number.isFinite(retryAfter) && retryAfter > 0
-                  ? retryAfter * 1_000
-                  : 250 * 2 ** (attempt - 1),
-              ),
-            );
-            continue;
-          }
-          throw new Error(`Provider API returned ${response.status}.`);
+          const retryAfter = Number(response.headers.get("retry-after"));
+          retryAfterMilliseconds =
+            Number.isFinite(retryAfter) && retryAfter > 0
+              ? retryAfter * 1_000
+              : null;
+          throw new ProviderResponseError(response.status);
         }
         return record(await response.json());
       } catch (error) {
         lastError = error;
-        if (attempt < 5) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, 250 * 2 ** (attempt - 1)),
-          );
-        }
+        if (error instanceof ProviderResponseError && !error.retryable) throw error;
+      }
+      if (attempt < 5) {
+        await this.wait(
+          retryAfterMilliseconds ?? 250 * 2 ** (attempt - 1),
+        );
       }
     }
-    throw new Error("Provider API failed after five attempts.", {
-      cause: lastError,
-    });
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Provider API request failed after five attempts.");
   }
+}
+
+class ProviderResponseError extends Error {
+  readonly retryable: boolean;
+
+  constructor(readonly statusCode: number) {
+    super("Provider API request was rejected.");
+    this.name = "ProviderResponseError";
+    this.retryable = statusCode === 429 || statusCode >= 500;
+  }
+}
+
+function ahrefsFailure(error: unknown): HttpError {
+  const statusCode =
+    error instanceof ProviderResponseError ? error.statusCode : null;
+  console.warn(JSON.stringify({
+    event: "provider_request_failed",
+    provider: "ahrefs",
+    statusCode,
+  }));
+  if (statusCode === 401 || statusCode === 403) {
+    return new HttpError(
+      424,
+      "ahrefs_access_rejected",
+      "Ahrefs rejected the configured API credentials or plan access.",
+    );
+  }
+  if (statusCode === 402) {
+    return new HttpError(
+      424,
+      "ahrefs_usage_exhausted",
+      "Ahrefs reported insufficient API usage allowance for this request.",
+    );
+  }
+  if (statusCode === 429) {
+    return new HttpError(
+      424,
+      "ahrefs_rate_limited",
+      "Ahrefs rate limiting did not clear after five attempts.",
+    );
+  }
+  if (statusCode !== null && statusCode >= 500) {
+    return new HttpError(
+      424,
+      "ahrefs_unavailable",
+      "Ahrefs remained unavailable after five attempts.",
+    );
+  }
+  return new HttpError(
+    424,
+    "ahrefs_request_failed",
+    "Ahrefs did not return backlink metrics after five attempts.",
+  );
 }
 
 function dataForSeoItems(value: unknown): Record<string, unknown>[] {
@@ -658,54 +706,66 @@ export class DataForSeoClient {
 export class AhrefsClient {
   private readonly http: ProviderHttpClient;
 
-  constructor(apiKey: string, fetchImplementation: typeof fetch = fetch) {
+  constructor(
+    apiKey: string,
+    fetchImplementation: typeof fetch = fetch,
+    wait?: (milliseconds: number) => Promise<void>,
+  ) {
     if (!apiKey.trim()) throw new Error("Ahrefs API key is required.");
-    this.http = new ProviderHttpClient(`Bearer ${apiKey}`, fetchImplementation);
+    this.http = new ProviderHttpClient(
+      `Bearer ${apiKey}`,
+      fetchImplementation,
+      wait,
+    );
   }
 
   async metrics(
     targets: readonly { mode: "domain" | "exact"; url: string }[],
   ): Promise<Map<string, AuthorityMetrics>> {
     const output = new Map<string, AuthorityMetrics>();
-    for (const group of batches(targets, 100)) {
-      const response = await this.http.json(
-        "https://api.ahrefs.com/v3/batch-analysis/batch-analysis",
-        {
-          body: JSON.stringify({
-            output: "json",
-            select: [
-              "url",
-              "url_rating",
-              "domain_rating",
-              "ahrefs_rank",
-              "refdomains",
-              "backlinks",
-            ],
-            targets: group.map((target) => ({
-              mode: target.mode,
-              protocol: "both",
-              url: target.url,
-            })),
-          }),
-          method: "POST",
-        },
-      );
-      const rows = records(response.targets);
-      group.forEach((target, index) => {
-        const row =
-          rows.find((candidate) => candidate.url === target.url) ??
-          rows[index] ??
-          {};
-        output.set(target.url, {
-          ahrefsRank: numberOrNull(row.ahrefs_rank),
-          backlinks: numberOrNull(row.backlinks),
-          domainRating: numberOrNull(row.domain_rating),
-          referringDomains: numberOrNull(
-            row.refdomains ?? row.referring_domains,
-          ),
-          urlRating: numberOrNull(row.url_rating),
+    try {
+      for (const group of batches(targets, 100)) {
+        const response = await this.http.json(
+          "https://api.ahrefs.com/v3/batch-analysis/batch-analysis",
+          {
+            body: JSON.stringify({
+              output: "json",
+              select: [
+                "url",
+                "url_rating",
+                "domain_rating",
+                "ahrefs_rank",
+                "refdomains",
+                "backlinks",
+              ],
+              targets: group.map((target) => ({
+                mode: target.mode,
+                protocol: "both",
+                url: target.url,
+              })),
+            }),
+            method: "POST",
+          },
+        );
+        const rows = records(response.targets);
+        group.forEach((target, index) => {
+          const row =
+            rows.find((candidate) => candidate.url === target.url) ??
+            rows[index] ??
+            {};
+          output.set(target.url, {
+            ahrefsRank: numberOrNull(row.ahrefs_rank),
+            backlinks: numberOrNull(row.backlinks),
+            domainRating: numberOrNull(row.domain_rating),
+            referringDomains: numberOrNull(
+              row.refdomains ?? row.referring_domains,
+            ),
+            urlRating: numberOrNull(row.url_rating),
+          });
         });
-      });
+      }
+    } catch (error) {
+      throw ahrefsFailure(error);
     }
     return output;
   }

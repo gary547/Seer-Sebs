@@ -328,6 +328,58 @@ describe("managed pipeline providers", () => {
     );
   });
 
+  it("stops retrying when Ahrefs rejects access", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }),
+    );
+    const ahrefs = new AhrefsClient("ahrefs-key", fetchImplementation);
+
+    await expect(
+      ahrefs.metrics([{ mode: "domain", url: "example.test" }]),
+    ).rejects.toMatchObject({
+      code: "ahrefs_access_rejected",
+      message: "Ahrefs rejected the configured API credentials or plan access.",
+      statusCode: 424,
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      JSON.stringify({
+        event: "provider_request_failed",
+        provider: "ahrefs",
+        statusCode: 403,
+      }),
+    );
+    warning.mockRestore();
+  });
+
+  it("caps transient Ahrefs retries and returns an actionable error", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const wait = vi.fn(async () => undefined);
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ error: "unavailable" }), { status: 503 }),
+    );
+    const ahrefs = new AhrefsClient("ahrefs-key", fetchImplementation, wait);
+
+    await expect(
+      ahrefs.metrics([{ mode: "domain", url: "example.test" }]),
+    ).rejects.toMatchObject({
+      code: "ahrefs_unavailable",
+      message: "Ahrefs remained unavailable after five attempts.",
+      statusCode: 424,
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(5);
+    expect(wait).toHaveBeenCalledTimes(4);
+    expect(warning).toHaveBeenCalledWith(
+      JSON.stringify({
+        event: "provider_request_failed",
+        provider: "ahrefs",
+        statusCode: 503,
+      }),
+    );
+    warning.mockRestore();
+  });
+
   it("hydrates missing client authority before preflight", async () => {
     const ahrefs = {
       metrics: vi.fn(async () =>
