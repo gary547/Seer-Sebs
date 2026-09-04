@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
-import { failPipelineRun, shouldInjectLocalFailure } from "../src/processor.js";
+import { HttpError } from "../../../packages/runtime/src/http.js";
+import { PipelinePreflightError } from "../../../packages/pipeline/src/stage-handlers.js";
+import {
+  failPipelineRun,
+  pipelineStageExecutionError,
+  shouldInjectLocalFailure,
+} from "../src/processor.js";
 
 describe("local worker failure injection", () => {
   const input = {
@@ -35,6 +41,18 @@ describe("local worker failure injection", () => {
 });
 
 describe("pipeline failure recording", () => {
+  it("maps deterministic preflight failures to a non-retryable response", () => {
+    const error = pipelineStageExecutionError(
+      new PipelinePreflightError(["kept_keywords"]),
+    );
+
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error).toMatchObject({
+      code: "pipeline_preflight_failed",
+      statusCode: 422,
+    });
+  });
+
   it("stores a stage-specific operator message instead of the raw workflow error", async () => {
     const queries: Array<{ params: unknown[]; sql: string }> = [];
     const client = {

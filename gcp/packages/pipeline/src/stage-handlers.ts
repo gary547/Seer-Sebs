@@ -46,6 +46,16 @@ import {
 } from "../../fixtures/src/representative-project.js";
 import type { PipelineStageId } from "./definition.js";
 
+export class PipelinePreflightError extends Error {
+  readonly missing: readonly string[];
+
+  constructor(missing: readonly string[]) {
+    super(`Pipeline preflight failed: ${missing.join(", ")}.`);
+    this.name = "PipelinePreflightError";
+    this.missing = missing;
+  }
+}
+
 export interface PipelineKeyword {
   avgMonthlyVolume: number | null;
   category: string | null;
@@ -899,7 +909,7 @@ function executePreflight(
   if (detox.keptKeywordCount === 0) missing.push("kept_keywords");
 
   if (missing.length > 0) {
-    throw new Error(`Pipeline preflight failed: ${missing.join(", ")}.`);
+    throw new PipelinePreflightError(missing);
   }
 
   return {

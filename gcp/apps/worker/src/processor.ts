@@ -18,7 +18,10 @@ import {
   type PipelineStageId,
 } from "../../../packages/pipeline/src/definition.js";
 import { pipelineStageFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
-import { executeDataDrivenStage } from "../../../packages/pipeline/src/stage-handlers.js";
+import {
+  executeDataDrivenStage,
+  PipelinePreflightError,
+} from "../../../packages/pipeline/src/stage-handlers.js";
 import {
   loadProjectPipelineSource,
   persistProjectStageData,
@@ -68,6 +71,13 @@ interface MarkRunningResult {
 export interface StageExecutionOptions {
   allowLocalFailureInjection?: boolean;
   providerHydrator?: PipelineProviderHydrator;
+}
+
+export function pipelineStageExecutionError(error: unknown): unknown {
+  if (error instanceof PipelinePreflightError) {
+    return new HttpError(422, "pipeline_preflight_failed", error.message);
+  }
+  return error;
 }
 
 function recordBody(value: unknown): Record<string, unknown> {
@@ -370,9 +380,14 @@ export async function executeStageTask(
     task.runId,
     definition.dependencies,
   );
-  const stageData = source
-    ? executeDataDrivenStage(task.stageId, source, dependencyOutputs)
-    : null;
+  let stageData: ReturnType<typeof executeDataDrivenStage> | null;
+  try {
+    stageData = source
+      ? executeDataDrivenStage(task.stageId, source, dependencyOutputs)
+      : null;
+  } catch (error) {
+    throw pipelineStageExecutionError(error);
+  }
   const digest = createHash("sha256")
     .update(`${task.runId}:${task.stageId}`)
     .digest("hex");
