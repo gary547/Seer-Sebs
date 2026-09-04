@@ -17,6 +17,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import PipelineActivityDialog from "@/components/admin/PipelineActivityDialog";
+import { pipelineActivityMessage } from "@/components/admin/pipelineActivity";
 import {
   PIPELINE_STAGE_IDS,
   type PipelineReadiness,
@@ -336,10 +338,10 @@ export default function AutonomousPipelinePanel({
                           </span>
                         </div>
                         <StageMeter stage={stage ? { ...stage, id: stageId } : undefined} />
-                        {stage?.progress?.message ? (
-                          <p className="leading-4 text-[10px]">{stage.progress.message}</p>
-                        ) : stage && stage.attempts > 1 ? (
-                          <p className="leading-4 text-[10px]">{stage.attempts} attempts</p>
+                        {stage ? (
+                          <p className="leading-4 text-[10px]">
+                            {pipelineActivityMessage(stage)}
+                          </p>
                         ) : null}
                       </div>
                     );
@@ -355,12 +357,15 @@ export default function AutonomousPipelinePanel({
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-muted">
               Stage activity
             </p>
-            {run ? (
-              <span className="font-mono text-[11px] text-ink-muted">
-                {run.stages.filter((stage) => stage.state === "succeeded").length}/
-                {run.stages.length} complete
-              </span>
-            ) : null}
+            <div className="flex items-center gap-3">
+              {run ? (
+                <span className="font-mono text-[11px] text-ink-muted">
+                  {run.stages.filter((stage) => stage.state === "succeeded").length}/
+                  {run.stages.length} complete
+                </span>
+              ) : null}
+              <PipelineActivityDialog run={run} />
+            </div>
           </div>
           <div className="mt-3 divide-y divide-hairline">
             {PIPELINE_STAGE_IDS.map((stageId) => {
@@ -380,10 +385,7 @@ export default function AutonomousPipelinePanel({
                       ) : null}
                     </div>
                     <p className="mt-1 text-[11px] leading-5 text-ink-muted">
-                      {stage?.progress?.message ??
-                        (stage?.state === "running"
-                          ? "In progress"
-                          : "Waiting to start")}
+                      {stage ? pipelineActivityMessage(stage) : "Waiting to start"}
                     </p>
                   </div>
                   <div className="flex flex-col justify-center gap-1">

@@ -178,6 +178,51 @@ describe("AutonomousPipelinePanel", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("opens a complete sanitized stage-by-stage activity log", () => {
+    const run = pipelineRun();
+    const failedStage = run.stages.find((stage) => stage.id === "site-architecture");
+    if (!failedStage) throw new Error("Missing site architecture stage fixture.");
+    failedStage.state = "failed";
+    failedStage.progress = {
+      ...failedStage.progress!,
+      message: "500 Internal Server Error from Workflow execution x-cloud-trace secret",
+    };
+    run.stages[0].progress = {
+      ...run.stages[0].progress!,
+      message: "Processed 500 items",
+    };
+    run.status = "failed";
+
+    render(
+      <AutonomousPipelinePanel
+        archived={false}
+        onSaveBrandTerms={vi.fn()}
+        onRun={vi.fn()}
+        onSavePolicy={vi.fn()}
+        onStampPrecurated={vi.fn()}
+        readiness={readiness}
+        run={run}
+        running={false}
+        savingBrandTerms={false}
+        savingPolicy={false}
+        stampingPrecurated={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "View full activity" }));
+
+    expect(screen.getByRole("dialog", { name: "Pipeline activity" })).toBeInTheDocument();
+    expect(screen.getAllByTestId(/pipeline-activity-stage-/)).toHaveLength(24);
+    expect(screen.getByText(`Run ${run.id} · sanitized operator activity`)).toBeInTheDocument();
+    expect(
+      screen.getAllByText(
+        "This stage did not finish. Saved progress is preserved and the run can be resumed safely.",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("Processed 500 items").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/500 Internal Server Error/)).not.toBeInTheDocument();
+  });
+
   it("starts a full server-side run and saves operator-controlled thresholds", () => {
     const onRun = vi.fn().mockResolvedValue(undefined);
     const onSaveBrandTerms = vi.fn().mockResolvedValue(undefined);
