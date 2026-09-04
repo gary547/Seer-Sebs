@@ -264,8 +264,10 @@ interface ForecastDetailRow {
 }
 
 interface CalculationInspectorSourceRow {
+  annual_volume: string | null;
   average_order_value_override_id: string | null;
   base_rank: number | null;
+  category: string | null;
   content_fit_score: string | null;
   conversion_rate_override_id: string | null;
   ctr_now: string | null;
@@ -273,16 +275,30 @@ interface CalculationInspectorSourceRow {
   current_revenue_annual: string | null;
   device: string;
   expected_incremental_annual: string | null;
+  expected_incremental_high_annual: string | null;
+  expected_incremental_low_annual: string | null;
   explanation_json: Record<string, unknown>;
+  factor_applied: string | null;
   har_confidence: string;
+  har_model_version: string;
   har_position: number | null;
   keyword: string;
   keyword_id: string;
+  legacy_current_revenue_annual: string | null;
+  legacy_har: string | null;
+  legacy_har_is_manual: boolean | null;
+  legacy_har_source: string | null;
+  legacy_target_incremental_revenue_annual: string | null;
   link_power_score: string | null;
   rank_attainment_probability: string | null;
+  revenue_model_version: string | null;
   scenario: string;
+  search_intent: string | null;
+  serp_visibility_multiplier: string | null;
   target_absolute_revenue_annual: string | null;
   target_incremental_revenue_annual: string | null;
+  volume_forward: string | null;
+  warnings: string[] | null;
 }
 
 interface LinkPowerSummaryRow {
@@ -290,11 +306,26 @@ interface LinkPowerSummaryRow {
   high_confidence_count: string;
   keyword_count: string;
   low_confidence_count: string;
+  missing_backlinks_count: string;
+  missing_domain_rating_count: string;
+  missing_referring_domains_count: string;
+  missing_url_rating_count: string;
   medium_confidence_count: string;
   p10_score: string | null;
   p50_score: string | null;
   p90_score: string | null;
   scored_count: string;
+}
+
+interface ClientAuthorityRow {
+  ahrefs_rank: string | null;
+  backlinks: string | null;
+  domain: string;
+  domain_rating: string | null;
+  fetched_at: Date;
+  metric_source: string;
+  referring_domains: string | null;
+  url_rating: string | null;
 }
 
 interface LinkPowerDetailRow {
@@ -2753,6 +2784,7 @@ export async function getProjectCalculationInspector(
   limit: number,
   offset: number,
   search: string,
+  filters: string[] = [],
 ): Promise<Record<string, unknown>> {
   await assertAdministrator(pool, user.id);
   await assertProjectAccess(pool, user.id, projectId);
@@ -2790,6 +2822,8 @@ export async function getProjectCalculationInspector(
             keyword.keyword,
             keyword.normalised_keyword,
             keyword.device,
+            keyword.category,
+            keyword.search_intent,
             har.base_rank,
             realistic.expected_incremental_annual AS realistic_uplift
           FROM revenue_forecasts AS realistic
@@ -2798,12 +2832,37 @@ export async function getProjectCalculationInspector(
            AND har.keyword_id = realistic.keyword_id
            AND har.scenario = 'realistic'
           JOIN keywords AS keyword ON keyword.id = realistic.keyword_id
+          LEFT JOIN legacy_keyword_forecasts AS legacy
+            ON legacy.keyword_id = realistic.keyword_id
           WHERE realistic.project_id = $1
             AND realistic.pipeline_run_id = $2
             AND realistic.scenario = 'realistic'
             AND (
               $3 = ''
               OR keyword.normalised_keyword LIKE '%' || $3 || '%'
+            )
+            AND (
+              NOT $6::boolean
+              OR (
+                legacy.har IS NOT NULL
+                AND har.har_position IS NOT NULL
+                AND abs(har.har_position - legacy.har) > 2
+              )
+            )
+            AND (
+              NOT $7::boolean
+              OR legacy.har_is_manual
+              OR realistic.conversion_rate_override_id IS NOT NULL
+              OR realistic.average_order_value_override_id IS NOT NULL
+            )
+            AND (NOT $8::boolean OR har.link_power_score IS NULL)
+            AND (
+              NOT $9::boolean
+              OR har.explanation_json #>> '{inputs,client_lps_basis}' = 'synthetic'
+            )
+            AND (
+              NOT $10::boolean
+              OR har.explanation_json #>> '{clamps,clamped_har_position}' IS NOT NULL
             )
           ORDER BY
             realistic.expected_incremental_annual DESC NULLS LAST,
@@ -2814,20 +2873,37 @@ export async function getProjectCalculationInspector(
           page.keyword_id,
           page.keyword,
           page.device,
+          page.category,
+          page.search_intent,
           page.base_rank,
+          legacy.har::text AS legacy_har,
+          legacy.har_is_manual AS legacy_har_is_manual,
+          legacy.har_source AS legacy_har_source,
+          legacy.current_revenue_annual::text AS legacy_current_revenue_annual,
+          legacy.target_incremental_revenue_annual::text
+            AS legacy_target_incremental_revenue_annual,
           har.scenario,
+          har.model_version AS har_model_version,
           har.har_position,
           har.har_confidence::text,
           har.rank_attainment_probability::text,
           har.link_power_score::text,
           har.content_fit_score::text,
+          har.serp_visibility_multiplier::text,
           har.explanation_json,
+          revenue.model_version AS revenue_model_version,
+          revenue.annual_volume::text,
+          revenue.volume_forward::text,
+          revenue.factor_applied::text,
           revenue.ctr_now::text,
           revenue.ctr_target::text,
           revenue.current_revenue_annual::text,
           revenue.target_absolute_revenue_annual::text,
           revenue.target_incremental_revenue_annual::text,
           revenue.expected_incremental_annual::text,
+          revenue.expected_incremental_low_annual::text,
+          revenue.expected_incremental_high_annual::text,
+          revenue.warnings,
           revenue.conversion_rate_override_id,
           revenue.average_order_value_override_id
         FROM keyword_page AS page
@@ -2838,6 +2914,8 @@ export async function getProjectCalculationInspector(
           ON revenue.pipeline_run_id = har.pipeline_run_id
          AND revenue.keyword_id = har.keyword_id
          AND revenue.scenario = har.scenario
+        LEFT JOIN legacy_keyword_forecasts AS legacy
+          ON legacy.keyword_id = page.keyword_id
         ORDER BY
           page.realistic_uplift DESC NULLS LAST,
           page.keyword_id,
@@ -2847,13 +2925,30 @@ export async function getProjectCalculationInspector(
             ELSE 3
           END
       `,
-      [projectId, run.id, normaliseKeyword(search), limit, offset],
+      [
+        projectId,
+        run.id,
+        normaliseKeyword(search),
+        limit,
+        offset,
+        filters.includes("delta"),
+        filters.includes("overrides"),
+        filters.includes("missing_lps"),
+        filters.includes("synthetic_lps"),
+        filters.includes("clamped"),
+      ],
     ),
     pool.query<CountRow>(
       `
         SELECT count(*)::text AS count
         FROM har_forecasts AS har
         JOIN keywords AS keyword ON keyword.id = har.keyword_id
+        LEFT JOIN revenue_forecasts AS realistic
+          ON realistic.pipeline_run_id = har.pipeline_run_id
+         AND realistic.keyword_id = har.keyword_id
+         AND realistic.scenario = 'realistic'
+        LEFT JOIN legacy_keyword_forecasts AS legacy
+          ON legacy.keyword_id = har.keyword_id
         WHERE har.project_id = $1
           AND har.pipeline_run_id = $2
           AND har.scenario = 'realistic'
@@ -2861,8 +2956,40 @@ export async function getProjectCalculationInspector(
             $3 = ''
             OR keyword.normalised_keyword LIKE '%' || $3 || '%'
           )
+          AND (
+            NOT $4::boolean
+            OR (
+              legacy.har IS NOT NULL
+              AND har.har_position IS NOT NULL
+              AND abs(har.har_position - legacy.har) > 2
+            )
+          )
+          AND (
+            NOT $5::boolean
+            OR legacy.har_is_manual
+            OR realistic.conversion_rate_override_id IS NOT NULL
+            OR realistic.average_order_value_override_id IS NOT NULL
+          )
+          AND (NOT $6::boolean OR har.link_power_score IS NULL)
+          AND (
+            NOT $7::boolean
+            OR har.explanation_json #>> '{inputs,client_lps_basis}' = 'synthetic'
+          )
+          AND (
+            NOT $8::boolean
+            OR har.explanation_json #>> '{clamps,clamped_har_position}' IS NOT NULL
+          )
       `,
-      [projectId, run.id, normaliseKeyword(search)],
+      [
+        projectId,
+        run.id,
+        normaliseKeyword(search),
+        filters.includes("delta"),
+        filters.includes("overrides"),
+        filters.includes("missing_lps"),
+        filters.includes("synthetic_lps"),
+        filters.includes("clamped"),
+      ],
     ),
   ]);
 
@@ -2870,21 +2997,42 @@ export async function getProjectCalculationInspector(
     string,
     {
       baseRank: number | null;
+      category: string | null;
+      currentRevenueV1: number | null;
       device: string;
+      harIsManualV1: boolean;
+      harSourceV1: string | null;
+      harV1: number | null;
       keyword: string;
       keywordId: string;
+      searchIntent: string | null;
       scenarios: Record<string, Record<string, unknown>>;
+      targetIncrementalRevenueV1: number | null;
     }
   >();
   for (const row of sourceRows.rows) {
     const item = items.get(row.keyword_id) ?? {
       baseRank: row.base_rank,
+      category: row.category,
+      currentRevenueV1:
+        row.legacy_current_revenue_annual === null
+          ? null
+          : Number(row.legacy_current_revenue_annual),
       device: row.device,
+      harIsManualV1: row.legacy_har_is_manual ?? false,
+      harSourceV1: row.legacy_har_source,
+      harV1: row.legacy_har === null ? null : Number(row.legacy_har),
       keyword: row.keyword,
       keywordId: row.keyword_id,
+      searchIntent: row.search_intent,
       scenarios: {},
+      targetIncrementalRevenueV1:
+        row.legacy_target_incremental_revenue_annual === null
+          ? null
+          : Number(row.legacy_target_incremental_revenue_annual),
     };
     item.scenarios[row.scenario] = {
+      annualVolume: row.annual_volume === null ? null : Number(row.annual_volume),
       averageOrderValueOverrideId: row.average_order_value_override_id,
       contentFitScore:
         row.content_fit_score === null ? null : Number(row.content_fit_score),
@@ -2899,8 +3047,19 @@ export async function getProjectCalculationInspector(
         row.expected_incremental_annual === null
           ? null
           : Number(row.expected_incremental_annual),
+      expectedIncrementalHighAnnual:
+        row.expected_incremental_high_annual === null
+          ? null
+          : Number(row.expected_incremental_high_annual),
+      expectedIncrementalLowAnnual:
+        row.expected_incremental_low_annual === null
+          ? null
+          : Number(row.expected_incremental_low_annual),
       explanation: row.explanation_json,
+      factorApplied:
+        row.factor_applied === null ? null : Number(row.factor_applied),
       harConfidence: Number(row.har_confidence),
+      harModelVersion: row.har_model_version,
       harPosition: row.har_position,
       linkPowerScore:
         row.link_power_score === null ? null : Number(row.link_power_score),
@@ -2908,6 +3067,11 @@ export async function getProjectCalculationInspector(
         row.rank_attainment_probability === null
           ? null
           : Number(row.rank_attainment_probability),
+      revenueModelVersion: row.revenue_model_version,
+      serpVisibilityMultiplier:
+        row.serp_visibility_multiplier === null
+          ? null
+          : Number(row.serp_visibility_multiplier),
       targetAbsoluteRevenueAnnual:
         row.target_absolute_revenue_annual === null
           ? null
@@ -2916,6 +3080,9 @@ export async function getProjectCalculationInspector(
         row.target_incremental_revenue_annual === null
           ? null
           : Number(row.target_incremental_revenue_annual),
+      volumeForward:
+        row.volume_forward === null ? null : Number(row.volume_forward),
+      warnings: row.warnings ?? [],
     };
     items.set(row.keyword_id, item);
   }
@@ -2956,6 +3123,7 @@ export async function getProjectLinkPowerInspector(
   const run = runResult.rows[0];
   if (!run) {
     return {
+      clientAuthority: null,
       completedAt: null,
       domains: [],
       items: [],
@@ -2970,25 +3138,34 @@ export async function getProjectLinkPowerInspector(
   }
 
   const normalisedSearch = normaliseKeyword(search);
-  const [summary, items, domains, count] = await Promise.all([
+  const [summary, items, domains, count, clientAuthority] = await Promise.all([
     pool.query<LinkPowerSummaryRow>(
       `
         SELECT
           count(*)::text AS scored_count,
-          count(DISTINCT keyword_id)::text AS keyword_count,
-          avg(score)::text AS average_score,
-          percentile_cont(0.1) WITHIN GROUP (ORDER BY score)::text AS p10_score,
-          percentile_cont(0.5) WITHIN GROUP (ORDER BY score)::text AS p50_score,
-          percentile_cont(0.9) WITHIN GROUP (ORDER BY score)::text AS p90_score,
-          count(*) FILTER (WHERE confidence = 'high')::text
+          count(DISTINCT score.keyword_id)::text AS keyword_count,
+          avg(score.score)::text AS average_score,
+          percentile_cont(0.1) WITHIN GROUP (ORDER BY score.score)::text AS p10_score,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY score.score)::text AS p50_score,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY score.score)::text AS p90_score,
+          count(*) FILTER (WHERE score.confidence = 'high')::text
             AS high_confidence_count,
-          count(*) FILTER (WHERE confidence = 'medium')::text
+          count(*) FILTER (WHERE score.confidence = 'medium')::text
             AS medium_confidence_count,
-          count(*) FILTER (WHERE confidence = 'low')::text
-            AS low_confidence_count
-        FROM link_power_scores
-        WHERE project_id = $1
-          AND pipeline_run_id = $2
+          count(*) FILTER (WHERE score.confidence = 'low')::text
+            AS low_confidence_count,
+          count(*) FILTER (WHERE result.url_rating IS NULL)::text
+            AS missing_url_rating_count,
+          count(*) FILTER (WHERE result.domain_rating IS NULL)::text
+            AS missing_domain_rating_count,
+          count(*) FILTER (WHERE result.referring_domains IS NULL)::text
+            AS missing_referring_domains_count,
+          count(*) FILTER (WHERE result.backlinks IS NULL)::text
+            AS missing_backlinks_count
+        FROM link_power_scores AS score
+        JOIN serp_results AS result ON result.id = score.serp_result_id
+        WHERE score.project_id = $1
+          AND score.pipeline_run_id = $2
       `,
       [projectId, run.id],
     ),
@@ -3056,10 +3233,55 @@ export async function getProjectLinkPowerInspector(
       `,
       [projectId, run.id, normalisedSearch],
     ),
+    pool.query<ClientAuthorityRow>(
+      `
+        SELECT
+          domain,
+          url_rating::text,
+          domain_rating::text,
+          ahrefs_rank::text,
+          referring_domains::text,
+          backlinks::text,
+          metric_source,
+          fetched_at
+        FROM client_domain_metrics
+        WHERE project_id = $1
+        LIMIT 1
+      `,
+      [projectId],
+    ),
   ]);
   const summaryRow = summary.rows[0];
+  const clientAuthorityRow = clientAuthority.rows[0];
 
   return {
+    clientAuthority: clientAuthorityRow
+      ? {
+          ahrefsRank:
+            clientAuthorityRow.ahrefs_rank === null
+              ? null
+              : Number(clientAuthorityRow.ahrefs_rank),
+          backlinks:
+            clientAuthorityRow.backlinks === null
+              ? null
+              : Number(clientAuthorityRow.backlinks),
+          domain: clientAuthorityRow.domain,
+          domainRating:
+            clientAuthorityRow.domain_rating === null
+              ? null
+              : Number(clientAuthorityRow.domain_rating),
+          fetchedAt: clientAuthorityRow.fetched_at.toISOString(),
+          metricSource: clientAuthorityRow.metric_source,
+          referringDomains:
+            clientAuthorityRow.referring_domains === null
+              ? null
+              : Number(clientAuthorityRow.referring_domains),
+          urlRating:
+            clientAuthorityRow.url_rating === null
+              ? null
+              : Number(clientAuthorityRow.url_rating),
+        }
+      : null,
     completedAt: run.completed_at.toISOString(),
     domains: domains.rows.map((row) => ({
       appearances: Number(row.appearance_count),
@@ -3101,6 +3323,14 @@ export async function getProjectLinkPowerInspector(
             medium: Number(summaryRow.medium_confidence_count),
           },
           keywordCount: Number(summaryRow.keyword_count),
+          missingComponents: {
+            backlinks: Number(summaryRow.missing_backlinks_count ?? "0"),
+            domainRating: Number(summaryRow.missing_domain_rating_count ?? "0"),
+            referringDomains: Number(
+              summaryRow.missing_referring_domains_count ?? "0",
+            ),
+            urlRating: Number(summaryRow.missing_url_rating_count ?? "0"),
+          },
           p10: summaryRow.p10_score === null ? null : Number(summaryRow.p10_score),
           p50: summaryRow.p50_score === null ? null : Number(summaryRow.p50_score),
           p90: summaryRow.p90_score === null ? null : Number(summaryRow.p90_score),

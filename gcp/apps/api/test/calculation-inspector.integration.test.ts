@@ -35,8 +35,10 @@ function database(): DatabasePool {
       if (sql.includes("WITH keyword_page AS")) {
         return result([
           {
+            annual_volume: "14400",
             average_order_value_override_id: null,
             base_rank: 18,
+            category: "Medication",
             content_fit_score: "0.72",
             conversion_rate_override_id: null,
             ctr_now: "0.01",
@@ -44,16 +46,30 @@ function database(): DatabasePool {
             current_revenue_annual: "1200",
             device: "mobile",
             expected_incremental_annual: "4200",
+            expected_incremental_high_annual: "4800",
+            expected_incremental_low_annual: "3600",
             explanation_json: { inputs: { source: "gcp" } },
+            factor_applied: "0.74",
             har_confidence: "0.84",
+            har_model_version: "har-v2",
             har_position: 5,
             keyword: "weight loss medication",
             keyword_id: keywordId,
+            legacy_current_revenue_annual: "1000",
+            legacy_har: "8",
+            legacy_har_is_manual: true,
+            legacy_har_source: "manual",
+            legacy_target_incremental_revenue_annual: "3900",
             link_power_score: "61.5",
             rank_attainment_probability: "0.74",
+            revenue_model_version: "revenue-v2",
             scenario: "realistic",
+            search_intent: "commercial",
+            serp_visibility_multiplier: "0.81",
             target_absolute_revenue_annual: "6400",
             target_incremental_revenue_annual: "5200",
+            volume_forward: "1200",
+            warnings: ["confidence_interval_wide"],
           },
         ]);
       }
@@ -76,6 +92,10 @@ function database(): DatabasePool {
             p50_score: "55",
             p90_score: "88",
             scored_count: "6",
+            missing_backlinks_count: "1",
+            missing_domain_rating_count: "2",
+            missing_referring_domains_count: "3",
+            missing_url_rating_count: "4",
           },
         ]);
       }
@@ -116,6 +136,20 @@ function database(): DatabasePool {
         sql.includes("FROM link_power_scores AS score")
       ) {
         return result([{ count: "1" }]);
+      }
+      if (sql.includes("FROM client_domain_metrics")) {
+        return result([
+          {
+            ahrefs_rank: "125000",
+            backlinks: "8200",
+            domain: "pilltime.co.uk",
+            domain_rating: "68",
+            fetched_at: completedAt,
+            metric_source: "ahrefs",
+            referring_domains: "610",
+            url_rating: "51",
+          },
+        ]);
       }
       throw new Error(`Unexpected SQL in inspector integration test: ${sql}`);
     }),
@@ -162,12 +196,19 @@ describe("calculation inspector API", () => {
       items: [
         {
           baseRank: 18,
+          category: "Medication",
+          currentRevenueV1: 1000,
+          harIsManualV1: true,
+          harV1: 8,
           keyword: "weight loss medication",
           scenarios: {
             realistic: {
+              expectedIncrementalHighAnnual: 4800,
+              expectedIncrementalLowAnnual: 3600,
               expectedIncrementalAnnual: 4200,
               harPosition: 5,
               linkPowerScore: 61.5,
+              warnings: ["confidence_interval_wide"],
             },
           },
         },
@@ -184,6 +225,10 @@ describe("calculation inspector API", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
+      clientAuthority: {
+        domain: "pilltime.co.uk",
+        domainRating: 68,
+      },
       domains: [
         {
           domain: "pilltime.co.uk",
@@ -201,6 +246,12 @@ describe("calculation inspector API", () => {
       summary: {
         averageScore: 54.2,
         confidence: { high: 3, low: 1, medium: 2 },
+        missingComponents: {
+          backlinks: 1,
+          domainRating: 2,
+          referringDomains: 3,
+          urlRating: 4,
+        },
         scoredCount: 6,
       },
       total: 1,
@@ -214,6 +265,21 @@ describe("calculation inspector API", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
+      error: { code: "invalid_request" },
+    });
+  });
+
+  it("accepts supported diagnostic filters and rejects unknown filters", async () => {
+    const filtered = await fetch(
+      `${baseUrl}/v1/projects/${projectId}/calculation-inspector?filters=delta,overrides`,
+    );
+    expect(filtered.status).toBe(200);
+
+    const invalid = await fetch(
+      `${baseUrl}/v1/projects/${projectId}/calculation-inspector?filters=unknown`,
+    );
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({
       error: { code: "invalid_request" },
     });
   });

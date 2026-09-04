@@ -84,9 +84,27 @@ interface DemandSummaryRow extends QueryResultRow {
     monthlyVolume: number;
     warningCount: number;
   }>;
+  confidence_distribution: Record<string, number>;
   signal_count: string;
   trend_directions: Record<string, number>;
   warning_count: string;
+  warning_reasons: Record<string, number>;
+}
+
+interface DemandSampleRow extends QueryResultRow {
+  category: string;
+  coverage_months: number;
+  demand_warning: boolean;
+  demand_warning_reason: string | null;
+  keyword: string;
+  keyword_id: string;
+  monthly_volume: number;
+  peak_months: number[];
+  seasonality_strength: string | null;
+  trend_confidence: string;
+  trend_direction: string;
+  trend_pct: string | null;
+  volatility_score: string | null;
 }
 
 interface SerpSummaryRow extends QueryResultRow {
@@ -99,6 +117,16 @@ interface SerpSummaryRow extends QueryResultRow {
   }>;
   keyword_count: string;
   owned_count: string;
+}
+
+interface SerpSampleRow extends QueryResultRow {
+  feature_count: string;
+  keyword: string;
+  keyword_id: string;
+  multiplier: string | null;
+  owned_count: string;
+  result_types: string[];
+  search_intent: string | null;
 }
 
 interface ContentFitSummaryRow extends QueryResultRow {
@@ -201,7 +229,9 @@ export async function getProjectCalculationControl(
     volumeSample,
     clusterSummary,
     demandSummary,
+    demandSamples,
     serpSummary,
+    serpSamples,
     contentFitSummary,
     comparisonSummary,
     recentRuns,
@@ -418,6 +448,17 @@ export async function getProjectCalculationControl(
           SELECT trend_direction, count(*)::integer AS count
           FROM signals
           GROUP BY trend_direction
+        ), confidences AS (
+          SELECT trend_confidence, count(*)::integer AS count
+          FROM signals
+          GROUP BY trend_confidence
+        ), warning_reasons AS (
+          SELECT
+            COALESCE(NULLIF(demand_warning_reason, ''), 'unspecified') AS reason,
+            count(*)::integer AS count
+          FROM signals
+          WHERE demand_warning
+          GROUP BY COALESCE(NULLIF(demand_warning_reason, ''), 'unspecified')
         ), categories AS (
           SELECT
             category,
@@ -438,6 +479,14 @@ export async function getProjectCalculationControl(
             '{}'::jsonb
           ) AS trend_directions,
           COALESCE(
+            (SELECT jsonb_object_agg(trend_confidence, count) FROM confidences),
+            '{}'::jsonb
+          ) AS confidence_distribution,
+          COALESCE(
+            (SELECT jsonb_object_agg(reason, count) FROM warning_reasons),
+            '{}'::jsonb
+          ) AS warning_reasons,
+          COALESCE(
             (
               SELECT jsonb_agg(jsonb_build_object(
                 'category', category,
@@ -450,6 +499,34 @@ export async function getProjectCalculationControl(
             '[]'::jsonb
           ) AS category_rows
         FROM signals
+      `,
+      [projectId, runId],
+    ),
+    pool.query<DemandSampleRow>(
+      `
+        SELECT
+          keyword.id AS keyword_id,
+          keyword.keyword,
+          COALESCE(keyword.category, 'Uncategorised') AS category,
+          COALESCE(keyword.avg_monthly_volume, 0) AS monthly_volume,
+          signal.coverage_months,
+          signal.trend_direction,
+          signal.trend_pct::text,
+          signal.trend_confidence,
+          signal.volatility_score::text,
+          signal.seasonality_strength::text,
+          signal.peak_months,
+          signal.demand_warning,
+          signal.demand_warning_reason
+        FROM keyword_demand_signals AS signal
+        JOIN keywords AS keyword ON keyword.id = signal.keyword_id
+        WHERE signal.project_id = $1
+          AND signal.pipeline_run_id = $2::uuid
+        ORDER BY
+          signal.demand_warning DESC,
+          abs(COALESCE(signal.trend_pct, 0)) DESC,
+          keyword.normalised_keyword
+        LIMIT 20
       `,
       [projectId, runId],
     ),
@@ -491,6 +568,41 @@ export async function getProjectCalculationControl(
             ),
             '[]'::jsonb
           ) AS feature_types
+      `,
+      [projectId, runId],
+    ),
+    pool.query<SerpSampleRow>(
+      `
+        WITH feature_summary AS (
+          SELECT
+            feature.keyword_id,
+            count(*)::text AS feature_count,
+            count(*) FILTER (WHERE feature.owned)::text AS owned_count,
+            array_agg(DISTINCT feature.result_type ORDER BY feature.result_type)
+              AS result_types
+          FROM project_serp_features AS feature
+          WHERE feature.project_id = $1
+          GROUP BY feature.keyword_id
+        )
+        SELECT
+          keyword.id AS keyword_id,
+          keyword.keyword,
+          keyword.search_intent,
+          summary.feature_count,
+          summary.owned_count,
+          summary.result_types,
+          har.serp_visibility_multiplier::text AS multiplier
+        FROM feature_summary AS summary
+        JOIN keywords AS keyword ON keyword.id = summary.keyword_id
+        LEFT JOIN har_forecasts AS har
+          ON har.keyword_id = summary.keyword_id
+         AND har.pipeline_run_id = $2::uuid
+         AND har.scenario = 'realistic'
+        ORDER BY
+          har.serp_visibility_multiplier ASC NULLS LAST,
+          summary.feature_count::integer DESC,
+          keyword.normalised_keyword
+        LIMIT 20
       `,
       [projectId, runId],
     ),
@@ -702,9 +814,26 @@ export async function getProjectCalculationControl(
     demand: {
       averageCoverageMonths: number(demand.average_coverage_months),
       categories: demand.category_rows,
+      confidenceDistribution: demand.confidence_distribution,
+      samples: demandSamples.rows.map((row) => ({
+        category: row.category,
+        coverageMonths: row.coverage_months,
+        demandWarning: row.demand_warning,
+        demandWarningReason: row.demand_warning_reason,
+        keyword: row.keyword,
+        keywordId: row.keyword_id,
+        monthlyVolume: row.monthly_volume,
+        peakMonths: row.peak_months,
+        seasonalityStrength: number(row.seasonality_strength),
+        trendConfidence: row.trend_confidence,
+        trendDirection: row.trend_direction,
+        trendPct: number(row.trend_pct),
+        volatilityScore: number(row.volatility_score),
+      })),
       signals: Number(demand.signal_count),
       trendDirections: demand.trend_directions,
       warnings: Number(demand.warning_count),
+      warningReasons: demand.warning_reasons,
     },
     generatedAt: new Date().toISOString(),
     gscReadiness: {
@@ -739,6 +868,15 @@ export async function getProjectCalculationControl(
       featureTypes: serp.feature_types,
       keywordCount: Number(serp.keyword_count),
       ownedCount: Number(serp.owned_count),
+      samples: serpSamples.rows.map((row) => ({
+        featureCount: Number(row.feature_count),
+        keyword: row.keyword,
+        keywordId: row.keyword_id,
+        multiplier: number(row.multiplier),
+        ownedCount: Number(row.owned_count),
+        resultTypes: row.result_types,
+        searchIntent: row.search_intent,
+      })),
     },
     volumeHistory: {
       earliestMonth: iso(volume.earliest_month)?.slice(0, 10) ?? null,

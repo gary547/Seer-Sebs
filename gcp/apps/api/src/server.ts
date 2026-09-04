@@ -1917,13 +1917,26 @@ async function handleRequest(
     const rawLimit = Number(url.searchParams.get("limit") ?? "50");
     const rawOffset = Number(url.searchParams.get("offset") ?? "0");
     const search = (url.searchParams.get("search") ?? "").trim();
+    const filters = (url.searchParams.get("filters") ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const allowedCalculationFilters = new Set([
+      "clamped",
+      "delta",
+      "missing_lps",
+      "overrides",
+      "synthetic_lps",
+    ]);
     if (
       !Number.isInteger(rawLimit) ||
       rawLimit < 1 ||
       rawLimit > 200 ||
       !Number.isInteger(rawOffset) ||
       rawOffset < 0 ||
-      search.length > 200
+      search.length > 200 ||
+      filters.some((filter) => !allowedCalculationFilters.has(filter)) ||
+      (Boolean(linkPowerInspectorProjectId) && filters.length > 0)
     ) {
       throw new HttpError(
         400,
@@ -1942,6 +1955,7 @@ async function handleRequest(
             rawLimit,
             rawOffset,
             search,
+            filters,
           )
         : await getProjectLinkPowerInspector(
             runtime.pool,

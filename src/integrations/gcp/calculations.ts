@@ -134,6 +134,7 @@ export interface ProjectCalculationSummary {
 }
 
 export interface CalculationInspectorScenario {
+  annualVolume: number | null;
   averageOrderValueOverrideId: string | null;
   contentFitScore: number | null;
   conversionRateOverrideId: string | null;
@@ -141,24 +142,46 @@ export interface CalculationInspectorScenario {
   ctrTarget: number | null;
   currentRevenueAnnual: number | null;
   expectedIncrementalAnnual: number | null;
+  expectedIncrementalHighAnnual: number | null;
+  expectedIncrementalLowAnnual: number | null;
   explanation: Record<string, unknown>;
+  factorApplied: number | null;
   harConfidence: number;
   harPosition: number | null;
   linkPowerScore: number | null;
+  harModelVersion: string;
   rankAttainmentProbability: number | null;
+  revenueModelVersion: string | null;
+  serpVisibilityMultiplier: number | null;
   targetAbsoluteRevenueAnnual: number | null;
   targetIncrementalRevenueAnnual: number | null;
+  volumeForward: number | null;
+  warnings: string[];
 }
 
 export interface CalculationInspectorRow {
   baseRank: number | null;
+  category: string | null;
   device: string;
+  currentRevenueV1: number | null;
+  harIsManualV1: boolean;
+  harSourceV1: string | null;
+  harV1: number | null;
   keyword: string;
   keywordId: string;
+  searchIntent: string | null;
   scenarios: Partial<
     Record<ForecastScenario, CalculationInspectorScenario>
   >;
+  targetIncrementalRevenueV1: number | null;
 }
+
+export type CalculationInspectorFilter =
+  | "clamped"
+  | "delta"
+  | "missing_lps"
+  | "overrides"
+  | "synthetic_lps";
 
 export interface CalculationInspectorPage {
   completedAt: string | null;
@@ -172,6 +195,16 @@ export interface CalculationInspectorPage {
 }
 
 export interface LinkPowerInspectorPage {
+  clientAuthority: {
+    ahrefsRank: number | null;
+    backlinks: number | null;
+    domain: string;
+    domainRating: number | null;
+    fetchedAt: string;
+    metricSource: string;
+    referringDomains: number | null;
+    urlRating: number | null;
+  } | null;
   completedAt: string | null;
   domains: Array<{
     appearances: number;
@@ -203,6 +236,12 @@ export interface LinkPowerInspectorPage {
     averageScore: number | null;
     confidence: { high: number; low: number; medium: number };
     keywordCount: number;
+    missingComponents: {
+      backlinks: number;
+      domainRating: number;
+      referringDomains: number;
+      urlRating: number;
+    };
     p10: number | null;
     p50: number | null;
     p90: number | null;
@@ -234,9 +273,15 @@ export function getProjectCalculationSummary(
 
 export function getProjectCalculationInspector(
   projectId: string,
-  input: { limit?: number; offset?: number; search?: string } = {},
+  input: {
+    filters?: CalculationInspectorFilter[];
+    limit?: number;
+    offset?: number;
+    search?: string;
+  } = {},
 ): Promise<CalculationInspectorPage> {
   const query = new URLSearchParams({
+    filters: (input.filters ?? []).join(","),
     limit: String(input.limit ?? 50),
     offset: String(input.offset ?? 0),
     search: input.search ?? "",

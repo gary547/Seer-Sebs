@@ -10,6 +10,7 @@ import { Link, Navigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import CalculationControlPanels from "@/components/admin/CalculationControlPanels";
+import CalculationInspectors from "@/components/admin/CalculationInspectors";
 import AutonomousPipelinePanel from "@/components/admin/AutonomousPipelinePanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -328,16 +329,19 @@ export default function CalculationsPage() {
       )}
 
       {control.data && (
-        <CalculationControlPanels
-          control={control.data}
-          ctrCurves={ctrCurves.data}
-          onRun={(source) =>
-            runPipeline(source.toLowerCase().includes("revenue") ? "recalculate" : "full")
-          }
-          projectId={projectId}
-          running={running}
-          summary={summary.data}
-        />
+        <>
+          <CalculationControlPanels
+            control={control.data}
+            ctrCurves={ctrCurves.data}
+            onRun={(source) =>
+              runPipeline(source.toLowerCase().includes("revenue") ? "recalculate" : "full")
+            }
+            projectId={projectId}
+            running={running}
+            summary={summary.data}
+          />
+          <CalculationInspectors projectId={projectId} summary={summary.data} />
+        </>
       )}
     </div>
   );

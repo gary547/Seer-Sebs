@@ -65,9 +65,26 @@ export interface CalculationControl {
       monthlyVolume: number;
       warningCount: number;
     }>;
+    confidenceDistribution: Record<string, number>;
+    samples: Array<{
+      category: string;
+      coverageMonths: number;
+      demandWarning: boolean;
+      demandWarningReason: string | null;
+      keyword: string;
+      keywordId: string;
+      monthlyVolume: number;
+      peakMonths: number[];
+      seasonalityStrength: number | null;
+      trendConfidence: string;
+      trendDirection: string;
+      trendPct: number | null;
+      volatilityScore: number | null;
+    }>;
     signals: number;
     trendDirections: Record<string, number>;
     warnings: number;
+    warningReasons: Record<string, number>;
   };
   generatedAt: string;
   gscReadiness: {
@@ -104,6 +121,15 @@ export interface CalculationControl {
     }>;
     keywordCount: number;
     ownedCount: number;
+    samples: Array<{
+      featureCount: number;
+      keyword: string;
+      keywordId: string;
+      multiplier: number | null;
+      ownedCount: number;
+      resultTypes: string[];
+      searchIntent: string | null;
+    }>;
   };
   volumeHistory: {
     earliestMonth: string | null;

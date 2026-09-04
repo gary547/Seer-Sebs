@@ -46,10 +46,16 @@ function database(): DatabasePool {
       return result([{ canonical_bases: { volume: 3 }, cluster_count: "3", largest_cluster: "5", member_count: "10", multi_member_count: "2", top_clusters: [{ canonicalKeyword: "seo agency", clusterKey: "seo-agency", memberCount: 5 }] }]);
     }
     if (sql.includes("WITH signals AS")) {
-      return result([{ average_coverage_months: "23.4", category_rows: [{ category: "SEO", keywordCount: 10, monthlyVolume: 12000, warningCount: 1 }], signal_count: "10", trend_directions: { growing: 8, stable: 2 }, warning_count: "1" }]);
+      return result([{ average_coverage_months: "23.4", category_rows: [{ category: "SEO", keywordCount: 10, monthlyVolume: 12000, warningCount: 1 }], confidence_distribution: { high: 8, medium: 2 }, signal_count: "10", trend_directions: { growing: 8, stable: 2 }, warning_count: "1", warning_reasons: { sparse_history: 1 } }]);
+    }
+    if (sql.includes("signal.coverage_months")) {
+      return result([{ category: "SEO", coverage_months: 24, demand_warning: false, demand_warning_reason: null, keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", monthly_volume: 1200, peak_months: [1, 9], seasonality_strength: "0.35", trend_confidence: "high", trend_direction: "growing", trend_pct: "0.18", volatility_score: "0.21" }]);
     }
     if (sql.includes("WITH feature_types AS")) {
       return result([{ average_visibility_multiplier: "0.82", feature_count: "16", feature_types: [{ count: 10, ownedCount: 2, resultType: "organic" }], keyword_count: "10", owned_count: "2" }]);
+    }
+    if (sql.includes("WITH feature_summary AS")) {
+      return result([{ feature_count: "3", keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", multiplier: "0.82", owned_count: "1", result_types: ["organic", "people_also_ask"], search_intent: "commercial" }]);
     }
     if (sql.includes("WITH rows AS")) {
       return result([{ average_score: "72.5", matched_count: "9", missing_count: "1", scored_count: "9", total_count: "10", zero_count: "1", zero_rows: [{ keyword: "missing page", rankingUrl: null, tacticalStatus: "create_content" }] }]);
@@ -102,11 +108,21 @@ describe("calculation control API", () => {
       clustering: { clusterCount: 3, memberCount: 10 },
       comparisons: { comparableHarCount: 8, comparableRevenueCount: 7 },
       contentFit: { matched: 9, zero: 1 },
-      demand: { signals: 10, warnings: 1 },
+      demand: {
+        confidenceDistribution: { high: 8, medium: 2 },
+        samples: [{ keyword: "seo agency", trendDirection: "growing" }],
+        signals: 10,
+        warningReasons: { sparse_history: 1 },
+        warnings: 1,
+      },
       gscReadiness: { uploads: [{ id: uploadId, queryRows: 240 }] },
       projectId,
       recentRuns: [{ id: runId, status: "succeeded" }],
-      serpVisibility: { featureCount: 16, ownedCount: 2 },
+      serpVisibility: {
+        featureCount: 16,
+        ownedCount: 2,
+        samples: [{ keyword: "seo agency", multiplier: 0.82 }],
+      },
       volumeHistory: { with24Months: 8, withHistory: 9 },
     });
     expect(

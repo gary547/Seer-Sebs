@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   Archive,
@@ -9,7 +9,6 @@ import {
   GitCompareArrows,
   History,
   Layers3,
-  Link2,
   ListChecks,
   RefreshCw,
   ShieldCheck,
@@ -21,6 +20,12 @@ import {
 import { toast } from "sonner";
 
 import GscUploadPanel from "@/components/GscUploadPanel";
+import {
+  CtrVisualPanel,
+  DemandVisualPanel,
+  SerpVisualPanel,
+  VolumeVisualPanel,
+} from "@/components/admin/CalculationVisualPanels";
 import CollapsibleSection from "@/components/navigator/CollapsibleSection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,7 +42,6 @@ import {
   type CalculationControl,
 } from "@/integrations/gcp/calculation-control";
 import {
-  getProjectLinkPowerInspector,
   type ProjectCalculationSummary,
   type ProjectCtrCurves,
 } from "@/integrations/gcp/calculations";
@@ -154,11 +158,6 @@ export default function CalculationControlPanels({
   const queryClient = useQueryClient();
   const archived = control.archived;
   const key = storageKey(projectId);
-  const linkPower = useQuery({
-    queryKey: ["admin", "link-power-inspector", projectId, "control"],
-    queryFn: () => getProjectLinkPowerInspector(projectId, { limit: 50 }),
-    enabled: !archived,
-  });
   const calibration = summary?.calibration;
   const latestUpload = control.gscReadiness.uploads[0] ?? null;
   const observedCtrPoints = (ctrCurves?.curves ?? [])
@@ -299,20 +298,7 @@ export default function CalculationControlPanels({
         summary={`${ctrCurves?.curves.length ?? 0} curves · ${observedCtrPoints} observed points`}
       >
         <div className="space-y-4 pt-4">
-          <MetricStrip items={[
-            { label: "Curves", value: number(ctrCurves?.curves.length) },
-            { label: "Observed points", value: number(observedCtrPoints) },
-            { label: "Completed", value: dateTime(ctrCurves?.completedAt ?? null) },
-            { label: "Run", value: ctrCurves?.runId?.slice(0, 8) ?? "—" },
-          ]} />
-          {(ctrCurves?.curves.length ?? 0) === 0 ? <Empty>No CTR curves were persisted by the latest successful run.</Empty> : (
-            <div className="overflow-auto rounded-lg border border-hairline">
-              <Table>
-                <TableHeader><TableRow><TableHead>Device</TableHead><TableHead>Intent</TableHead><TableHead>Brand</TableHead><TableHead className="text-right">Points</TableHead><TableHead className="text-right">GSC points</TableHead><TableHead className="text-right">Rank 1 CTR</TableHead></TableRow></TableHeader>
-                <TableBody>{ctrCurves?.curves.map((curve) => <TableRow key={`${curve.device}:${curve.searchIntent}:${curve.isBranded}`}><TableCell>{curve.device}</TableCell><TableCell>{curve.searchIntent}</TableCell><TableCell>{curve.isBranded ? "Branded" : "Non-brand"}</TableCell><TableCell className="text-right font-mono">{curve.points.length}</TableCell><TableCell className="text-right font-mono">{curve.points.filter((point) => point.source === "gsc").length}</TableCell><TableCell className="text-right font-mono">{curve.points[0] ? `${(curve.points[0].ctr * 100).toFixed(2)}%` : "—"}</TableCell></TableRow>)}</TableBody>
-              </Table>
-            </div>
-          )}
+          <CtrVisualPanel data={ctrCurves} />
           <RefreshAction archived={archived} label="Refresh CTR v2" onRun={onRun} running={running} />
         </div>
       </CollapsibleSection>
@@ -380,28 +366,14 @@ export default function CalculationControlPanels({
 
       <CollapsibleSection id="volume-history" storageKey={key} title="Volume History" icon={<History className="h-4 w-4 text-signal" />} badge={<Badge variant="outline">ADMIN ONLY</Badge>} summary={`${percent(control.volumeHistory.with24Months, control.volumeHistory.keptKeywords)} with 24 months`}>
         <div className="space-y-4 pt-4">
-          <MetricStrip items={[
-            { label: "With history", value: `${control.volumeHistory.withHistory}/${control.volumeHistory.keptKeywords}` },
-            { label: "12+ months", value: number(control.volumeHistory.with12Months) },
-            { label: "24+ months", value: number(control.volumeHistory.with24Months) },
-            { label: "Median months", value: number(control.volumeHistory.medianMonths, 1) },
-          ]} />
-          {control.volumeHistory.sample.length === 0 ? <Empty>No monthly search-volume history is available.</Empty> : (
-            <div className="overflow-auto rounded-lg border border-hairline"><Table><TableHeader><TableRow><TableHead>Keyword</TableHead><TableHead className="text-right">Months</TableHead><TableHead>Range</TableHead><TableHead className="text-right">Latest volume</TableHead></TableRow></TableHeader><TableBody>{control.volumeHistory.sample.map((row) => <TableRow key={row.keywordId}><TableCell className="font-medium">{row.keyword}</TableCell><TableCell className="text-right font-mono">{row.monthCount}</TableCell><TableCell className="font-mono text-xs">{row.months[0]?.month ?? "—"} → {row.months.at(-1)?.month ?? "—"}</TableCell><TableCell className="text-right font-mono">{number(row.months.at(-1)?.volume)}</TableCell></TableRow>)}</TableBody></Table></div>
-          )}
+          <VolumeVisualPanel data={control.volumeHistory} />
           <RefreshAction archived={archived} label="Refresh volume history" onRun={onRun} running={running} />
         </div>
       </CollapsibleSection>
 
       <CollapsibleSection id="demand-signals" storageKey={key} title="Demand signals" icon={<Activity className="h-4 w-4 text-signal" />} summary={`${control.demand.signals} signals · ${control.demand.warnings} warnings`}>
         <div className="space-y-4 pt-4">
-          <MetricStrip items={[
-            { label: "Signals", value: number(control.demand.signals) },
-            { label: "Warnings", value: number(control.demand.warnings) },
-            { label: "Average coverage", value: `${number(control.demand.averageCoverageMonths, 1)} months` },
-            { label: "Categories", value: number(control.demand.categories.length) },
-          ]} />
-          <KeyValueRows values={control.demand.trendDirections} empty="No trend directions are available." />
+          <DemandVisualPanel data={control.demand} />
           <RefreshAction archived={archived} label="Compute demand signals" onRun={onRun} running={running} />
         </div>
       </CollapsibleSection>
@@ -416,30 +388,7 @@ export default function CalculationControlPanels({
 
       <CollapsibleSection id="serp-visibility" storageKey={key} title="SERP visibility v2 preview" icon={<BarChart3 className="h-4 w-4 text-signal" />} summary={`${control.serpVisibility.featureCount} features`}>
         <div className="space-y-4 pt-4">
-          <MetricStrip items={[
-            { label: "Features", value: number(control.serpVisibility.featureCount) },
-            { label: "Keywords", value: number(control.serpVisibility.keywordCount) },
-            { label: "Owned", value: number(control.serpVisibility.ownedCount) },
-            { label: "Average multiplier", value: number(control.serpVisibility.averageMultiplier, 3) },
-          ]} />
-          {control.serpVisibility.featureTypes.length === 0 ? <Empty>No SERP feature evidence is available.</Empty> : (
-            <div className="overflow-auto rounded-lg border border-hairline"><Table><TableHeader><TableRow><TableHead>Result type</TableHead><TableHead className="text-right">Occurrences</TableHead><TableHead className="text-right">Owned</TableHead></TableRow></TableHeader><TableBody>{control.serpVisibility.featureTypes.map((feature) => <TableRow key={feature.resultType}><TableCell className="font-medium">{feature.resultType}</TableCell><TableCell className="text-right font-mono">{number(feature.count)}</TableCell><TableCell className="text-right font-mono">{number(feature.ownedCount)}</TableCell></TableRow>)}</TableBody></Table></div>
-          )}
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection id="link-power" storageKey={key} title="Link Power Score" icon={<Link2 className="h-4 w-4 text-signal" />} summary={`${linkPower.data?.summary?.scoredCount ?? 0} scored URLs`}>
-        <div className="space-y-4 pt-4">
-          <MetricStrip items={[
-            { label: "Scored URLs", value: number(linkPower.data?.summary?.scoredCount) },
-            { label: "Keywords", value: number(linkPower.data?.summary?.keywordCount) },
-            { label: "Mean", value: number(linkPower.data?.summary?.averageScore, 1) },
-            { label: "Median", value: number(linkPower.data?.summary?.p50, 1) },
-          ]} />
-          {(linkPower.data?.items.length ?? 0) === 0 ? <Empty>No Link Power Score output is available.</Empty> : (
-            <div className="max-h-[480px] overflow-auto rounded-lg border border-hairline"><Table><TableHeader><TableRow><TableHead>Keyword</TableHead><TableHead>Domain</TableHead><TableHead className="text-right">Rank</TableHead><TableHead className="text-right">LPS</TableHead><TableHead>Confidence</TableHead></TableRow></TableHeader><TableBody>{linkPower.data?.items.map((row) => <TableRow key={`${row.keywordId}:${row.url}`}><TableCell className="font-medium">{row.keyword}</TableCell><TableCell><a href={row.url} target="_blank" rel="noreferrer" className="text-signal hover:underline">{row.domain}</a></TableCell><TableCell className="text-right font-mono">{row.rank}</TableCell><TableCell className="text-right font-mono">{number(row.score, 1)}</TableCell><TableCell><Badge variant="outline">{row.confidence}</Badge></TableCell></TableRow>)}</TableBody></Table></div>
-          )}
-          <RefreshAction archived={archived} label="Refresh Link Power Score" onRun={onRun} running={running} />
+          <SerpVisualPanel data={control.serpVisibility} />
         </div>
       </CollapsibleSection>
 
