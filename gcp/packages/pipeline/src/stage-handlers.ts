@@ -609,7 +609,11 @@ function dependency<T extends DataDrivenStageData>(
   return output as unknown as T;
 }
 
-function containsTokenOrPhrase(keyword: string, needle: string): boolean {
+function containsTokenOrPhrase(
+  keyword: string,
+  needle: string | null | undefined,
+): boolean {
+  if (typeof needle !== "string") return false;
   const normalisedNeedle = normaliseKeyword(needle);
   if (!normalisedNeedle) return false;
   if (normalisedNeedle.includes(" ")) return keyword.includes(normalisedNeedle);
@@ -627,6 +631,10 @@ function normaliseHost(value: string): string {
 
 function titleCase(value: string): string {
   return value.replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function projectCategoryFocus(fixture: ProjectPipelineSource): string | null {
+  return fixture.project.categoryFocus?.trim() || fixture.client.industry?.trim() || null;
 }
 
 function stableGscId(projectId: string, normalisedText: string): string {
@@ -779,6 +787,7 @@ function detoxDecision(
   fixture: ProjectPipelineSource,
 ): DetoxedKeyword["detox"] {
   const text = keyword.normalisedText;
+  const categoryFocus = projectCategoryFocus(fixture);
   if (keyword.preCurated) {
     return {
       decision: "keep",
@@ -828,11 +837,13 @@ function detoxDecision(
   }
   if (
     fixture.rules.relevantTerms.some((value) => containsTokenOrPhrase(text, value)) ||
-    containsTokenOrPhrase(text, fixture.project.categoryFocus)
+    containsTokenOrPhrase(text, categoryFocus)
   ) {
     return {
       decision: "keep",
-      reason: `Relevant to ${fixture.project.categoryFocus}`,
+      reason: categoryFocus
+        ? `Relevant to ${categoryFocus}`
+        : "Matched relevant project term",
       rule: "category-relevance",
     };
   }
@@ -972,6 +983,7 @@ function categoriseKeyword(
   fixture: ProjectPipelineSource,
 ): CategorisedKeyword["categorisation"] {
   const text = keyword.normalisedText;
+  const categoryFocus = projectCategoryFocus(fixture) ?? "Uncategorised";
   if (keyword.preCurated && keyword.category && keyword.searchIntent) {
     return {
       category: keyword.category,
@@ -1003,12 +1015,12 @@ function categoriseKeyword(
   }
 
   const intent = classifyIntent(text, fixture);
-  if (!usesTelevisionTaxonomy(fixture.project.categoryFocus)) {
+  if (!usesTelevisionTaxonomy(categoryFocus)) {
     return {
-      category: fixture.project.categoryFocus,
+      category: categoryFocus,
       intent,
       source: "taxonomy",
-      tags: [fixture.project.categoryFocus],
+      tags: [categoryFocus],
       tier: decideTier(text, intent),
     };
   }

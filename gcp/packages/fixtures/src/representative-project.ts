@@ -127,7 +127,7 @@ export interface ProjectPipelineSource {
     companyName: string;
     domain: string;
     id: string;
-    industry: string;
+    industry: string | null;
   };
   economics: {
     averageOrderValue: number | null;
@@ -140,7 +140,7 @@ export interface ProjectPipelineSource {
   gscRows: SyntheticGscRow[];
   keywords: SyntheticKeyword[];
   project: {
-    categoryFocus: string;
+    categoryFocus: string | null;
     clientId: string;
     country: string;
     currency: string;

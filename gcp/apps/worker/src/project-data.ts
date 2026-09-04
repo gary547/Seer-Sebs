@@ -40,7 +40,7 @@ interface ProjectSourceRow {
   authority_domain_rating: string;
   authority_referring_domains: number;
   brand_terms: string[];
-  category_focus: string;
+  category_focus: string | null;
   client_id: string;
   company_name: string;
   conversion_rate: string | null;
@@ -51,7 +51,7 @@ interface ProjectSourceRow {
   gsc_date_range_end: string | null;
   gsc_date_range_start: string | null;
   id: string;
-  industry: string;
+  industry: string | null;
   language: string;
   project_name: string;
   competitive_enrichment_volume_floor: number;

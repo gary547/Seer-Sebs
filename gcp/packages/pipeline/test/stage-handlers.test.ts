@@ -170,6 +170,39 @@ describe("data-driven pipeline handlers", () => {
     ).toBe(true);
   });
 
+  it("handles projects without category focus or client industry", () => {
+    const fixture = parseRepresentativeProjectFixture(rawFixture);
+    const projectFixture = {
+      ...fixture,
+      client: {
+        ...fixture.client,
+        industry: null,
+      },
+      project: {
+        ...fixture.project,
+        categoryFocus: null,
+      },
+    };
+    const intake = executeDataDrivenStage("intake", projectFixture, {}) as IntakeStageData;
+    const promotion = executeDataDrivenStage("gsc-promotion", projectFixture, {
+      intake,
+    }) as GscPromotionStageData;
+    const detox = executeDataDrivenStage("detox", projectFixture, {
+      "gsc-promotion": promotion,
+    }) as DetoxStageData;
+    const categorisation = executeDataDrivenStage("categorisation", projectFixture, {
+      detox,
+    }) as CategorisationStageData;
+
+    expect(detox.keywords).toHaveLength(promotion.keywords.length);
+    expect(detox.keywords.every((keyword) => !keyword.detox.reason.includes("null"))).toBe(true);
+    expect(
+      categorisation.keywords.some(
+        (keyword) => keyword.categorisation.category === "Uncategorised",
+      ),
+    ).toBe(true);
+  });
+
   it("applies whitelist precedence before competitor removal", () => {
     const fixture = parseRepresentativeProjectFixture(rawFixture);
     const intake = executeDataDrivenStage("intake", fixture, {}) as IntakeStageData;
