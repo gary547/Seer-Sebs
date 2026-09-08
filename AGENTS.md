@@ -66,6 +66,12 @@ The Docker gate validates container builds, fresh and repeated schema
 application, database transfer, backup and restore, access boundaries, API and
 worker workflows, event delivery, object persistence, and restart persistence.
 
+Host-run compiled GCP scripts resolve backend packages through
+`dist/node_modules`, linked to `../gcp/node_modules`. The frontend build
+replaces `dist`; restore this generated link if absent before the Docker gate.
+Do not add backend-only dependencies to the frontend manifest to repair local
+module resolution. Keep the generated link outside Git.
+
 ## Seer Google Cloud identity
 
 - User-confirmed identity: **Seer = `nobrainer`, never `master`**. When the
@@ -151,10 +157,19 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
 - Keep Cloud Build source uploads constrained by `.gcloudignore`, and deploy
   Firebase Hosting through the `web` target bound at build time to the
   OpenTofu-managed site ID.
-- The production `main` trigger uses `gcp/cloudbuild.runtime.yaml` with
-  `_AUTO_DEPLOY=true`. Keep its release order: schema migration, Cloud Run,
+- A configured production `main` trigger must use `gcp/cloudbuild.runtime.yaml`
+  with `_AUTO_DEPLOY=true`. Verify the GitHub connection installation and the
+  regional trigger exist before expecting a push to deploy; billing recovery
+  alone does not establish continuous deployment. Keep the release order: schema migration, Cloud Run,
   Workflows, API readiness, then Firebase Hosting. Manual builds must retain
   the default `_AUTO_DEPLOY=false` and must not change live services.
+- Provider migration releases require an enabled version of
+  `seer-openrouter-api-key`, mapped to worker `OPENROUTER_API_KEY`, while
+  preserving `DATAFORSEO_CREDENTIALS` and removing the worker's Ahrefs and
+  Anthropic secret references. The release identity must be able to inspect
+  secret-version metadata, and the worker must have secret access. Verify these
+  prerequisites before schema or service changes. The local OpenRouter vault
+  name is `SEER_OPENROUTER_API_KEY`; use Hush injection, never plaintext files.
 - Render Workflow templates through
   `gcp/scripts/render-managed-workflows.mjs`; the renderer must preserve
   Workflow expression syntax while resolving only the managed project, secret
@@ -356,8 +371,14 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   Output CSV export; preserve both export paths.
 - Migration `032_provider_migration_contract` adds persisted provider batch
   results, OpenRouter categorisation provenance and page/domain input scopes.
+  Apply it before deploying the new worker or export API; it also supplies
+  the keyword-to-cluster lookup index used by the paginated export.
   Completed AI batches are cached by run, stage and request hash; preserve that
   identity when resuming a stage so successful batches are not requested again.
+- All three OpenRouter operations use batches of at most 20 inputs and the
+  same 30-attempt limit with two-second retry waits. Each stage delivery has a
+  900-second execution budget before checkpoint continuation; the exact model
+  and persisted batch attempt count must remain unchanged on resume.
 - Long AI stages checkpoint before the delivery timeout and acknowledge
   `status: continuing`. Dispatcher and managed Workflow must repeat the same
   stage without completing its task or advancing dependencies. Persist the
