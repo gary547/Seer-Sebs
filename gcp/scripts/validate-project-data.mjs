@@ -299,7 +299,7 @@ async function validateEndToEnd() {
         authority: fixture.authority,
         categoryFocus: fixture.project.categoryFocus,
         country: fixture.project.country,
-        currency: fixture.project.currency,
+        currency: testGscFallback ? null : fixture.project.currency,
         economics: fixture.economics,
         language: fixture.project.language,
         name: fixture.project.name,
@@ -585,7 +585,8 @@ async function validateEndToEnd() {
     }
     for (const row of page.rows) {
       const key = `${row.keyword_id}:${row.scenario}`;
-      if (exportedForecasts.has(key) || typeof row.expected_incremental_annual !== "number" ||
+      if (row.currency !== (testGscFallback ? "not_available" : fixture.project.currency) ||
+          exportedForecasts.has(key) || typeof row.expected_incremental_annual !== "number" ||
           page.columns.some(column => row[column] === null || row[column] === undefined || row[column] === "")) {
         throw new Error("Complete export contains duplicate or incomplete forecasts.");
       }

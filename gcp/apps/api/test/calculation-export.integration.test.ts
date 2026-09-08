@@ -11,13 +11,14 @@ let active = false;
 let complete = true;
 let allowed = true;
 let latestRun = true;
+let currency: string | null = "GBP";
 let executed: Array<{ sql: string; values: unknown[] }>;
 
 describe("complete calculation export API", () => {
   let server: ReturnType<typeof createApiServer>;
   let url: string;
   beforeEach(async () => {
-    dirty = false; active = false; complete = true; allowed = true; latestRun = true; executed = [];
+    dirty = false; active = false; complete = true; allowed = true; latestRun = true; currency = "GBP"; executed = [];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       sql = sql.replace(/\s+/g, " ").trim();
       executed.push({ sql, values });
@@ -26,7 +27,7 @@ describe("complete calculation export API", () => {
       else if (sql.includes("SELECT client_id FROM navigator_projects")) rows = [{ client_id: projectId }];
       else if (sql.includes("FROM user_roles AS user_role")) rows = [{ role: allowed ? "admin" : "view_only" }];
       else if (sql.includes("FROM user_client_access")) rows = [];
-      else if (sql.includes("SELECT run.id")) rows = latestRun ? [{ id: runId, completed_at: new Date("2026-09-08T09:00:00Z"), currency: "GBP", dirty, active }] : [];
+      else if (sql.includes("SELECT run.id")) rows = latestRun ? [{ id: runId, completed_at: new Date("2026-09-08T09:00:00Z"), currency, dirty, active }] : [];
       else if (sql.includes("WITH export_keywords")) rows = ["conservative", "realistic", "stretch"].map((scenario) => ({
         keyword_id: keywordId, keyword: 'keyword, with "quotes"', scenario, category: "Pharmacy", search_intent: "commercial",
         har_model_version: "har-v2", revenue_model_version: complete ? "revenue-v2" : null,
@@ -57,6 +58,15 @@ describe("complete calculation export API", () => {
   });
   it.each(["limit=501", "limit=0", "after=bad", `after=${keywordId}`, "runId=bad"])("rejects invalid pagination: %s", async (query) => {
     expect((await fetch(`${url}?${query}`)).status).toBe(400);
+  });
+  it.each([null, "", "   ", "GBP"])("represents currency %s without empty cells or an invented currency", async (value) => {
+    currency = value;
+    const response = await fetch(url);
+    expect(response.status).toBe(200);
+    const page = await response.json() as { rows: Array<Record<string, unknown>>; columns: string[] };
+    expect(page.columns).toHaveLength(68);
+    expect(page.rows.every(row => row.currency === (value === "GBP" ? "GBP" : "not_available"))).toBe(true);
+    expect(page.rows.every(row => page.columns.every(column => row[column] !== null && row[column] !== undefined && row[column] !== ""))).toBe(true);
   });
   it("rejects exports of missing or incomplete results", async () => {
     latestRun = false; expect((await fetch(url)).status).toBe(409);

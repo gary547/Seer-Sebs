@@ -29,7 +29,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   if (!Number.isInteger(limit) || limit < 1 || limit > 500 || (after && !uuid.test(after)) || (requestedRun && !uuid.test(requestedRun)) || (after && !requestedRun)) {
     throw new HttpError(400, "invalid_export_page", "Export pagination is invalid.");
   }
-  const runs = await pool.query<{ id: string; completed_at: Date; currency: string; dirty: boolean; active: boolean }>(
+  const runs = await pool.query<{ id: string; completed_at: Date; currency: string | null; dirty: boolean; active: boolean }>(
     `SELECT run.id, run.completed_at, project.currency,
        (project.inputs_dirty OR project.keywords_dirty OR project.serp_dirty) AS dirty,
        EXISTS (SELECT 1 FROM pipeline_runs AS active WHERE active.input->>'projectId' = $1::text AND active.status IN ('pending', 'running')) AS active
@@ -88,7 +88,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   }
   const columns = ["project_id", "run_id", "completed_at", "currency", ...TEXT_FIELDS, ...NUMBER_FIELDS];
   const rows = page.rows.map((row) => ({
-    project_id: projectId, run_id: run.id, completed_at: run.completed_at.toISOString(), currency: run.currency,
+    project_id: projectId, run_id: run.id, completed_at: run.completed_at.toISOString(), currency: run.currency?.trim() || "not_available",
     ...Object.fromEntries(TEXT_FIELDS.map((key) => [key, row[key] === null || row[key] === undefined || row[key] === "" ? "not_available" : typeof row[key] === "object" ? JSON.stringify(row[key]) : String(row[key])])),
     ...Object.fromEntries(NUMBER_FIELDS.map((key) => [key, row[key] === null || row[key] === undefined
       ? ((key === "har_position" || key === "rank_attainment_probability") && row.har_outcome === "no_attainable_target" ? "no_attainable_target" : "not_available")

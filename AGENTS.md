@@ -384,6 +384,8 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   keyset-paginated. Reject active or stale-input results and incomplete revenue;
   retain numeric zeros, explicit unavailable/outcome markers and provider
   provenance, and protect all text cells against spreadsheet formula injection.
+  Missing or blank project currency is `not_available` in the complete CSV;
+  exporting must never infer a currency or leave that metadata cell empty.
 - `GET /v1/projects/:projectId/calculation-export` supplies the complete
   three-scenario download. The shared complete-results button appears in
   Performance Output and admin Calculations alongside the existing Performance
