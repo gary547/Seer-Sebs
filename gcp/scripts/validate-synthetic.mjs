@@ -128,19 +128,19 @@ function assertDataDrivenOutputs(run, expected) {
     brand.brandedCount !== 1 ||
     brand.nonBrandedCount !== 13 ||
     serp?.handlerVersion !== "serp-collection-v1" ||
-    serp.matchedKeywordCount !== 4 ||
-    serp.missingProviderCount !== 8 ||
-    serp.resultCount !== 12 ||
+    serp.matchedKeywordCount !== 12 ||
+    serp.missingProviderCount !== 0 ||
+    serp.resultCount !== 20 ||
     authority?.handlerVersion !== "authority-v1" ||
     authority.clientResultCount !== 4 ||
     backlinks?.handlerVersion !== "backlinks-v1" ||
-    backlinks.enrichedResultCount !== 12 ||
+    backlinks.enrichedResultCount !== 20 ||
     backlinks.missingResultCount !== 0 ||
     siteArchitecture?.handlerVersion !== "site-architecture-v1" ||
     siteArchitecture.matchedCount !== 5 ||
     siteArchitecture.missingProviderCount !== 7 ||
     linkPowerScore?.handlerVersion !== "link-power-score-v1" ||
-    linkPowerScore.scoredResultCount !== 12 ||
+    linkPowerScore.scoredResultCount !== 20 ||
     demandSignals?.handlerVersion !== "demand-signals-v1" ||
     demandSignals.sufficientHistoryCount !== 2 ||
     ctrCurves?.handlerVersion !== "ctr-curves-v1" ||
@@ -151,6 +151,7 @@ function assertDataDrivenOutputs(run, expected) {
     har.scenarioCount !== 36 ||
     revenue?.handlerVersion !== "revenue-v2.1" ||
     revenue.forecastCount !== 36 ||
+    revenue.keywords.some((keyword) => keyword.scenarios.some((scenario) => scenario.expectedIncrementalAnnual == null)) ||
     calibration?.handlerVersion !== "calibration-v1" ||
     calibration.matched < 1 ||
     calibration.status === "unavailable" ||
@@ -276,6 +277,18 @@ if (stage(permanentRun, "calibration").state !== "failed") {
   throw new Error("Permanent failure did not propagate to downstream stages.");
 }
 
+const incompleteFixture = structuredClone(fixture);
+incompleteFixture.providerInputs.serpKeywords.pop();
+const incomplete = await createRun(login.token, {
+  fixture: incompleteFixture,
+  purpose: "synthetic-incomplete-forecast-inputs",
+});
+const incompleteRun = await waitForTerminalRun(login.token, incomplete.id);
+if (incompleteRun.status !== "failed" || stage(incompleteRun, "har-readiness").state !== "failed" ||
+    stage(incompleteRun, "har-readiness").attempts !== 1 || stage(incompleteRun, "rollup-output").state !== "failed") {
+  throw new Error("Missing competitive inputs were retried or incorrectly finalised.");
+}
+
 console.log(
   JSON.stringify({
     fixture: fixture.project.name,
@@ -287,5 +300,7 @@ console.log(
     syntheticSuccess: true,
     transientCategorisationAttempts: stage(transientRun, "categorisation").attempts,
     transientRetryRecovered: true,
+    incompleteForecastRejected: true,
+    incompleteForecastAttempts: stage(incompleteRun, "har-readiness").attempts,
   }),
 );

@@ -33,6 +33,21 @@ function dataForSeoFailure(code: number, message: string): Response {
 }
 
 describe("managed pipeline providers", () => {
+  it("does not turn missing DataForSEO volume into zero from a zero-filled history", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(async (input) => {
+      if (String(input).includes("historical_search_volume/live")) return dataForSeoResponse([{
+        keyword: "sample query", keyword_info: { search_volume: null, monthly_searches: [
+          { year: 2026, month: 5, search_volume: 0 }, { year: 2026, month: 4, search_volume: 0 },
+        ] },
+      }]);
+      return dataForSeoResponse([{ keyword: "sample query", search_volume: null }]);
+    });
+    const [keyword] = await new DataForSeoClient("login:password", fetchImplementation)
+      .enrichKeywords(["sample query"], "GB", "en");
+    expect(keyword?.avgMonthlyVolume).toBeNull();
+    expect(keyword?.monthlyVolumes).toEqual([{ month: "2026-05-01", volume: 0 }, { month: "2026-04-01", volume: 0 }]);
+  });
+
   it("collects ready SERP task IDs using GET without a request body", async () => {
     const fetchImplementation = vi.fn<typeof fetch>(async () => new Response(
       JSON.stringify({ status_code: 20000, tasks: [{ status_code: 20000, result: [

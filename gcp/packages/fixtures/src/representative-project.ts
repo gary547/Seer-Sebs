@@ -17,7 +17,7 @@ export interface SyntheticKeyword {
   rankingUrl: string | null;
   searchIntent?: SearchIntent;
   text: string;
-  volumeSource?: "manual" | "provider" | null;
+  volumeSource?: "manual" | "provider" | "gsc_impressions" | "missing" | null;
 }
 
 export interface SyntheticGscRow {
@@ -320,7 +320,7 @@ function parseKeyword(value: unknown, index: number): SyntheticKeyword {
     volumeSource:
       item.volumeSource === undefined || item.volumeSource === null
         ? null
-        : literal(item.volumeSource, ["manual", "provider"] as const, `${path}.volumeSource`),
+        : literal(item.volumeSource, ["manual", "provider", "gsc_impressions", "missing"] as const, `${path}.volumeSource`),
   };
   if (item.category !== undefined) {
     keyword.category =

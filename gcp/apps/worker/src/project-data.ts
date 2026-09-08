@@ -71,7 +71,7 @@ interface KeywordSourceRow {
   pre_curated: boolean;
   ranking_url: string | null;
   search_intent: SyntheticProviderKeyword["intent"];
-  volume_source: "manual" | "provider" | null;
+  volume_source: SyntheticKeyword["volumeSource"];
 }
 
 interface GscSourceRow {

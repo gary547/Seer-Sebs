@@ -85,9 +85,9 @@ function assertProjectState(project, fixture) {
   if (
     project.keywordCount !== 14 ||
     project.gscRowCount !== 9 ||
-    project.serpResultCount !== 12 ||
+    project.serpResultCount !== 20 ||
     project.calculationCounts?.siteArchitecture !== 12 ||
-    project.calculationCounts?.linkPowerScores !== 12 ||
+    project.calculationCounts?.linkPowerScores !== 20 ||
     project.calculationCounts?.demandSignals !== 12 ||
     project.calculationCounts?.ctrCurves !== 5 ||
     project.calculationCounts?.clusters !== 12 ||
@@ -153,6 +153,12 @@ async function validateEndToEnd() {
   const fixture = parseRepresentativeProjectFixture(
     JSON.parse(await readFile(fixtureUrl, "utf8")),
   );
+  const testGscFallback = process.argv.includes("--gsc-volume-fallback");
+  if (testGscFallback) {
+    const input = fixture.providerInputs.keywords.find(keyword => keyword.text === "55 inch smart tv");
+    input.avgMonthlyVolume = null;
+    input.monthlyVolumes = input.monthlyVolumes.map(point => ({ ...point, volume: 0 }));
+  }
   const timestamp = Date.now();
   const liveDomain = `northstar-${timestamp}.test`;
   const replaceFixtureDomain = (value) =>
@@ -480,16 +486,16 @@ async function validateEndToEnd() {
     stage(firstRun, "gsc-intent").resolvedCount !== 8 ||
     stage(firstRun, "gsc-intent").genericCount !== 0 ||
     stage(firstRun, "brand-classification").brandedCount !== 1 ||
-    stage(firstRun, "serp-collection").matchedKeywordCount !== 4 ||
-    stage(firstRun, "serp-collection").missingProviderCount !== 8 ||
-    stage(firstRun, "serp-collection").resultCount !== 12 ||
+    stage(firstRun, "serp-collection").matchedKeywordCount !== 12 ||
+    stage(firstRun, "serp-collection").missingProviderCount !== 0 ||
+    stage(firstRun, "serp-collection").resultCount !== 20 ||
     stage(firstRun, "authority").clientResultCount !== 4 ||
-    stage(firstRun, "backlinks").enrichedResultCount !== 12 ||
+    stage(firstRun, "backlinks").enrichedResultCount !== 20 ||
     stage(firstRun, "backlinks").missingResultCount !== 0 ||
     stage(firstRun, "site-architecture").matchedCount !== 5 ||
     stage(firstRun, "site-architecture").missingProviderCount !== 7 ||
-    stage(firstRun, "link-power-score").scoredResultCount !== 12 ||
-    stage(firstRun, "demand-signals").sufficientHistoryCount !== 2 ||
+    stage(firstRun, "link-power-score").scoredResultCount !== 20 ||
+    stage(firstRun, "demand-signals").sufficientHistoryCount !== (testGscFallback ? 1 : 2) ||
     stage(firstRun, "ctr-curves").curves.length !== 5 ||
     stage(firstRun, "clustering").clusterCount !== 12 ||
     stage(firstRun, "har-v2").scenarioCount !== 36 ||
@@ -565,6 +571,35 @@ async function validateEndToEnd() {
   ) {
     throw new Error("Detailed forecast API did not expose canonical rows.");
   }
+  const exportedForecasts = new Map();
+  let exportCursor = null;
+  do {
+    const params = new URLSearchParams({ runId: firstRun.id, limit: "5" });
+    if (exportCursor) params.set("after", exportCursor);
+    const page = await jsonRequest(
+      `${apiBaseUrl}/v1/projects/${project.id}/calculation-export?${params}`,
+      authenticated(identity.token),
+    );
+    if (page.runId !== firstRun.id || page.columns.length !== 68 || page.rows.length > 15) {
+      throw new Error("Complete export changed its run, columns or page boundary.");
+    }
+    for (const row of page.rows) {
+      const key = `${row.keyword_id}:${row.scenario}`;
+      if (exportedForecasts.has(key) || typeof row.expected_incremental_annual !== "number" ||
+          page.columns.some(column => row[column] === null || row[column] === undefined || row[column] === "")) {
+        throw new Error("Complete export contains duplicate or incomplete forecasts.");
+      }
+      exportedForecasts.set(key, row);
+    }
+    if (exportedForecasts.size > 36 || (page.nextAfter && page.nextAfter === exportCursor)) {
+      throw new Error("Complete export did not advance its bounded cursor.");
+    }
+    exportCursor = page.nextAfter;
+  } while (exportCursor);
+  if (exportedForecasts.size !== 36 || forecastPage.items.some(row =>
+    exportedForecasts.get(`${row.keywordId}:realistic`)?.expected_incremental_annual !== row.expectedIncrementalAnnual)) {
+    throw new Error("Complete export does not match every scenario and the original forecast data.");
+  }
   const architecturePage = await jsonRequest(
     `${apiBaseUrl}/v1/projects/${project.id}/site-architecture?limit=100&offset=0`,
     authenticated(identity.token),
@@ -606,11 +641,26 @@ async function validateEndToEnd() {
   const smartTv = persistedProject.keywords.find(
     (keyword) => normaliseKeyword(keyword.text) === "55 inch smart tv",
   );
+  const volumeEstimate = stage(firstRun, "keyword-enrichment").keywords.find(keyword => keyword.id === smartTv.id)?.enrichment.volumeEstimate;
+  if (testGscFallback) {
+    const expected = Math.floor(volumeEstimate.impressions / volumeEstimate.windowDays * 365 / 12);
+    if (smartTv.avgMonthlyVolume !== expected || volumeEstimate.source !== "gsc_impressions") {
+      throw new Error("GSC volume estimate or its period evidence was not persisted.");
+    }
+    for (const scenario of ["conservative", "realistic", "stretch"]) {
+      const exported = exportedForecasts.get(`${smartTv.id}:${scenario}`);
+      const explanation = JSON.parse(exported.har_explanation);
+      if (explanation.volumeSource !== "gsc_impressions" || explanation.volumeEstimate.monthlyEstimate !== expected ||
+          exported.annual_volume !== expected * 12 || !JSON.parse(exported.warnings).includes("gsc_impressions_estimate")) {
+        throw new Error("Complete export lost the GSC estimate evidence or used the provider's empty history.");
+      }
+    }
+  }
   const competitor = persistedProject.keywords.find(
     (keyword) => normaliseKeyword(keyword.text) === "currys tv deals",
   );
   if (
-    smartTv?.avgMonthlyVolume !== 5400 ||
+    smartTv?.avgMonthlyVolume !== (testGscFallback ? volumeEstimate.monthlyEstimate : 5400) ||
     smartTv?.keywordDifficulty !== 43 ||
     competitor?.ranking.rank !== 14 ||
     competitor?.ranking.source !== "serp_results"
@@ -823,11 +873,11 @@ async function validateEndToEnd() {
     stage(secondRun, "categorisation").summary.processingKeywordCount !== 14 ||
     stage(secondRun, "ranking-url").matchedCount !== 0 ||
     stage(secondRun, "ranking-url").existingCount !== 12 ||
-    stage(secondRun, "serp-collection").resultCount !== 12 ||
-    stage(secondRun, "backlinks").enrichedResultCount !== 12 ||
+    stage(secondRun, "serp-collection").resultCount !== 20 ||
+    stage(secondRun, "backlinks").enrichedResultCount !== 20 ||
     stage(secondRun, "site-architecture").matchedCount !== 5 ||
-    stage(secondRun, "link-power-score").scoredResultCount !== 12 ||
-    stage(secondRun, "demand-signals").sufficientHistoryCount !== 2 ||
+    stage(secondRun, "link-power-score").scoredResultCount !== 20 ||
+    stage(secondRun, "demand-signals").sufficientHistoryCount !== (testGscFallback ? 1 : 2) ||
     stage(secondRun, "ctr-curves").curves.length !== 5 ||
     stage(secondRun, "clustering").clusterCount !== 12 ||
     stage(secondRun, "har-v2").scenarioCount !== 36 ||
@@ -1058,8 +1108,8 @@ async function validateEndToEnd() {
     authenticated(identity.token),
   );
   if (
-    serpPage.total !== 12 ||
-    serpPage.items.length !== 12 ||
+    serpPage.total !== 20 ||
+    serpPage.items.length !== 20 ||
     !serpPage.items.every(
       (result) =>
         result.metricSource === "local-provider" &&
@@ -1076,7 +1126,8 @@ async function validateEndToEnd() {
     authenticated(identity.token),
   );
   if (
-    filteredSerpPage.total !== 3 ||
+    filteredSerpPage.total !== serpPage.items.filter(result => result.keywordId === serpPage.items[0].keywordId).length ||
+    filteredSerpPage.items.length !== filteredSerpPage.total ||
     filteredSerpPage.items.some(
       (result) => result.keywordId !== serpPage.items[0].keywordId,
     )
@@ -1412,6 +1463,9 @@ async function validateEndToEnd() {
       keywordCount: persistedProject.keywordCount,
       calculationCounts: persistedProject.calculationCounts,
       calculationApi: true,
+      completeExportScenarios: exportedForecasts.size,
+      completeExportReconciled: true,
+      gscVolumeFallbackVerified: testGscFallback,
       archiveApi: true,
       adminReferenceApi: true,
       categoryConsolidationApi: true,

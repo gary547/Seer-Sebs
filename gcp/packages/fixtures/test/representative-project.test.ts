@@ -56,13 +56,13 @@ describe("representative project fixture", () => {
       true,
     );
     expect(fixture.keywords.some((keyword) => keyword.rankingUrl === null)).toBe(true);
-    expect(fixture.providerInputs.serpKeywords).toHaveLength(4);
+    expect(fixture.providerInputs.serpKeywords).toHaveLength(12);
     expect(
       fixture.providerInputs.serpKeywords.reduce(
         (count, keyword) => count + keyword.results.length,
         0,
       ),
-    ).toBe(12);
+    ).toBe(20);
   });
 
   it("accepts all-device GSC rows from standard exports", () => {

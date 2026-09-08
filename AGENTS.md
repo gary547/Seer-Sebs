@@ -307,6 +307,19 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   inputs are absent. Every fallback or substitution must remain visible in the
   run output and derived-record provenance; missing content fit is `NULL`, not
   zero.
+- Check forecast readiness per retained keyword, not aggregate row counts.
+  Missing SERPs or unresolved HAR targets are non-retryable input failures;
+  final rollup must reject missing scenarios or null/non-finite revenue before
+  marking the run successful. Keep verified zero-uplift outcomes valid. Success
+  fixtures must contain complete competitive inputs; test partial coverage as
+  a separate failure case rather than accepting a false-success pipeline.
+- When manual/provider average volume is absent, use the user-approved
+  conservative GSC-impression fallback: floor(impressions / windowDays * 365 / 12).
+  Preserve real zero values and original provider history. Recompute estimates
+  from the current GSC period and allow new provider data to replace them. Mark
+  the source as `gsc_impressions`; retain the evidence in HAR explanations and
+  flag Revenue/Demand results. Do not use provider seasonality for this estimate.
+  Label it in inspectors and the existing CSV Volume cell without adding columns.
 - `pipeline_rollups` stores naive and cluster-deduplicated totals plus cluster,
   category, quarter, trend, confidence and cannibalisation output. Client-facing
   totals must use the deduplicated value while retaining the naive total for

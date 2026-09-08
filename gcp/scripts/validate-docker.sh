@@ -134,6 +134,7 @@ run_npm run test:gcp-volume-history
 SEER_LOCAL_VALIDATION_STATE="$validation_state" "$node_executable" gcp/scripts/validate-local.mjs
 "$node_executable" gcp/scripts/validate-synthetic.mjs
 "$node_executable" gcp/scripts/validate-project-data.mjs
+"$node_executable" gcp/scripts/validate-project-data.mjs --gsc-volume-fallback
 
 docker compose -f "$compose_file" restart
 docker compose -f "$compose_file" up -d --wait

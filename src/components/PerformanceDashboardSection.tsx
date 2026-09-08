@@ -16,13 +16,13 @@ import SyncStaleBanner from "./SyncStaleBanner";
 import { toast } from "sonner";
 import {
   generateProjectRoadmap,
-  listAllProjectForecastRows,
   listProjectRoadmaps,
 } from "@/integrations/gcp/calculations";
 import {
   getProjectData,
   listAllProjectKeywords,
 } from "@/integrations/gcp/project-data";
+import { useProjectForecasts } from "@/hooks/useProjectForecasts";
 
 interface Props {
   projectId: string;
@@ -144,31 +144,7 @@ export default function PerformanceDashboardSection({ projectId }: Props) {
   const [roadmapTab, setRoadmapTab] = useState<"latest" | "history">("latest");
   const [historySearch, setHistorySearch] = useState("");
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const { data: forecasts = [], isLoading } = useQuery({
-    queryKey: ["keyword_forecasts", projectId],
-    queryFn: async () => {
-      const rows = await listAllProjectForecastRows(projectId);
-      return rows.map((row) => ({
-        est_current_clicks_annual:
-          (row.annualVolume ?? 0) * (row.ctrNow ?? 0),
-        est_current_revenue_annual: row.currentRevenueAnnual,
-        har: row.harPosition,
-        har_revenue_gain_annual: row.expectedIncrementalAnnual,
-        keywords: {
-          avg_monthly_volume: row.averageMonthlyVolume,
-          base_rank: row.baseRank,
-          device: row.device,
-          keyword: row.keyword,
-          keyword_priority: row.keywordPriority,
-          ranking_url: row.rankingUrl,
-          search_intent: row.searchIntent,
-        },
-        opportunity: row.opportunity,
-        yearly_revenue_gain_rank1: row.targetIncrementalRevenueAnnual,
-        yearly_traffic_gain_rank1: row.trafficGainAnnual,
-      }));
-    },
-  });
+  const { data: forecasts = [], isLoading } = useProjectForecasts(projectId);
 
   // Total kept keywords for this project (incl. ones DataForSEO returned no
   // SERP match for and that are therefore excluded from forecasts/charts).
@@ -197,16 +173,10 @@ export default function PerformanceDashboardSection({ projectId }: Props) {
     },
   });
 
-  const { data: harResults = [] } = useQuery({
-    queryKey: ["har_results_link_profile", projectId],
-    queryFn: async () => {
-      const rows = await listAllProjectForecastRows(projectId);
-      return rows.map((row) => ({
-        client_url_rating: row.clientUrlRating,
-        har_competitor_ur: row.competitorUrlRating,
-      }));
-    },
-  });
+  const harResults = useMemo(() => forecasts.map((row) => ({
+    client_url_rating: row.client_url_rating,
+    har_competitor_ur: row.competitor_url_rating,
+  })), [forecasts]);
 
   const { data: roadmapHistory } = useQuery({
     queryKey: ["project_roadmap_history", projectId],

@@ -56,6 +56,13 @@ export class PipelinePreflightError extends Error {
   }
 }
 
+export class PipelineReadinessError extends Error {
+  constructor(stage: string, readonly missing: readonly string[]) {
+    super(`${stage} readiness failed: ${missing.join(", ")}.`);
+    this.name = "PipelineReadinessError";
+  }
+}
+
 export interface PipelineKeyword {
   avgMonthlyVolume: number | null;
   category: string | null;
@@ -77,7 +84,7 @@ export interface PipelineKeyword {
   searchIntentSource?: string;
   sources: Array<"gsc" | "source">;
   text: string;
-  volumeSource: "manual" | "provider" | null;
+  volumeSource: "manual" | "provider" | "gsc_impressions" | "missing" | null;
 }
 
 export interface IntakeStageData {
@@ -151,7 +158,15 @@ export interface EnrichedKeyword extends DetoxedKeyword {
     intentSource?: string;
     keywordDifficulty: number | null;
     source: "existing" | "local-provider" | "mixed" | "missing-provider";
-    volumeSource: "manual" | "provider" | "missing";
+    volumeSource: "manual" | "provider" | "gsc_impressions" | "missing";
+    volumeEstimate?: {
+      source: "gsc_impressions";
+      impressions: number;
+      windowDays: number;
+      dateRangeStart: string | null;
+      dateRangeEnd: string | null;
+      monthlyEstimate: number;
+    } | null;
   };
 }
 
@@ -1155,10 +1170,19 @@ function executeKeywordEnrichment(
     .filter((keyword) => keyword.detox.decision === "keep")
     .map((keyword) => {
     const input = provider.get(keyword.normalisedText);
-    const avgMonthlyVolume =
-      keyword.avgMonthlyVolume !== null && keyword.avgMonthlyVolume > 0
-        ? keyword.avgMonthlyVolume
-        : input?.avgMonthlyVolume ?? keyword.avgMonthlyVolume ?? null;
+    const existingVolume = keyword.volumeSource === "gsc_impressions" ? null : keyword.avgMonthlyVolume;
+    const preserveExisting = existingVolume !== null && (existingVolume > 0 || keyword.volumeSource === "manual");
+    const knownVolume = preserveExisting ? existingVolume : input?.avgMonthlyVolume ?? existingVolume;
+    const impressions = keyword.gsc?.impressions ?? 0;
+    const windowDays = fixture.economics.gscWindowDays;
+    const estimatedVolume = Math.floor(impressions / windowDays * 365 / 12);
+    const volumeEstimate = knownVolume === null && impressions > 0 && windowDays > 0 &&
+      Number.isFinite(estimatedVolume) && estimatedVolume >= 0 && estimatedVolume <= 2_147_483_647
+      ? { source: "gsc_impressions" as const, impressions, windowDays,
+          dateRangeStart: fixture.economics.gscDateRangeStart ?? null,
+          dateRangeEnd: fixture.economics.gscDateRangeEnd ?? null, monthlyEstimate: estimatedVolume }
+      : null;
+    const avgMonthlyVolume = knownVolume ?? volumeEstimate?.monthlyEstimate ?? null;
     const keywordDifficulty =
       keyword.keywordDifficulty ?? input?.keywordDifficulty ?? null;
     const fallbackCategorisation = categoriseKeyword(keyword, fixture);
@@ -1198,12 +1222,13 @@ function executeKeywordEnrichment(
         intentSource: keyword.searchIntentSource,
         keywordDifficulty,
         source,
-        volumeSource:
-          keyword.avgMonthlyVolume !== null && keyword.avgMonthlyVolume > 0
-            ? "manual"
+        volumeEstimate,
+        volumeSource: volumeEstimate ? "gsc_impressions" :
+          preserveExisting
+            ? keyword.volumeSource === "provider" ? "provider" : "manual"
             : input?.avgMonthlyVolume !== null && input?.avgMonthlyVolume !== undefined
               ? "provider"
-              : "missing",
+              : existingVolume !== null ? keyword.volumeSource === "provider" ? "provider" : "manual" : "missing",
       },
     } satisfies EnrichedKeyword;
   });
@@ -1674,13 +1699,15 @@ function executeDemandSignals(
   );
   const keywords = enrichment.keywords.map((keyword) => {
     const input = provider.get(keyword.normalisedText);
-    const monthlyVolumes = input?.monthlyVolumes ?? [];
+    const estimated = keyword.enrichment.volumeSource === "gsc_impressions";
+    const monthlyVolumes = estimated ? [] : input?.monthlyVolumes ?? [];
     return {
       avgMonthlyVolume: keyword.enrichment.avgMonthlyVolume,
       id: keyword.id,
       monthlyVolumes,
       normalisedText: keyword.normalisedText,
       ...computeDemandSignal(monthlyVolumes),
+      ...(estimated ? { demandWarning: true, demandWarningReason: "gsc_impressions_estimate" } : {}),
     };
   });
   return {
@@ -1994,6 +2021,8 @@ function executeHarV2(
           contentFitSource: siteById.get(keyword.id)?.metricSource ?? "local-provider",
           contentFitScope: siteById.get(keyword.id)?.inputScope ?? "page",
           serpStatus: serpKeyword?.status ?? "missing-provider",
+          volumeSource: keyword.enrichment.volumeSource,
+          volumeEstimate: keyword.enrichment.volumeEstimate ?? null,
         },
         harPosition: result.har_position,
         linkGapScore: result.link_gap_score,
@@ -2281,7 +2310,8 @@ function executeRevenueV2(
         targetIncrementalRevenueAnnual:
           result.tp_incremental_revenue_annual,
         volumeForward: result.volume_forward,
-        warnings: result.warnings,
+        warnings: demandSignal?.demandWarningReason === "gsc_impressions_estimate"
+          ? [...result.warnings, "gsc_impressions_estimate"] : result.warnings,
       };
     });
     return {
@@ -2314,10 +2344,11 @@ function executeHarReadiness(
 ): ReadinessStageData {
   const missing: string[] = [];
   if (ranking.keywords.length === 0) missing.push("kept_keywords");
-  const competitiveKeywordCount = serp.keywords.filter(
-    (keyword) => keyword.status !== "missing-provider",
-  ).length;
-  if (competitiveKeywordCount > 0 && serp.resultCount === 0) {
+  const serpById = new Map(serp.keywords.map((keyword) => [keyword.id, keyword]));
+  if (ranking.keywords.some((keyword) => {
+    const snapshot = serpById.get(keyword.id);
+    return !snapshot || snapshot.status === "missing-provider" || snapshot.results.length === 0;
+  })) {
     missing.push("fresh_serp_results");
   }
   if (
@@ -2333,7 +2364,7 @@ function executeHarReadiness(
   }
   if (fixture.scoringConfigActive === false) missing.push("active_scoring_config");
   if (missing.length > 0) {
-    throw new Error(`HAR readiness failed: ${missing.join(", ")}.`);
+    throw new PipelineReadinessError("HAR", missing);
   }
   return {
     handlerVersion: "har-readiness-v1",
@@ -2371,9 +2402,19 @@ function executeRevenueReadiness(
   if (har.scenarioCount === 0) missing.push("completed_har_run");
   if (fixture.economics.conversionRate === null) missing.push("conversion_rate");
   if (fixture.economics.averageOrderValue === null) missing.push("average_order_value");
-  if (demand.keywords.length !== har.keywords.length) missing.push("demand_signals");
+  const demandById = new Map(demand.keywords.map((keyword) => [keyword.id, keyword]));
+  if (har.keywords.some((keyword) => !demandById.has(keyword.id))) missing.push("demand_signals");
+  if (har.keywords.some((keyword) => {
+    const input = demandById.get(keyword.id);
+    return !input || annualVolumeFromInputs(input.monthlyVolumes, input.avgMonthlyVolume).volume_annual === null;
+  })) missing.push("search_volume");
+  if (har.keywords.some((keyword) => HAR_SCENARIOS.some((scenario) => {
+    const result = keyword.scenarios.find((row) => row.scenario === scenario);
+    return !result || (result.harPosition === null &&
+      (result.explanation.no_beat_reason as { reason?: string } | null)?.reason !== "authority_below_threshold");
+  }))) missing.push("attainable_rank_or_verified_no_target");
   if (missing.length > 0) {
-    throw new Error(`Revenue readiness failed: ${missing.join(", ")}.`);
+    throw new PipelineReadinessError("Revenue", missing);
   }
   return {
     handlerVersion: "revenue-readiness-v1",
@@ -2401,6 +2442,17 @@ function executeRollupOutput(
   clustering: ClusteringStageData,
   demand: DemandSignalsStageData,
 ): RollupOutputStageData {
+  const revenueById = new Map(revenue.keywords.map((keyword) => [keyword.id, keyword]));
+  const incomplete = ranking.keywords.filter((keyword) => {
+    const forecast = revenueById.get(keyword.id);
+    return HAR_SCENARIOS.some((scenario) => {
+      const row = forecast?.scenarios.find((result) => result.scenario === scenario);
+      return row?.expectedIncrementalAnnual == null || !Number.isFinite(row.expectedIncrementalAnnual);
+    });
+  });
+  if (ranking.keywords.length === 0 || incomplete.length > 0) {
+    throw new PipelineReadinessError("Final results", ["complete_forecasts_for_every_kept_keyword"]);
+  }
   const categoryById = new Map(
     categorisation.keywords.map((keyword) => [
       keyword.id,

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
-import { PipelinePreflightError } from "../../../packages/pipeline/src/stage-handlers.js";
+import { PipelinePreflightError, PipelineReadinessError } from "../../../packages/pipeline/src/stage-handlers.js";
 import {
   failPipelineRun,
   executeStageTask,
@@ -42,6 +42,10 @@ describe("local worker failure injection", () => {
 });
 
 describe("pipeline failure recording", () => {
+  it("does not retry deterministic incomplete forecast inputs", () => {
+    expect(pipelineStageExecutionError(new PipelineReadinessError("HAR", ["fresh_serp_results"])))
+      .toMatchObject({ statusCode: 422, code: "pipeline_inputs_incomplete" });
+  });
   it("loads large dependency outputs with a transaction-local timeout", async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("SELECT state")) return { rows: [{ state: "running" }], rowCount: 1 };

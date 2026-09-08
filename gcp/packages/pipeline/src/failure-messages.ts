@@ -1,6 +1,12 @@
 import type { PipelineStageId } from "./definition.js";
 
 const STAGE_FAILURE_MESSAGES: Partial<Record<PipelineStageId, string>> = {
+  "har-readiness":
+    "Forecast inputs are incomplete for retained keywords. Check SERP coverage, volume eligibility, authority and content-fit diagnostics before resuming.",
+  "revenue-readiness":
+    "Revenue inputs are incomplete. Check search volume, HAR outcomes and conversion assumptions for every retained keyword before resuming.",
+  "rollup-output":
+    "Final results are incomplete: every retained keyword needs a valid forecast in all three scenarios. Review HAR and Revenue diagnostics before resuming; partial results are not finalised.",
   backlinks:
     "DataForSEO backlink metrics could not be retrieved. Saved progress is preserved; check Backlinks API access and usage before resuming.",
   detox:

@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import SyncStaleBanner from "@/components/SyncStaleBanner";
 import CalculationExportButton from "@/components/CalculationExportButton";
 import { MetricHelp } from "@/components/briefing/MetricHelp";
-import { listAllProjectForecastRows } from "@/integrations/gcp/calculations";
+import { useProjectForecasts } from "@/hooks/useProjectForecasts";
 import { listAllProjectKeywords } from "@/integrations/gcp/project-data";
 import { useRecomputeForecasts } from "@/hooks/useRecomputeForecasts";
 
@@ -78,36 +78,7 @@ export default function PerformanceOutputSection({ projectId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [oppFilter, intentFilter]);
 
-  const { data: forecasts = [], isLoading } = useQuery({
-    queryKey: ["keyword_forecasts", projectId],
-    queryFn: async () => {
-      const rows = await listAllProjectForecastRows(projectId);
-      return rows.map((row) => ({
-        client_url_rating: row.clientUrlRating,
-        competitor_url_rating: row.competitorUrlRating,
-        current_ctr_pct: (row.ctrNow ?? 0) * 100,
-        est_current_clicks_annual:
-          (row.annualVolume ?? 0) * (row.ctrNow ?? 0),
-        est_current_revenue_annual: row.currentRevenueAnnual,
-        har: row.harPosition,
-        har_revenue_gain_annual: row.expectedIncrementalAnnual,
-        har_traffic_gain_annual: row.trafficGainAnnual,
-        keyword_id: row.keywordId,
-        keywords: {
-          avg_monthly_volume: row.averageMonthlyVolume,
-          base_rank: row.baseRank,
-          device: row.device,
-          id: row.keywordId,
-          keyword: row.keyword,
-          ranking_url: row.rankingUrl,
-          search_intent: row.searchIntent,
-        },
-        opportunity: row.opportunity,
-        yearly_revenue_gain_rank1: row.targetIncrementalRevenueAnnual,
-        yearly_traffic_gain_rank1: row.trafficGainAnnual,
-      }));
-    },
-  });
+  const { data: forecasts = [], isLoading } = useProjectForecasts(projectId);
 
   // Fetch ALL kept keywords so we can surface kw with no forecast (e.g. unranked
   // by DataForSEO) as "Unranked" rows. Charts/score-cards still use `forecasts`
@@ -130,21 +101,10 @@ export default function PerformanceOutputSection({ projectId }: Props) {
     },
   });
 
-  // Fetch HAR results to get client_ur / competitor_ur per keyword for Link Δ
-  const { data: harByKeyword = {} } = useQuery({
-    queryKey: ["har_results_map", projectId],
-    queryFn: async () => {
-      const map: Record<string, { client_ur: number | null; competitor_ur: number | null }> = {};
-      const rows = await listAllProjectForecastRows(projectId);
-      for (const row of rows) {
-        map[row.keywordId] = {
-          client_ur: row.clientUrlRating,
-          competitor_ur: row.competitorUrlRating,
-        };
-      }
-      return map;
-    },
-  });
+  const harByKeyword = useMemo(() => Object.fromEntries(forecasts.map((row) => [
+    row.keyword_id,
+    { client_ur: row.client_url_rating, competitor_ur: row.competitor_url_rating },
+  ])), [forecasts]);
 
   const handleRunForecasts = async () => {
     setIsRunning(true);
@@ -170,7 +130,8 @@ export default function PerformanceOutputSection({ projectId }: Props) {
     const body = rows.map((f: any) => [
       f.keywords?.keyword,
       f.keywords?.device,
-      f.keywords?.avg_monthly_volume,
+      f.keywords?.volume_source === "gsc_impressions"
+        ? `${f.keywords.avg_monthly_volume} (GSC estimate)` : f.keywords?.avg_monthly_volume,
       f.keywords?.base_rank ?? "",
       f.opportunity,
       f.keywords?.search_intent ?? "",
@@ -501,7 +462,10 @@ export default function PerformanceOutputSection({ projectId }: Props) {
                       <TableRow key={`${f.keyword_id}-${rowIndex}`}>
                         <TableCell className="max-w-[200px] truncate text-xs">{f.keywords?.keyword}</TableCell>
                         <TableCell className="text-xs">{f.keywords?.device}</TableCell>
-                        <TableCell className="text-right text-xs">{fmt(f.keywords?.avg_monthly_volume)}</TableCell>
+                        <TableCell className="text-right text-xs">
+                          {fmt(f.keywords?.avg_monthly_volume)}
+                          {f.keywords?.volume_source === "gsc_impressions" && <span className="block text-[10px] text-muted-foreground" title="Conservative estimate from GSC impressions over the upload period; not market search volume.">GSC estimate</span>}
+                        </TableCell>
                         <TableCell className="text-right text-xs">{f.keywords?.base_rank ?? "—"}</TableCell>
                         <TableCell>
                           <span className={`text-xs font-medium capitalize ${OPP_CONFIG[f.opportunity]?.color ?? "text-muted-foreground"}`}>

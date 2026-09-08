@@ -21,6 +21,7 @@ import { pipelineStageFailureMessage } from "../../../packages/pipeline/src/fail
 import {
   executeDataDrivenStage,
   PipelinePreflightError,
+  PipelineReadinessError,
 } from "../../../packages/pipeline/src/stage-handlers.js";
 import {
   loadProjectPipelineSource,
@@ -77,6 +78,9 @@ export interface StageExecutionOptions {
 }
 
 export function pipelineStageExecutionError(error: unknown): unknown {
+  if (error instanceof PipelineReadinessError) {
+    return new HttpError(422, "pipeline_inputs_incomplete", error.message);
+  }
   if (error instanceof PipelinePreflightError) {
     return new HttpError(422, "pipeline_preflight_failed", error.message);
   }

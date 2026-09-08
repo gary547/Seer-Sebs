@@ -76,6 +76,7 @@ function executeRepresentativeStages(fixture = parseRepresentativeProjectFixture
     har,
     intake,
     linkPowerScore,
+    outputs,
     promotion,
     ranking,
     revenue,
@@ -85,6 +86,102 @@ function executeRepresentativeStages(fixture = parseRepresentativeProjectFixture
 }
 
 describe("data-driven pipeline handlers", () => {
+  it("uses period-normalised GSC impressions only for absent volume and retains the evidence", () => {
+    const fixture = parseRepresentativeProjectFixture(rawFixture);
+    const provider = fixture.providerInputs.keywords.find(row => row.text === "55 inch smart tv")!;
+    provider.avgMonthlyVolume = null;
+    provider.monthlyVolumes = Array.from({ length: 12 }, (_, index) => ({ month: `2025-${String(index + 1).padStart(2, "0")}-01`, volume: 0 }));
+    fixture.economics = { ...fixture.economics, gscWindowDays: 365, gscDateRangeStart: "2025-01-01", gscDateRangeEnd: "2025-12-31" };
+    const { enrichment, demandSignals, har, revenue } = executeRepresentativeStages(fixture);
+    const keyword = enrichment.keywords.find(row => row.normalisedText === "55 inch smart tv")!;
+    const expected = Math.floor(keyword.gsc!.impressions / 12);
+    expect(keyword.enrichment).toMatchObject({ avgMonthlyVolume: expected, competitiveEligible: true,
+      volumeSource: "gsc_impressions", volumeEstimate: { impressions: keyword.gsc!.impressions, windowDays: 365,
+        dateRangeStart: "2025-01-01", dateRangeEnd: "2025-12-31", monthlyEstimate: expected } });
+    expect(demandSignals.keywords.find(row => row.id === keyword.id)).toMatchObject({ monthlyVolumes: [], coverageMonths: 0,
+      demandWarning: true, demandWarningReason: "gsc_impressions_estimate", trendConfidence: "low" });
+    expect(provider.monthlyVolumes).toHaveLength(12);
+    for (const scenario of har.keywords.find(row => row.id === keyword.id)!.scenarios) {
+      expect(scenario.explanation).toMatchObject({ volumeSource: "gsc_impressions", volumeEstimate: { monthlyEstimate: expected } });
+    }
+    for (const scenario of revenue.keywords.find(row => row.id === keyword.id)!.scenarios) {
+      expect(scenario.annualVolume).toBe(expected * 12);
+      expect(scenario.factorApplied).toBe(1);
+      expect(scenario.warnings).toContain("gsc_impressions_estimate");
+      expect(scenario.expectedIncrementalAnnual).not.toBeNull();
+    }
+  });
+
+  it.each(["provider", "manual"] as const)("preserves verified %s zero volumes instead of estimating", (source) => {
+    const fixture = parseRepresentativeProjectFixture(rawFixture);
+    const target = "northstar tv deals";
+    const keyword = fixture.keywords.find(row => row.text === target)!;
+    keyword.avgMonthlyVolume = source === "manual" ? 0 : null;
+    keyword.volumeSource = source === "manual" ? "manual" : null;
+    const provider = fixture.providerInputs.keywords.find(row => row.text === target);
+    if (provider) provider.avgMonthlyVolume = source === "provider" ? 0 : 100;
+    else fixture.providerInputs.keywords.push({ text: target, avgMonthlyVolume: 0, intent: null, keywordDifficulty: null, monthlyVolumes: [], rank: null, rankingUrl: null });
+    const result = executeRepresentativeStages(fixture).enrichment.keywords.find(row => row.normalisedText === target)!;
+    expect(result.enrichment).toMatchObject({ avgMonthlyVolume: 0, volumeSource: source, volumeEstimate: null });
+  });
+
+  it("replaces old estimates with provider volume and recalculates them when GSC changes", () => {
+    const fixture = parseRepresentativeProjectFixture(rawFixture);
+    const target = fixture.keywords.find(row => row.text === "currys tv deals")!;
+    target.avgMonthlyVolume = 123;
+    target.volumeSource = "gsc_impressions";
+    fixture.gscRows.push({ query: target.text, impressions: 1200, clicks: 20, ctr: 20 / 1200,
+      device: "all", page: target.rankingUrl ?? "", position: 14 });
+    const provider = fixture.providerInputs.keywords.find(row => row.text === target.text)!;
+    provider.avgMonthlyVolume = 250;
+    expect(executeRepresentativeStages(fixture).enrichment.keywords.find(row => row.id === target.id)?.enrichment)
+      .toMatchObject({ avgMonthlyVolume: 250, volumeSource: "provider", volumeEstimate: null });
+    provider.avgMonthlyVolume = null;
+    fixture.economics.gscWindowDays = 365;
+    const result = executeRepresentativeStages(fixture).enrichment.keywords.find(row => row.id === target.id)!;
+    expect(result.enrichment.avgMonthlyVolume).toBe(Math.floor(result.gsc!.impressions / 12));
+    expect(result.enrichment.volumeSource).toBe("gsc_impressions");
+  });
+
+  it("rejects one missing SERP even when every other keyword has results", () => {
+    const { fixture, outputs, serpCollection } = executeRepresentativeStages();
+    const incomplete = { ...serpCollection, keywords: serpCollection.keywords.slice(1) };
+    expect(() => executeDataDrivenStage("har-readiness", fixture, { ...outputs, "serp-collection": incomplete }))
+      .toThrow("fresh_serp_results");
+  });
+
+  it("rejects absent volume and HAR outcomes before revenue runs", () => {
+    const { fixture, outputs, demandSignals, har } = executeRepresentativeStages();
+    const demand = { ...demandSignals, keywords: demandSignals.keywords.map((keyword, index) => index === 0
+      ? { ...keyword, avgMonthlyVolume: null, monthlyVolumes: [] } : keyword) };
+    expect(() => executeDataDrivenStage("revenue-readiness", fixture, { ...outputs, "demand-signals": demand }))
+      .toThrow("search_volume");
+    const noCompetitors = { ...har, keywords: har.keywords.map((keyword, index) => index === 0 ? {
+      ...keyword, scenarios: keyword.scenarios.map((scenario) => ({ ...scenario, harPosition: null,
+        explanation: { ...scenario.explanation, no_beat_reason: { reason: "no_comparable_competitors" } } })),
+    } : keyword) };
+    expect(() => executeDataDrivenStage("revenue-readiness", fixture, { ...outputs, "har-v2": noCompetitors }))
+      .toThrow("attainable_rank_or_verified_no_target");
+  });
+
+  it.each(["missing-keyword", "missing-scenario", "null-revenue", "non-finite"])("does not finalise %s results", (mode) => {
+    const { fixture, outputs, revenue } = executeRepresentativeStages();
+    const incomplete = structuredClone(revenue);
+    if (mode === "missing-keyword") incomplete.keywords.shift();
+    else if (mode === "missing-scenario") incomplete.keywords[0]!.scenarios.pop();
+    else incomplete.keywords[0]!.scenarios[0]!.expectedIncrementalAnnual = mode === "non-finite" ? NaN : null;
+    expect(() => executeDataDrivenStage("rollup-output", fixture, { ...outputs, "revenue-v2": incomplete }))
+      .toThrow("complete_forecasts_for_every_kept_keyword");
+  });
+
+  it("finalises verified zero revenue without requiring an invented target rank", () => {
+    const { fixture, outputs, revenue } = executeRepresentativeStages();
+    const zero = structuredClone(revenue);
+    for (const keyword of zero.keywords) for (const row of keyword.scenarios) row.expectedIncrementalAnnual = 0;
+    expect(() => executeDataDrivenStage("rollup-output", fixture, { ...outputs, "revenue-v2": zero })).not.toThrow();
+    expect(revenue.keywords.every(keyword => keyword.scenarios.every(row => row.expectedIncrementalAnnual !== null))).toBe(true);
+  });
+
   it("persists zero forecast uplift for verified no-target HAR outcomes without manufacturing a rank", () => {
     const { fixture } = executeRepresentativeStages();
     const { har, revenue } = executeRepresentativeStages({ ...fixture,
@@ -311,14 +408,14 @@ describe("data-driven pipeline handlers", () => {
       source: "explicit-rule",
     });
     expect(serpCollection).toMatchObject({
-      matchedKeywordCount: 4,
-      missingProviderCount: 8,
+      matchedKeywordCount: 12,
+      missingProviderCount: 0,
       noResultCount: 0,
-      resultCount: 12,
+      resultCount: 20,
     });
     expect(authority).toMatchObject({
       clientResultCount: 4,
-      resultCount: 12,
+      resultCount: 20,
       authority: {
         backlinks: 18420,
         domain: "northstar-home.test",
@@ -327,9 +424,9 @@ describe("data-driven pipeline handlers", () => {
       },
     });
     expect(backlinks).toMatchObject({
-      enrichedResultCount: 12,
+      enrichedResultCount: 20,
       missingResultCount: 0,
-      resultCount: 12,
+      resultCount: 20,
     });
   });
 
@@ -357,8 +454,8 @@ describe("data-driven pipeline handlers", () => {
       tacticalStatus: "create_content",
     });
     expect(linkPowerScore).toMatchObject({
-      resultCount: 12,
-      scoredResultCount: 12,
+      resultCount: 20,
+      scoredResultCount: 20,
     });
     expect(
       linkPowerScore.keywords
