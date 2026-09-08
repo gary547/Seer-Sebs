@@ -313,6 +313,8 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   marking the run successful. Keep verified zero-uplift outcomes valid. Success
   fixtures must contain complete competitive inputs; test partial coverage as
   a separate failure case rather than accepting a false-success pipeline.
+  Worker task delivery maps these failures to HTTP 422 `pipeline_inputs_incomplete`;
+  they must not consume transient-provider retry attempts.
 - When manual/provider average volume is absent, use the user-approved
   conservative GSC-impression fallback: floor(impressions / windowDays * 365 / 12).
   Preserve real zero values and original provider history. Recompute estimates
@@ -320,6 +322,10 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   the source as `gsc_impressions`; retain the evidence in HAR explanations and
   flag Revenue/Demand results. Do not use provider seasonality for this estimate.
   Label it in inspectors and the existing CSV Volume cell without adding columns.
+- Performance dashboard and original CSV output share `useProjectForecasts`.
+  The `keyword_forecasts` React Query cache contains raw `ForecastRow[]`; apply
+  the shared selector at the observer boundary. Never cache component-specific
+  projections under that same key or refetch forecasts solely for link metrics.
 - `pipeline_rollups` stores naive and cluster-deduplicated totals plus cluster,
   category, quarter, trend, confidence and cannibalisation output. Client-facing
   totals must use the deduplicated value while retaining the naive total for
