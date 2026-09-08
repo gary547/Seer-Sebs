@@ -240,10 +240,9 @@ function parseCtr(value: unknown): number {
 
 function normaliseDevice(value: unknown): Device | null {
   const device = String(value ?? "").trim().toLowerCase();
-  if (device === "all" || device === "desktop" || device === "mobile") {
+  if (device === "all" || device === "desktop" || device === "mobile" || device === "tablet") {
     return device;
   }
-  if (device === "tablet") return "desktop";
   return null;
 }
 

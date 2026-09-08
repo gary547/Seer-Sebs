@@ -42,6 +42,7 @@ interface EventCountRow {
 }
 
 interface StageWorkRow {
+  unit: "items" | "batches";
   failed: string;
   last_error: string | null;
   pending: string;
@@ -594,7 +595,15 @@ export async function createPipelineRun(
     if (projectId) {
       await assertProjectAccessByRole(client, user.id, projectId, true);
       const readiness = await projectReadiness(client, projectId);
-      if (!readiness.ready) {
+      const canRestoreQualification = mode === "recalculate" && !readiness.dirty.keywords && !readiness.dirty.serp
+        && readiness.missing.length === 1 && readiness.missing[0] === "qualified_keywords";
+      const baseline = canRestoreQualification ? await client.query(
+        `SELECT 1 FROM pipeline_stage_runs AS stage
+         JOIN (SELECT id FROM pipeline_runs WHERE input->>'projectId' = $1 AND status = 'succeeded'
+           ORDER BY completed_at DESC, id DESC LIMIT 1) AS run ON run.id = stage.run_id
+         WHERE stage.stage_id = 'detox' AND stage.state = 'succeeded'
+           AND (stage.output->>'keptKeywordCount')::int > 0`, [projectId]) : null;
+      if (!readiness.ready && !baseline?.rowCount) {
         throw new HttpError(
           409,
           "pipeline_not_ready",
@@ -709,6 +718,7 @@ export async function getPipelineRun(
             WHEN state IN ('failed', 'running') THEN jsonb_strip_nulls(jsonb_build_object(
               'failedStage', output->>'failedStage',
               'message', left(output->>'message', 500),
+              'providerProgress', output->'providerProgress',
               'reason', output->>'reason'
             ))
             ELSE NULL
@@ -734,6 +744,7 @@ export async function getPipelineRun(
         SELECT
           stage_id,
           count(*)::text AS total,
+          CASE WHEN bool_and(provider = 'openrouter') THEN 'batches' ELSE 'items' END AS unit,
           count(*) FILTER (WHERE state = 'pending')::text AS pending,
           count(*) FILTER (WHERE state = 'submitted')::text AS submitted,
           count(*) FILTER (WHERE state = 'succeeded')::text AS succeeded,
@@ -765,6 +776,7 @@ export async function getPipelineRun(
         submitted: Number(row.submitted),
         succeeded: Number(row.succeeded),
         total: Number(row.total),
+        unit: row.unit,
       },
     ]),
   );
@@ -798,6 +810,7 @@ export async function getPipelineRun(
             ? String(outputRecord(stage.output)?.message)
             : null,
         startedAt: stage.started_at,
+        providerProgress: outputRecord(stage.output)?.providerProgress,
         state: stage.state,
         waitingOn,
         work: workByStage.get(definition.id) ?? null,

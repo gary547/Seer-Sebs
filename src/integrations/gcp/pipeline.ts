@@ -44,7 +44,7 @@ export interface PipelineStageProgress {
   percent: number | null;
   submitted: number;
   total: number | null;
-  unit: "items" | null;
+  unit: "items" | "batches" | null;
 }
 
 export interface PipelineStage {

@@ -80,16 +80,25 @@ validation_counts="$(
         ),
         to_regclass('public.keyword_monthly_volumes_canonical_idx') IS NOT NULL
           AND to_regclass('public.har_forecasts_realistic_run_keyword_idx') IS NOT NULL
-          AND to_regclass('public.revenue_forecasts_realistic_run_uplift_idx') IS NOT NULL;
+          AND to_regclass('public.revenue_forecasts_realistic_run_uplift_idx') IS NOT NULL,
+        to_regclass('public.keyword_cluster_members_keyword_lookup_idx') IS NOT NULL
+          AND has_column_privilege('seer_worker_local', 'provider_work_items', 'result', 'SELECT')
+          AND has_column_privilege('seer_api_local', 'site_architecture', 'metric_source', 'SELECT')
+          AND EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'keywords'::regclass
+              AND conname = 'keywords_categorisation_source_check'
+              AND pg_get_constraintdef(oid) LIKE '%''openrouter''%'
+          );
     "
 )"
 
-if [[ "$validation_counts" != "8|0|t|t|t" ]]; then
+if [[ "$validation_counts" != "8|0|t|t|t|t" ]]; then
   echo "Unexpected fresh schema validation counts: $validation_counts" >&2
   exit 1
 fi
 
-expected_migrations="001_foundation,002_core_domain,003_local_provider_contract,004_serp_authority_contract,005_calculation_contract,006_forecast_calibration_contract,007_managed_runtime_contract,008_model_parity_contract,009_outbox_publication_contract,010_identity_access_contract,011_client_project_parity,012_keyword_gsc_parity,013_keyword_management_contract,014_roadmap_contract,015_serp_import_contract,016_archive_contract,017_url_monitor_contract,018_admin_reference_contract,019_conversion_override_application,020_content_planner_contract,021_slide_export_contract,022_live_provider_contract,023_source_migration_archive,024_url_monitor_leases,025_migration_load_contract,026_portfolio_query_indexes,027_calculation_control_contract,028_autonomous_pipeline_contract,029_link_power_serp_index,030_ctr_curves_all_device,031_calculation_inspector_indexes"
+expected_migrations="001_foundation,002_core_domain,003_local_provider_contract,004_serp_authority_contract,005_calculation_contract,006_forecast_calibration_contract,007_managed_runtime_contract,008_model_parity_contract,009_outbox_publication_contract,010_identity_access_contract,011_client_project_parity,012_keyword_gsc_parity,013_keyword_management_contract,014_roadmap_contract,015_serp_import_contract,016_archive_contract,017_url_monitor_contract,018_admin_reference_contract,019_conversion_override_application,020_content_planner_contract,021_slide_export_contract,022_live_provider_contract,023_source_migration_archive,024_url_monitor_leases,025_migration_load_contract,026_portfolio_query_indexes,027_calculation_control_contract,028_autonomous_pipeline_contract,029_link_power_serp_index,030_ctr_curves_all_device,031_calculation_inspector_indexes,032_provider_migration_contract"
 applied_migrations="$(
   docker exec "$container_name" \
     psql -U seer_owner -d seer -Atqc "

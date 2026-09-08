@@ -115,7 +115,14 @@ describe("managed database runtime contract", () => {
     expect(workflow).toContain("max_retries: 80");
   });
 
-  it("runs categorisation in parallel with enrichment instead of after it", async () => {
+  it("continues checkpointed stages without advancing their dependencies", async () => {
+    const workflow = await read("gcp/workflows/pipeline.yaml.tftpl");
+    expect(workflow).toContain('condition: $${map.get(stageResponse.body, "status") == "continuing"}');
+    expect(workflow).toContain("next: waitForContinuation");
+    expect(workflow).toMatch(/waitForContinuation:\s+call: sys.sleep\s+args:\s+seconds: 2\s+next: deliver/);
+  });
+
+  it("finishes model categorisation before enrichment and preserves four calculation tracks", async () => {
     const workflow = await read("gcp/workflows/pipeline.yaml.tftpl");
     const detox = workflow.indexOf('stageId: "detox"');
     const categorisation = workflow.indexOf('stageId: "categorisation"');
@@ -126,7 +133,10 @@ describe("managed database runtime contract", () => {
     expect(categorisation).toBeGreaterThan(detox);
     expect(preflight).toBeGreaterThan(categorisation);
     expect(enrichment).toBeGreaterThan(preflight);
-    expect(workflow).toContain("categorisationTrack:");
+    for (const track of ["ctrTruthTrack:", "demandTrack:", "competitiveTrack:", "contentTrack:"]) {
+      expect(workflow).toContain(track);
+    }
+    expect(workflow).toContain("calculationTracks:");
   });
 
   it("exposes the API without an allUsers IAM binding blocked by domain policy", async () => {
@@ -162,6 +172,11 @@ describe("managed database runtime contract", () => {
     expect(runtimeBuild).toContain("node gcp/scripts/render-managed-workflows.mjs");
     expect(runtimeBuild).toContain("gcp/scripts/deploy-firebase-hosting.sh");
     expect(runtimeBuild).toContain('waitFor: ["web-build", "deploy-runtime"]');
+    expect(runtimeBuild).toContain('--update-secrets=OPENROUTER_API_KEY=seer-openrouter-api-key:latest');
+    expect(runtimeBuild).toContain('--remove-secrets=AHREFS_API_KEY,ANTHROPIC_API_KEY');
+    expect(runtimeBuild.indexOf('gcloud secrets versions describe latest')).toBeLessThan(runtimeBuild.indexOf('gcloud run jobs update seer-database-migration'));
+    expect(runtimeBuild.slice(runtimeBuild.indexOf('- id: release-manifest'), runtimeBuild.indexOf('- id: deploy-runtime'))).not.toContain('gcloud');
+    expect(runtimeBuild.slice(runtimeBuild.indexOf('- id: deploy-runtime'), runtimeBuild.indexOf('- id: deploy-web'))).toContain('gcloud secrets versions describe latest');
   });
 
   it("renders deployable workflow sources without Terraform placeholders", async () => {

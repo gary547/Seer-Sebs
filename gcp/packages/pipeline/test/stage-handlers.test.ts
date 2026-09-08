@@ -33,8 +33,7 @@ import { PIPELINE_STAGES, type PipelineStageId } from "../src/definition.js";
 const fixtureUrl = new URL("../../../fixtures/representative-project.json", import.meta.url);
 const rawFixture = JSON.parse(readFileSync(fixtureUrl, "utf8")) as unknown;
 
-function executeRepresentativeStages() {
-  const fixture = parseRepresentativeProjectFixture(rawFixture);
+function executeRepresentativeStages(fixture = parseRepresentativeProjectFixture(rawFixture)) {
   const outputs: Partial<Record<PipelineStageId, unknown>> = {};
   for (const stage of PIPELINE_STAGES) {
     const dependencies = Object.fromEntries(
@@ -86,6 +85,45 @@ function executeRepresentativeStages() {
 }
 
 describe("data-driven pipeline handlers", () => {
+  it("persists zero forecast uplift for verified no-target HAR outcomes without manufacturing a rank", () => {
+    const { fixture } = executeRepresentativeStages();
+    const { har, revenue } = executeRepresentativeStages({ ...fixture,
+      scoringConfig: { ...fixture.scoringConfig, scenario_thresholds: { conservative: 1, realistic: 1, stretch: 1 } },
+    });
+    expect(har.keywords.length).toBeGreaterThan(0);
+    let verifiedNoTarget = 0;
+    for (const keyword of har.keywords) {
+      for (const scenario of keyword.scenarios) {
+        expect(scenario.harPosition).toBeNull();
+      }
+      const forecasts = revenue.keywords.find(row => row.id === keyword.id)!.scenarios;
+      expect(forecasts).toHaveLength(3);
+      for (const forecast of forecasts) {
+        const source = keyword.scenarios.find(row => row.scenario === forecast.scenario)!;
+        if ((source.explanation.no_beat_reason as { reason: string }).reason === "authority_below_threshold") {
+          verifiedNoTarget++;
+          expect(forecast.expectedIncrementalAnnual).toBe(0);
+          expect(forecast.targetAbsoluteRevenueAnnual).toBe(forecast.currentRevenueAnnual);
+          expect(forecast.warnings).toContain("no_attainable_target");
+        } else {
+          expect(forecast.expectedIncrementalAnnual).toBeNull();
+          expect(forecast.warnings).not.toContain("no_attainable_target");
+        }
+      }
+    }
+    expect(verifiedNoTarget).toBeGreaterThan(0);
+  });
+  it("accepts verified zero DataForSEO authority but rejects unknown zero authority", () => {
+    const { fixture, detox, categorisation } = executeRepresentativeStages();
+    const zeroAuthority = { ...fixture, authority: { domainRating: 0, referringDomains: 0, backlinks: 0, source: "dataforseo" } };
+    expect(() => executeDataDrivenStage("preflight", zeroAuthority, { detox, categorisation })).not.toThrow();
+    const { har } = executeRepresentativeStages(zeroAuthority);
+    for (const keyword of har.keywords) {
+      for (const scenario of keyword.scenarios) expect(scenario.explanation.missing).not.toContain("client_authority");
+    }
+    expect(() => executeDataDrivenStage("preflight", { ...zeroAuthority, authority: { ...zeroAuthority.authority, source: undefined } }, { detox, categorisation })).toThrow();
+  });
+
   it("normalises intake and promotes only GSC-only queries", () => {
     const { intake, promotion } = executeRepresentativeStages();
 
@@ -364,7 +402,7 @@ describe("data-driven pipeline handlers", () => {
     expect(revenue).toMatchObject({
       forecastCount: 36,
       handlerVersion: "revenue-v2.1",
-      modelVersion: "revenue_v2.1.0",
+      modelVersion: "revenue_v2.1.1",
     });
     expect(
       revenue.keywords

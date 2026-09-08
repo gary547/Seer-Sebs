@@ -1,14 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  AhrefsClient,
-  ANTHROPIC_MAX_ATTEMPTS,
-  ANTHROPIC_RETRY_WAIT_MS,
-  AnthropicSiteArchitectureClient,
+  DataForSeoAuthorityClient,
   DataForSeoClient,
   isGoogleAdsKeywordEligible,
   LivePipelineProviderHydrator,
 } from "../src/live-providers.js";
+import { OpenRouterPipelineClient } from "../src/openrouter.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 
 function dataForSeoResponse(items: unknown[]): Response {
@@ -35,6 +33,24 @@ function dataForSeoFailure(code: number, message: string): Response {
 }
 
 describe("managed pipeline providers", () => {
+  it("collects ready SERP task IDs using GET without a request body", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({ status_code: 20000, tasks: [{ status_code: 20000, result: [
+        { id: "ready-task-1" }, { id: "ready-task-2" }, { id: "ready-task-1" },
+      ] }] }),
+      { status: 200 },
+    ));
+    const client = new DataForSeoClient("login:password", fetchImplementation);
+
+    await expect(client.readySerpTaskIds()).resolves.toEqual(
+      new Set(["ready-task-1", "ready-task-2"]),
+    );
+    const [url, request] = fetchImplementation.mock.calls[0]!;
+    expect(url).toBe("https://api.dataforseo.com/v3/serp/google/organic/tasks_ready");
+    expect(request?.method ?? "GET").toBe("GET");
+    expect(request?.body).toBeUndefined();
+  });
+
   it("merges live keyword volume, difficulty, intent and monthly history", async () => {
     const fetchImplementation = vi.fn<typeof fetch>(
       async (input: string | URL | Request) => {
@@ -262,7 +278,7 @@ describe("managed pipeline providers", () => {
     );
   });
 
-  it("parses ranked URLs and Ahrefs authority metrics", async () => {
+  it("parses ranked URLs from DataForSEO", async () => {
     const dataForSeoFetch = vi.fn<typeof fetch>().mockResolvedValue(
       dataForSeoResponse([
         {
@@ -292,92 +308,6 @@ describe("managed pipeline providers", () => {
       },
     ]);
 
-    const ahrefsFetch = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          targets: [
-            {
-              ahrefs_rank: 12,
-              backlinks: 250,
-              domain_rating: 61,
-              refdomains: 80,
-              url: "example.test",
-              url_rating: 42,
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-    );
-    const ahrefs = new AhrefsClient("ahrefs-key", ahrefsFetch);
-    await expect(
-      ahrefs.metrics([{ mode: "domain", url: "example.test" }]),
-    ).resolves.toEqual(
-      new Map([
-        [
-          "example.test",
-          {
-            ahrefsRank: 12,
-            backlinks: 250,
-            domainRating: 61,
-            referringDomains: 80,
-            urlRating: 42,
-          },
-        ],
-      ]),
-    );
-  });
-
-  it("stops retrying when Ahrefs rejects access", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }),
-    );
-    const ahrefs = new AhrefsClient("ahrefs-key", fetchImplementation);
-
-    await expect(
-      ahrefs.metrics([{ mode: "domain", url: "example.test" }]),
-    ).rejects.toMatchObject({
-      code: "ahrefs_access_rejected",
-      message: "Ahrefs rejected the configured API credentials or plan access.",
-      statusCode: 424,
-    });
-    expect(fetchImplementation).toHaveBeenCalledTimes(1);
-    expect(warning).toHaveBeenCalledWith(
-      JSON.stringify({
-        event: "provider_request_failed",
-        provider: "ahrefs",
-        statusCode: 403,
-      }),
-    );
-    warning.mockRestore();
-  });
-
-  it("caps transient Ahrefs retries and returns an actionable error", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const wait = vi.fn(async () => undefined);
-    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ error: "unavailable" }), { status: 503 }),
-    );
-    const ahrefs = new AhrefsClient("ahrefs-key", fetchImplementation, wait);
-
-    await expect(
-      ahrefs.metrics([{ mode: "domain", url: "example.test" }]),
-    ).rejects.toMatchObject({
-      code: "ahrefs_unavailable",
-      message: "Ahrefs remained unavailable after five attempts.",
-      statusCode: 424,
-    });
-    expect(fetchImplementation).toHaveBeenCalledTimes(5);
-    expect(wait).toHaveBeenCalledTimes(4);
-    expect(warning).toHaveBeenCalledWith(
-      JSON.stringify({
-        event: "provider_request_failed",
-        provider: "ahrefs",
-        statusCode: 503,
-      }),
-    );
-    warning.mockRestore();
   });
 
   it("hydrates missing client authority before preflight", async () => {
@@ -427,8 +357,8 @@ describe("managed pipeline providers", () => {
     });
     const hydrator = new LivePipelineProviderHydrator(
       {} as DataForSeoClient,
-      ahrefs as unknown as AhrefsClient,
-      {} as AnthropicSiteArchitectureClient,
+      ahrefs as unknown as DataForSeoAuthorityClient,
+      {} as OpenRouterPipelineClient,
     );
 
     await hydrator.hydrate(
@@ -446,118 +376,6 @@ describe("managed pipeline providers", () => {
         String(sql).includes("INSERT INTO authority_domain_cache"),
       ),
     ).toBe(true);
-  });
-
-  it("uses direct Anthropic responses for site-architecture scoring", async () => {
-    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          content: [
-            {
-              text: JSON.stringify([
-                {
-                  contentStatus: "green",
-                  index: 0,
-                  relevancyScore: 91,
-                  tacticalStatus: "no_action_needed",
-                },
-              ]),
-              type: "text",
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-    );
-    const client = new AnthropicSiteArchitectureClient(
-      "anthropic-key",
-      fetchImplementation,
-    );
-
-    await expect(
-      client.score([
-        {
-          keyword: "buy television",
-          rankingUrl: "https://example.test/televisions",
-        },
-      ]),
-    ).resolves.toEqual(
-      new Map([
-        [
-          "buy television",
-          {
-            contentStatus: "green",
-            relevancyScore: 91,
-            tacticalStatus: "no_action_needed",
-          },
-        ],
-      ]),
-    );
-    const request = fetchImplementation.mock.calls[0]?.[1];
-    const headers = new Headers(request?.headers);
-    expect(headers.get("x-api-key")).toBe("anthropic-key");
-    expect(headers.has("authorization")).toBe(false);
-  });
-
-  it("retries transient Claude failures 30 times at two-second intervals", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const wait = vi.fn(async () => undefined);
-    const reportRetry = vi.fn(async () => undefined);
-    let attempt = 0;
-    const fetchImplementation = vi.fn<typeof fetch>(async () => {
-      attempt += 1;
-      if (attempt < ANTHROPIC_MAX_ATTEMPTS) {
-        return new Response("temporarily unavailable", { status: 503 });
-      }
-      return new Response(
-        JSON.stringify({
-          content: [
-            {
-              text: JSON.stringify([
-                {
-                  contentStatus: "green",
-                  index: 0,
-                  relevancyScore: 91,
-                  tacticalStatus: "no_action_needed",
-                },
-              ]),
-              type: "text",
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    });
-    const client = new AnthropicSiteArchitectureClient(
-      "anthropic-key",
-      fetchImplementation,
-      wait,
-    );
-
-    const scores = await client.score(
-      [
-        {
-          keyword: "buy television",
-          rankingUrl: "https://example.test/televisions",
-        },
-      ],
-      reportRetry,
-    );
-
-    expect(scores.size).toBe(1);
-    expect(fetchImplementation).toHaveBeenCalledTimes(ANTHROPIC_MAX_ATTEMPTS);
-    expect(wait).toHaveBeenCalledTimes(ANTHROPIC_MAX_ATTEMPTS - 1);
-    expect(wait).toHaveBeenLastCalledWith(ANTHROPIC_RETRY_WAIT_MS);
-    expect(reportRetry).toHaveBeenCalledTimes(ANTHROPIC_MAX_ATTEMPTS - 1);
-    expect(reportRetry).toHaveBeenLastCalledWith({
-      attempt: ANTHROPIC_MAX_ATTEMPTS,
-      batch: 1,
-      batchCount: 1,
-      maxAttempts: ANTHROPIC_MAX_ATTEMPTS,
-      waitMilliseconds: ANTHROPIC_RETRY_WAIT_MS,
-    });
-    expect(warning.mock.calls.flat().join(" ")).not.toContain("503");
-    warning.mockRestore();
   });
 
   it("persists keyword enrichment batches and retries remaining work", async () => {
@@ -626,8 +444,8 @@ describe("managed pipeline providers", () => {
     });
     const hydrator = new LivePipelineProviderHydrator(
       { enrichKeywords } as unknown as DataForSeoClient,
-      {} as AhrefsClient,
-      {} as AnthropicSiteArchitectureClient,
+      {} as DataForSeoAuthorityClient,
+      {} as OpenRouterPipelineClient,
       async () => undefined,
       () => now,
       780_000,
@@ -741,8 +559,8 @@ describe("managed pipeline providers", () => {
     });
     const hydrator = new LivePipelineProviderHydrator(
       dataForSeo as unknown as DataForSeoClient,
-      {} as AhrefsClient,
-      {} as AnthropicSiteArchitectureClient,
+      {} as DataForSeoAuthorityClient,
+      {} as OpenRouterPipelineClient,
       async () => undefined,
       () => now,
       780_000,

@@ -347,7 +347,7 @@ export function DemandVisualPanel({ data }: { data: CalculationControl["demand"]
                   <TableCell className="max-w-[300px] truncate font-medium">{row.keyword}</TableCell>
                   <TableCell>{row.category}</TableCell>
                   <TableCell className="text-right font-mono">{number(row.monthlyVolume)}</TableCell>
-                  <TableCell className="text-right font-mono">{row.trendPct == null ? "—" : `${row.trendPct > 0 ? "+" : ""}${percent(row.trendPct, 1)}`}</TableCell>
+                  <TableCell className="text-right font-mono">{row.trendPct == null ? "—" : `${row.trendPct > 0 ? "+" : ""}${row.trendPct.toFixed(1)}%`}</TableCell>
                   <TableCell><Badge variant="outline">{humanise(row.trendDirection)}</Badge></TableCell>
                   <TableCell><Badge variant={row.trendConfidence === "high" ? "secondary" : "outline"}>{humanise(row.trendConfidence)}</Badge></TableCell>
                   <TableCell className="text-right font-mono">{number(row.coverageMonths)} mo</TableCell>

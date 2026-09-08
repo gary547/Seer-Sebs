@@ -14,7 +14,7 @@ ALTER TABLE keywords
   ADD CONSTRAINT keywords_categorisation_source_check
     CHECK (
       categorisation_source IS NULL
-      OR categorisation_source IN ('client_supplied', 'rule', 'taxonomy')
+      OR categorisation_source IN ('client_supplied', 'rule', 'taxonomy', 'openrouter')
     );
 
 ALTER TABLE gsc_uploads

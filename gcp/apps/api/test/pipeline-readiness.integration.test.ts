@@ -10,6 +10,7 @@ const projectId = "00000000-0000-4000-8000-000000000002";
 const clientId = "00000000-0000-4000-8000-000000000003";
 const successfulRunId = "00000000-0000-4000-8000-000000000004";
 let readinessOverrides: Record<string, unknown> = {};
+let completedQualification = true;
 
 function result(rows: unknown[], rowCount = rows.length) {
   return { rowCount, rows };
@@ -89,6 +90,7 @@ function database(): DatabasePool {
       return result([{ id: "00000000-0000-4000-8000-000000000005" }]);
     }
     if (sql.startsWith("UPDATE navigator_projects")) return result([], 1);
+    if (sql.startsWith("SELECT 1 FROM pipeline_stage_runs AS stage")) return result(completedQualification ? [{}] : []);
     if (sql.includes("SELECT pg_advisory_xact_lock")) return result([{}]);
     if (sql.includes("FROM pipeline_runs") && sql.includes("status IN ('pending', 'running')")) {
       return result([]);
@@ -108,6 +110,7 @@ describe("autonomous pipeline readiness API", () => {
 
   beforeEach(async () => {
     readinessOverrides = {};
+    completedQualification = true;
     orchestrator.start.mockClear();
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({ email: "admin@example.com", id: userId })),
@@ -185,6 +188,21 @@ describe("autonomous pipeline readiness API", () => {
       projectId,
       stampedKeywordCount: 1,
     });
+  });
+
+  it.each([
+    { baseline: true, mode: "recalculate", dirty: false, status: 202 },
+    { baseline: false, mode: "recalculate", dirty: false, status: 409 },
+    { baseline: true, mode: "recalculate", dirty: true, status: 409 },
+    { baseline: true, mode: "full", dirty: false, status: 409 },
+  ])("recovers qualification only from an unchanged completed baseline: %j", async ({ baseline, mode, dirty, status }) => {
+    completedQualification = baseline;
+    readinessOverrides = { kept_keyword_count: "0", keywords_dirty: dirty };
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-runs`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode }),
+    });
+    expect(response.status).toBe(status);
+    expect(orchestrator.start).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
   });
 
   it("persists operator thresholds and starts a server-side run in the requested mode", async () => {

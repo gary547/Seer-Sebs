@@ -111,6 +111,16 @@ function pipelineRun(): PipelineRun {
 }
 
 describe("AutonomousPipelinePanel", () => {
+  it.each([false, true])("allows recovery after a failed recalculation only with a completed baseline: %s", (hasCompletedRun) => {
+    const onRun = vi.fn();
+    render(<AutonomousPipelinePanel archived={false} hasCompletedRun={hasCompletedRun}
+      onRun={onRun} onSaveBrandTerms={vi.fn()} onSavePolicy={vi.fn()} onStampPrecurated={vi.fn()}
+      readiness={readiness} run={{ ...pipelineRun(), status: "failed" }} running={false}
+      savingBrandTerms={false} savingPolicy={false} stampingPrecurated={false} />);
+    const button = screen.getByRole("button", { name: "Recalculate forecasts" });
+    if (hasCompletedRun) { expect(button).toBeEnabled(); fireEvent.click(button); expect(onRun).toHaveBeenCalledWith("recalculate"); }
+    else expect(button).toBeDisabled();
+  });
   it("shows readiness, four tracks, operator preview and deduplicated output", () => {
     render(
       <AutonomousPipelinePanel

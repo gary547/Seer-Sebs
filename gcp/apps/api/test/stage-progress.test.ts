@@ -75,11 +75,11 @@ describe("stage progress", () => {
         work: null,
       }).message,
     ).toBe(
-      "Scoring ranking-page content fit with Claude; transient failures retry every 2s · 30m elapsed · attempt 3",
+      "Scoring page or domain content fit with GLM 5.3 Flash; transient failures retry every 2s · 30m elapsed · attempt 3",
     );
   });
 
-  it("shows live Claude retry progress without exposing provider status codes", () => {
+  it("shows live GLM retry progress without exposing provider status codes", () => {
     expect(
       buildStageProgress({
         attempts: 1,
@@ -87,14 +87,14 @@ describe("stage progress", () => {
         id: "site-architecture",
         now,
         outputMessage:
-          "Claude is scoring content-fit batch 2 of 8; retrying attempt 4 of 30 in 2s.",
+          "GLM 5.3 Flash: content-fit scoring, batch 2 of 8, attempt 4 of 30.",
         startedAt: new Date("2026-08-20T07:49:30.000Z"),
         state: "running",
         waitingOn: [],
         work: null,
       }).message,
     ).toBe(
-      "Claude is scoring content-fit batch 2 of 8; retrying attempt 4 of 30 in 2s. · 30s elapsed",
+      "GLM 5.3 Flash: content-fit scoring, batch 2 of 8, attempt 4 of 30. · 30s elapsed",
     );
   });
 
@@ -116,6 +116,19 @@ describe("stage progress", () => {
     expect(progress.message).not.toContain("500");
   });
 
+  it("reports the current GLM batch instead of treating cached batches as the entire workload", () => {
+    const progress = buildStageProgress({
+      attempts: 1, completedAt: null, id: "categorisation", now,
+      outputMessage: "GLM 5.3 Flash: keyword categorisation, batch 2 of 8, attempt 4 of 30.",
+      providerProgress: { model: "z-ai/glm-5.3-flash", batch: 2, batchCount: 8 },
+      startedAt: null, state: "running", waitingOn: [],
+      work: { failed: 0, lastError: null, pending: 0, submitted: 0, succeeded: 1, total: 1 },
+    });
+    expect(progress).toMatchObject({ done: 1, total: 8, submitted: 1, pending: 6, percent: 13, unit: "batches" });
+    expect(progress.message).toContain("batch 2 of 8, attempt 4 of 30");
+    expect(progress.message).not.toContain("1 of 1");
+  });
+
   it("marks succeeded stages complete with duration", () => {
     expect(
       buildStageProgress({
@@ -133,5 +146,13 @@ describe("stage progress", () => {
       message: "Completed in 34m",
       percent: 100,
     });
+  });
+
+  it("labels completed OpenRouter work as batches rather than keyword items", () => {
+    expect(buildStageProgress({
+      attempts: 1, completedAt: now, id: "detox", now, outputMessage: null,
+      startedAt: null, state: "succeeded", waitingOn: [],
+      work: { unit: "batches", failed: 0, lastError: null, pending: 0, submitted: 0, succeeded: 1, total: 1 },
+    })).toMatchObject({ unit: "batches", message: "Completed · 1 batch", done: 1, total: 1, percent: 100 });
   });
 });

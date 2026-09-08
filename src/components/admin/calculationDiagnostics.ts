@@ -17,6 +17,12 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+export function harOutcomeLabel(explanation: unknown): string {
+  const reason = record(record(explanation).no_beat_reason).reason;
+  return reason === "authority_below_threshold" ? "No attainable target"
+    : reason === "no_comparable_competitors" ? "Insufficient competitor data" : "Not available";
+}
+
 export function calculationFlags(row: CalculationInspectorRow): DiagnosticFlag[] {
   const realistic = row.scenarios.realistic;
   if (!realistic) return [];

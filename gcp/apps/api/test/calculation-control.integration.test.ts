@@ -12,6 +12,7 @@ const runId = "00000000-0000-4000-8000-000000000004";
 const uploadId = "00000000-0000-4000-8000-000000000005";
 let applicationRole = "admin";
 let executedSql: string[] = [];
+let calendarDates: Array<string | null> = [];
 
 function result(rows: unknown[]) {
   return { rowCount: rows.length, rows };
@@ -31,13 +32,13 @@ function database(): DatabasePool {
       return result([{ completed_at: new Date("2026-08-12T10:00:00Z"), id: runId }]);
     }
     if (sql.includes("FROM gsc_uploads AS upload")) {
-      return result([{ created_at: new Date("2026-08-11T10:00:00Z"), date_range_end: new Date("2026-06-30T00:00:00Z"), date_range_start: new Date("2026-04-01T00:00:00Z"), device: "mobile", id: uploadId, original_filename: "gsc.xlsx", page_count: "8", query_count: "240", row_count: 240, source_name: "gsc_workbook_v1" }]);
+      return result([{ created_at: new Date("2026-08-11T10:00:00Z"), date_range_end: calendarDates[1], date_range_start: calendarDates[0], device: "mobile", id: uploadId, original_filename: "gsc.xlsx", page_count: "8", query_count: "240", row_count: 240, source_name: "gsc_workbook_v1" }]);
     }
     if (sql.includes("WITH base_sources AS")) {
       return result([{ base_rank_sources: { gsc: 9 }, branded_count: "2", kept_count: "10", missing_base_rank_count: "1", total_count: "12", unbranded_count: "9", unclassified_brand_count: "1", with_base_rank_count: "9" }]);
     }
     if (sql.includes("), history AS (")) {
-      return result([{ earliest_month: new Date("2024-01-01T00:00:00Z"), history_row_count: "240", kept_keyword_count: "10", latest_month: new Date("2025-12-01T00:00:00Z"), maximum_months: "24", median_months: "24", minimum_months: "0", with_12_months_count: "9", with_24_months_count: "8", with_history_count: "9" }]);
+      return result([{ earliest_month: calendarDates[2], history_row_count: "240", kept_keyword_count: "10", latest_month: calendarDates[3], maximum_months: "24", median_months: "24", minimum_months: "0", with_12_months_count: "9", with_24_months_count: "8", with_history_count: "9" }]);
     }
     if (sql.includes("count(volume.month)::text AS month_count")) {
       return result([{ keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", month_count: "24", months: [{ month: "2025-12-01", volume: 1200 }] }]);
@@ -58,7 +59,7 @@ function database(): DatabasePool {
       return result([{ feature_count: "3", keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", multiplier: "0.82", owned_count: "1", result_types: ["organic", "people_also_ask"], search_intent: "commercial" }]);
     }
     if (sql.includes("WITH rows AS")) {
-      return result([{ average_score: "72.5", matched_count: "9", missing_count: "1", scored_count: "9", total_count: "10", zero_count: "1", zero_rows: [{ keyword: "missing page", rankingUrl: null, tacticalStatus: "create_content" }] }]);
+      return result([{ average_score: "72.5", matched_count: "9", domain_fallback_count: "3", metric_sources: ["openrouter:z-ai/glm-5.3-flash"], missing_count: "1", scored_count: "9", total_count: "10", zero_count: "1", zero_rows: [{ keyword: "missing page", rankingUrl: null, tacticalStatus: "create_content" }] }]);
     }
     if (sql.includes("WITH aggregate AS")) {
       return result([{ average_har_delta: "1.5", comparable_har_count: "8", comparable_revenue_count: "7", items: [{ currentRevenueV1: 100, currentRevenueV2: 120, harV1: 7, harV2: 5, keyword: "seo agency", keywordId: "00000000-0000-4000-8000-000000000006", targetIncrementalRevenueV1: 500, targetIncrementalRevenueV2: 650 }], keyword_count: "10" }]);
@@ -81,6 +82,7 @@ describe("calculation control API", () => {
   beforeEach(async () => {
     applicationRole = "admin";
     executedSql = [];
+    calendarDates = ["2026-04-01", "2026-06-30", "2024-01-01", "2025-12-01"];
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({ email: "admin@example.com", id: userId })),
       objectStore: {
@@ -107,7 +109,7 @@ describe("calculation control API", () => {
       brandClassification: { branded: 2, unclassified: 1 },
       clustering: { clusterCount: 3, memberCount: 10 },
       comparisons: { comparableHarCount: 8, comparableRevenueCount: 7 },
-      contentFit: { matched: 9, zero: 1 },
+      contentFit: { matched: 9, zero: 1, domainFallback: 3, metricSources: ["openrouter:z-ai/glm-5.3-flash"] },
       demand: {
         confidenceDistribution: { high: 8, medium: 2 },
         samples: [{ keyword: "seo agency", trendDirection: "growing" }],
@@ -130,6 +132,8 @@ describe("calculation control API", () => {
         sql.includes("DISTINCT ON (volume.keyword_id, volume.month)"),
       ),
     ).toHaveLength(2);
+    expect(executedSql.filter((sql) => sql.includes("JOIN local_provider_keyword_monthly_volumes AS provider"))).toHaveLength(2);
+    expect(executedSql.filter((sql) => sql.includes("imported.keyword_id = keyword.id AND imported.month = provider.month"))).toHaveLength(2);
     expect(executedSql.some((sql) => sql.includes("ORDER BY stage.attempts DESC"))).toBe(true);
   });
 
@@ -137,6 +141,26 @@ describe("calculation control API", () => {
     const response = await fetch(`${baseUrl}/v1/projects/${projectId}/gsc-uploads/${uploadId}`, { method: "DELETE" });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ deleted: true, projectId, uploadId });
+  });
+
+  it.each([
+    ["2025-03-21", "2026-08-01", "2024-02-01", "2026-08-01"],
+    ["2024-02-29", "2024-10-27", "2024-03-01", "2024-10-01"],
+    [null, null, null, null],
+  ])("preserves calendar dates without JavaScript timezone conversion: %s to %s", async (...dates) => {
+    calendarDates = dates;
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/calculation-control`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      gscReadiness: { uploads: [{ dateRangeStart: dates[0], dateRangeEnd: dates[1], createdAt: "2026-08-11T10:00:00.000Z" }] },
+      volumeHistory: { earliestMonth: dates[2], latestMonth: dates[3] },
+    });
+    const uploadsSql = executedSql.find((sql) => sql.includes("FROM gsc_uploads AS upload"));
+    expect(uploadsSql).toContain("to_char(upload.date_range_start, 'YYYY-MM-DD') AS date_range_start");
+    expect(uploadsSql).toContain("to_char(upload.date_range_end, 'YYYY-MM-DD') AS date_range_end");
+    const volumeSql = executedSql.find((sql) => sql.includes("), history AS ("));
+    expect(volumeSql).toContain("to_char(min(earliest_month), 'YYYY-MM-DD') AS earliest_month");
+    expect(volumeSql).toContain("to_char(max(latest_month), 'YYYY-MM-DD') AS latest_month");
   });
 
   it("rejects non-administrators", async () => {

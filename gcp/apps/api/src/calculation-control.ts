@@ -4,6 +4,7 @@ import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth.js";
+import { canonicalProjectVolumeCte } from "../../../packages/runtime/src/project-volume-history.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertAdministrator } from "./authorization.js";
 
@@ -21,8 +22,8 @@ interface LatestRunRow extends QueryResultRow {
 
 interface GscUploadRow extends QueryResultRow {
   created_at: Date;
-  date_range_end: Date | null;
-  date_range_start: Date | null;
+  date_range_end: string | null;
+  date_range_start: string | null;
   device: string;
   id: string;
   original_filename: string | null;
@@ -44,10 +45,10 @@ interface KeywordOverviewRow extends QueryResultRow {
 }
 
 interface VolumeSummaryRow extends QueryResultRow {
-  earliest_month: Date | null;
+  earliest_month: string | null;
   history_row_count: string;
   kept_keyword_count: string;
-  latest_month: Date | null;
+  latest_month: string | null;
   maximum_months: string | null;
   median_months: string | null;
   minimum_months: string | null;
@@ -130,6 +131,8 @@ interface SerpSampleRow extends QueryResultRow {
 }
 
 interface ContentFitSummaryRow extends QueryResultRow {
+  domain_fallback_count: string;
+  metric_sources: string[];
   average_score: string | null;
   matched_count: string;
   missing_count: string;
@@ -244,8 +247,8 @@ export async function getProjectCalculationControl(
           upload.original_filename,
           upload.row_count,
           upload.device,
-          upload.date_range_start,
-          upload.date_range_end,
+          to_char(upload.date_range_start, 'YYYY-MM-DD') AS date_range_start,
+          to_char(upload.date_range_end, 'YYYY-MM-DD') AS date_range_end,
           upload.created_at,
           (
             SELECT count(*)::text
@@ -300,22 +303,7 @@ export async function getProjectCalculationControl(
     ),
     pool.query<VolumeSummaryRow>(
       `
-        WITH canonical_volume AS (
-          SELECT DISTINCT ON (volume.keyword_id, volume.month)
-            volume.keyword_id,
-            volume.month,
-            volume.volume
-          FROM keyword_monthly_volumes AS volume
-          JOIN keywords AS keyword ON keyword.id = volume.keyword_id
-          WHERE keyword.project_id = $1
-            AND keyword.detox_status = 'keep'
-          ORDER BY
-            volume.keyword_id,
-            volume.month,
-            volume.fetched_at DESC,
-            volume.source DESC,
-            volume.id DESC
-        ), history AS (
+        WITH ${canonicalProjectVolumeCte(true)}, history AS (
           SELECT
             keyword.id,
             count(volume.month)::integer AS month_count,
@@ -338,30 +326,15 @@ export async function getProjectCalculationControl(
           percentile_cont(0.5) WITHIN GROUP (ORDER BY month_count)::text
             AS median_months,
           max(month_count)::text AS maximum_months,
-          min(earliest_month) AS earliest_month,
-          max(latest_month) AS latest_month
+          to_char(min(earliest_month), 'YYYY-MM-DD') AS earliest_month,
+          to_char(max(latest_month), 'YYYY-MM-DD') AS latest_month
         FROM history
       `,
       [projectId],
     ),
     pool.query<VolumeSampleRow>(
       `
-        WITH canonical_volume AS (
-          SELECT DISTINCT ON (volume.keyword_id, volume.month)
-            volume.keyword_id,
-            volume.month,
-            volume.volume
-          FROM keyword_monthly_volumes AS volume
-          JOIN keywords AS project_keyword ON project_keyword.id = volume.keyword_id
-          WHERE project_keyword.project_id = $1
-            AND project_keyword.detox_status = 'keep'
-          ORDER BY
-            volume.keyword_id,
-            volume.month,
-            volume.fetched_at DESC,
-            volume.source DESC,
-            volume.id DESC
-        )
+        WITH ${canonicalProjectVolumeCte(true)}
         SELECT
           keyword.id AS keyword_id,
           keyword.keyword,
@@ -614,7 +587,9 @@ export async function getProjectCalculationControl(
             keyword.ranking_url,
             architecture.relevancy_score,
             architecture.provider_status,
-            architecture.tactical_status
+            architecture.tactical_status,
+            architecture.input_scope,
+            architecture.metric_source
           FROM keywords AS keyword
           LEFT JOIN site_architecture AS architecture
             ON architecture.keyword_id = keyword.id
@@ -631,6 +606,8 @@ export async function getProjectCalculationControl(
         SELECT
           count(*)::text AS total_count,
           count(*) FILTER (WHERE provider_status = 'matched')::text AS matched_count,
+          count(*) FILTER (WHERE input_scope = 'domain_fallback')::text AS domain_fallback_count,
+          COALESCE(array_agg(DISTINCT metric_source) FILTER (WHERE metric_source IS NOT NULL), ARRAY[]::text[]) AS metric_sources,
           count(*) FILTER (
             WHERE provider_status IS NULL OR provider_status = 'missing-provider'
           )::text AS missing_count,
@@ -803,6 +780,8 @@ export async function getProjectCalculationControl(
       keywordCount: Number(comparisons.keyword_count),
     },
     contentFit: {
+      domainFallback: Number(contentFit.domain_fallback_count),
+      metricSources: contentFit.metric_sources,
       averageScore: number(contentFit.average_score),
       matched: Number(contentFit.matched_count),
       missing: Number(contentFit.missing_count),
@@ -839,8 +818,8 @@ export async function getProjectCalculationControl(
     gscReadiness: {
       uploads: uploads.rows.map((upload) => ({
         createdAt: iso(upload.created_at),
-        dateRangeEnd: iso(upload.date_range_end)?.slice(0, 10) ?? null,
-        dateRangeStart: iso(upload.date_range_start)?.slice(0, 10) ?? null,
+        dateRangeEnd: upload.date_range_end,
+        dateRangeStart: upload.date_range_start,
         device: upload.device,
         id: upload.id,
         originalFilename: upload.original_filename,
@@ -879,10 +858,10 @@ export async function getProjectCalculationControl(
       })),
     },
     volumeHistory: {
-      earliestMonth: iso(volume.earliest_month)?.slice(0, 10) ?? null,
+      earliestMonth: volume.earliest_month ?? null,
       historyRows: Number(volume.history_row_count ?? "0"),
       keptKeywords: Number(volume.kept_keyword_count),
-      latestMonth: iso(volume.latest_month)?.slice(0, 10) ?? null,
+      latestMonth: volume.latest_month ?? null,
       maximumMonths: number(volume.maximum_months),
       medianMonths: number(volume.median_months),
       minimumMonths: number(volume.minimum_months),

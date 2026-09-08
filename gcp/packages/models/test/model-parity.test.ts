@@ -78,7 +78,7 @@ describe("canonical model contracts", () => {
       new Date("2026-07-01T00:00:00Z"),
     );
 
-    expect(REVENUE_V2_MODEL_VERSION).toBe("revenue_v2.1.0");
+    expect(REVENUE_V2_MODEL_VERSION).toBe("revenue_v2.1.1");
     expect(result.tp_incremental_revenue_annual).toBe(3_600);
     expect(result.expected_incremental_revenue_annual).toBe(1_800);
     expect(result.expected_incremental_low_annual).toBe(900);

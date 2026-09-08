@@ -52,8 +52,7 @@ locals {
         DATABASE_URL                  = "postgresql://${urlencode(trimsuffix(google_service_account.runtime["worker"].email, ".gserviceaccount.com"))}@127.0.0.1:5432/seer"
       }
       secrets = {
-        AHREFS_API_KEY         = "seer-ahrefs-api-key"
-        ANTHROPIC_API_KEY      = "seer-anthropic-api-key"
+        OPENROUTER_API_KEY     = "seer-openrouter-api-key"
         DATAFORSEO_CREDENTIALS = "seer-dataforseo-credentials"
         INTERNAL_SERVICE_TOKEN = "seer-internal-service-token"
       }

@@ -33,8 +33,10 @@ import type {
 } from "../../../packages/pipeline/src/stage-handlers.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
+import { canonicalProjectVolumeCte } from "../../../packages/runtime/src/project-volume-history.js";
 
 interface ProjectSourceRow {
+  authority_metric_source: string | null;
   aov: string | null;
   authority_backlinks: string;
   authority_domain_rating: string;
@@ -141,6 +143,8 @@ interface ProviderSerpKeywordRow {
 }
 
 interface ProviderSerpResultRow {
+  metric_source: string | null;
+  authority_scope: "page" | "domain" | "domain_fallback";
   ahrefs_rank: string | null;
   backlinks: string | null;
   domain: string;
@@ -159,6 +163,8 @@ interface ProviderMonthlyVolumeRow {
 }
 
 interface ProviderSiteArchitectureRow {
+  metric_source: string | null;
+  input_scope: "page" | "domain_fallback";
   content_status: SyntheticProviderSiteArchitectureKeyword["contentStatus"];
   keyword: string;
   matched_url: string | null;
@@ -259,6 +265,7 @@ export async function loadProjectPipelineSource(
           project.currency,
           project.category_focus,
           project.authority_domain_rating,
+          project.authority_metric_source,
           project.authority_referring_domains,
           project.authority_backlinks::text,
           project.conversion_rate,
@@ -360,13 +367,14 @@ export async function loadProjectPipelineSource(
     ),
     pool.query<ProviderMonthlyVolumeRow>(
       `
+        WITH ${canonicalProjectVolumeCte()}
         SELECT
-          normalised_keyword,
-          month::text,
-          volume
-        FROM local_provider_keyword_monthly_volumes
-        WHERE project_id = $1
-        ORDER BY normalised_keyword, month
+          keyword.normalised_keyword,
+          history.month::text,
+          history.volume
+        FROM canonical_volume AS history
+        JOIN keywords AS keyword ON keyword.id = history.keyword_id
+        ORDER BY keyword.normalised_keyword, history.month
       `,
       [projectId],
     ),
@@ -389,6 +397,8 @@ export async function loadProjectPipelineSource(
           url_rating,
           domain_rating,
           ahrefs_rank::text,
+          metric_source,
+          authority_scope,
           referring_domains::text,
           backlinks::text
         FROM local_provider_serp_results
@@ -402,6 +412,8 @@ export async function loadProjectPipelineSource(
         SELECT
           keyword,
           matched_url,
+          metric_source,
+          input_scope,
           relevancy_score,
           content_status,
           tactical_status
@@ -507,6 +519,8 @@ export async function loadProjectPipelineSource(
   for (const row of providerSerpResult.rows) {
     const results = providerSerpResults.get(row.normalised_keyword) ?? [];
     results.push({
+      metricSource: row.metric_source ?? undefined,
+      authorityScope: row.authority_scope,
       ahrefsRank: row.ahrefs_rank === null ? null : Number(row.ahrefs_rank),
       backlinks: row.backlinks === null ? null : Number(row.backlinks),
       domain: row.domain,
@@ -541,6 +555,7 @@ export async function loadProjectPipelineSource(
 
   return {
     authority: {
+      source: project.authority_metric_source ?? "project-input",
       backlinks: Number(project.authority_backlinks),
       domainRating: Number(project.authority_domain_rating),
       referringDomains: project.authority_referring_domains,
@@ -618,6 +633,8 @@ export async function loadProjectPipelineSource(
         (input) => ({
           contentStatus: input.content_status,
           matchedUrl: input.matched_url,
+          metricSource: input.metric_source ?? undefined,
+          inputScope: input.input_scope,
           relevancyScore: Number(input.relevancy_score),
           tacticalStatus: input.tactical_status,
           text: input.keyword,
@@ -864,6 +881,7 @@ async function persistKeywordEnrichment(
     core_keyword: keyword.enrichment.coreKeyword,
     id: keyword.id,
     intent: keyword.enrichment.intent,
+    intent_source: keyword.enrichment.intentSource ?? keyword.enrichment.source,
     keyword_difficulty: keyword.enrichment.keywordDifficulty,
     source: keyword.enrichment.source,
     volume_source: keyword.enrichment.volumeSource,
@@ -880,7 +898,7 @@ async function persistKeywordEnrichment(
           competitive_eligible = enrichment.competitive_eligible,
           competitive_eligibility_reason = enrichment.competitive_eligibility_reason,
           search_intent = enrichment.intent,
-          intent_source = enrichment.source,
+          intent_source = enrichment.intent_source,
           enrichment_source = enrichment.source,
           volume_fetched_at = CASE
             WHEN enrichment.avg_monthly_volume IS NULL THEN keyword.volume_fetched_at
@@ -899,6 +917,7 @@ async function persistKeywordEnrichment(
         keyword_difficulty numeric,
         core_keyword text,
         intent text,
+        intent_source text,
         source text,
         volume_source text,
         competitive_eligible boolean,
@@ -1361,6 +1380,7 @@ async function persistBacklinks(
       domain_rating: result.domainRating,
       keyword_id: keyword.id,
       metric_source: result.metricSource,
+      authority_scope: result.authorityScope ?? "page",
       rank_absolute: result.rankAbsolute,
       referring_domains: result.referringDomains,
       url_rating: result.urlRating,
@@ -1376,8 +1396,9 @@ async function persistBacklinks(
           referring_domains = metrics.referring_domains,
           backlinks = metrics.backlinks,
           metric_source = metrics.metric_source,
+          authority_scope = metrics.authority_scope,
           metrics_fetched_at = CASE
-            WHEN metrics.metric_source = 'local-provider' THEN now()
+            WHEN metrics.metric_source <> 'missing-provider' THEN now()
             ELSE serp.metrics_fetched_at
           END
       FROM jsonb_to_recordset($2::jsonb) AS metrics(
@@ -1388,7 +1409,8 @@ async function persistBacklinks(
         ahrefs_rank bigint,
         referring_domains bigint,
         backlinks bigint,
-        metric_source text
+        metric_source text,
+        authority_scope text
       )
       WHERE serp.project_id = $1
         AND serp.keyword_id = metrics.keyword_id
@@ -1412,6 +1434,8 @@ async function persistSiteArchitecture(
     id: keyword.id,
     matched_url: keyword.matchedUrl,
     provider_status: keyword.status,
+    metric_source: keyword.metricSource ?? null,
+    input_scope: keyword.inputScope ?? "page",
     relevancy_score: keyword.relevancyScore,
     tactical_status: keyword.tacticalStatus,
   }));
@@ -1425,7 +1449,9 @@ async function persistSiteArchitecture(
         relevancy_score,
         content_status,
         tactical_status,
-        provider_status
+        provider_status,
+        metric_source,
+        input_scope
       )
       SELECT
         $1,
@@ -1435,14 +1461,18 @@ async function persistSiteArchitecture(
         input.relevancy_score,
         input.content_status,
         input.tactical_status,
-        input.provider_status
+        input.provider_status,
+        input.metric_source,
+        input.input_scope
       FROM jsonb_to_recordset($3::jsonb) AS input(
         id uuid,
         matched_url text,
         relevancy_score numeric,
         content_status text,
         tactical_status text,
-        provider_status text
+        provider_status text,
+        metric_source text,
+        input_scope text
       )
       JOIN keywords AS keyword
         ON keyword.id = input.id
@@ -1454,6 +1484,8 @@ async function persistSiteArchitecture(
         content_status = EXCLUDED.content_status,
         tactical_status = EXCLUDED.tactical_status,
         provider_status = EXCLUDED.provider_status,
+        metric_source = EXCLUDED.metric_source,
+        input_scope = EXCLUDED.input_scope,
         computed_at = now()
     `,
     [projectId, runId, JSON.stringify(values)],

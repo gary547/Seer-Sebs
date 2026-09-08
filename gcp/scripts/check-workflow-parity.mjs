@@ -40,11 +40,13 @@ if (new Set(workflowStages).size !== workflowStages.length) {
   throw new Error("Workflow contains duplicate stage deliveries.");
 }
 if (
-  !workflow.includes("parallelTracks:") ||
   !workflow.includes("calculationTracks:") ||
-  !workflow.includes("competitiveTrack:")
+  ["ctrTruthTrack:", "demandTrack:", "competitiveTrack:", "contentTrack:"].some((track) => !workflow.includes(track))
 ) {
   throw new Error("Workflow does not contain the required parallel track structure.");
+}
+if (workflow.indexOf('stageId: "categorisation"') > workflow.indexOf('stageId: "preflight"')) {
+  throw new Error("Model classifications must complete before forecast inputs are read.");
 }
 
 process.stdout.write(

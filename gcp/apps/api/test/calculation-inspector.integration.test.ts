@@ -106,6 +106,8 @@ function database(): DatabasePool {
         return result([
           {
             backlinks: "950",
+            metric_source: "dataforseo",
+            authority_scope: "domain_fallback",
             confidence: "high",
             domain: "pilltime.co.uk",
             domain_rating: "68",
@@ -241,6 +243,8 @@ describe("calculation inspector API", () => {
           confidence: "high",
           domain: "pilltime.co.uk",
           score: 72.4,
+          metricSource: "dataforseo",
+          authorityScope: "domain_fallback",
         },
       ],
       summary: {

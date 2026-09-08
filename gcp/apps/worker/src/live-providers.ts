@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 
 import { normaliseKeyword } from "../../../packages/fixtures/src/representative-project.js";
+import type { ProjectPipelineSource } from "../../../packages/fixtures/src/representative-project.js";
+import { decideTier, type DataDrivenStageData } from "../../../packages/pipeline/src/stage-handlers.js";
 import type { PipelineStageId } from "../../../packages/pipeline/src/definition.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
+import { OpenRouterPipelineClient, OPENROUTER_MODEL, type AiOptions } from "./openrouter.js";
 
 interface ProjectProviderRow {
   country: string | null;
@@ -60,6 +63,8 @@ interface AuthorityMetrics {
   domainRating: number | null;
   referringDomains: number | null;
   urlRating: number | null;
+  source?: string;
+  scope?: "domain" | "page" | "domain_fallback";
 }
 
 interface SiteArchitectureResult {
@@ -67,6 +72,7 @@ interface SiteArchitectureResult {
   keyword: string;
   matchedUrl: string | null;
   relevancyScore: number;
+  inputScope?: "page" | "domain_fallback";
   tacticalStatus:
     | "create_content"
     | "green"
@@ -233,6 +239,7 @@ class ProviderHttpClient {
     init: Omit<RequestInit, "headers"> & {
       headers?: Record<string, string>;
     } = {},
+    validate?: (payload: Record<string, unknown>) => void,
   ): Promise<Record<string, unknown>> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 5; attempt += 1) {
@@ -257,10 +264,15 @@ class ProviderHttpClient {
               : null;
           throw new ProviderResponseError(response.status);
         }
-        return record(await response.json());
+        const payload = record(await response.json());
+        validate?.(payload);
+        return payload;
       } catch (error) {
         lastError = error;
-        if (error instanceof ProviderResponseError && !error.retryable) throw error;
+        if (
+          (error instanceof ProviderResponseError || error instanceof DataForSeoTaskError) &&
+          !error.retryable
+        ) throw error;
       }
       if (attempt < 5) {
         await this.wait(
@@ -284,46 +296,56 @@ class ProviderResponseError extends Error {
   }
 }
 
-function ahrefsFailure(error: unknown): HttpError {
+class DataForSeoTaskError extends Error {
+  readonly retryable: boolean;
+
+  constructor(readonly statusCode: number) {
+    super("DataForSEO did not complete the requested task.");
+    this.retryable = statusCode >= 50000 || [40202, 40209].includes(statusCode);
+  }
+}
+
+function backlinksFailure(error: unknown): HttpError {
   const statusCode =
-    error instanceof ProviderResponseError ? error.statusCode : null;
+    error instanceof ProviderResponseError || error instanceof DataForSeoTaskError
+      ? error.statusCode : null;
   console.warn(JSON.stringify({
     event: "provider_request_failed",
-    provider: "ahrefs",
+    provider: "dataforseo_backlinks",
     statusCode,
   }));
-  if (statusCode === 401 || statusCode === 403) {
+  if ([401, 403, 40100, 40104, 40201, 40204, 40207, 40208].includes(statusCode ?? 0)) {
     return new HttpError(
       424,
-      "ahrefs_access_rejected",
-      "Ahrefs rejected the configured API credentials or plan access.",
+      "dataforseo_backlinks_access_rejected",
+      "DataForSEO Backlinks access was rejected. Check API credentials, the Backlinks subscription and IP access settings.",
     );
   }
-  if (statusCode === 402) {
+  if ([402, 40200, 40203, 40205, 40206, 40210].includes(statusCode ?? 0)) {
     return new HttpError(
       424,
-      "ahrefs_usage_exhausted",
-      "Ahrefs reported insufficient API usage allowance for this request.",
+      "dataforseo_backlinks_usage_exhausted",
+      "DataForSEO Backlinks usage is unavailable. Check account balance and API usage limits.",
     );
   }
-  if (statusCode === 429) {
+  if ([429, 40202, 40209].includes(statusCode ?? 0)) {
     return new HttpError(
       424,
-      "ahrefs_rate_limited",
-      "Ahrefs rate limiting did not clear after five attempts.",
+      "dataforseo_backlinks_rate_limited",
+      "DataForSEO Backlinks rate limiting did not clear after five attempts.",
     );
   }
-  if (statusCode !== null && statusCode >= 500) {
+  if (statusCode !== null && ((statusCode >= 500 && statusCode < 600) || statusCode >= 50000)) {
     return new HttpError(
       424,
-      "ahrefs_unavailable",
-      "Ahrefs remained unavailable after five attempts.",
+      "dataforseo_backlinks_unavailable",
+      "DataForSEO Backlinks remained unavailable after five attempts.",
     );
   }
   return new HttpError(
     424,
-    "ahrefs_request_failed",
-    "Ahrefs did not return backlink metrics after five attempts.",
+    "dataforseo_backlinks_request_failed",
+    "DataForSEO did not return usable backlink metrics. Check the affected target and provider availability.",
   );
 }
 
@@ -642,7 +664,7 @@ export class DataForSeoClient {
   async readySerpTaskIds(): Promise<Set<string>> {
     const response = await this.http.json(
       "https://api.dataforseo.com/v3/serp/google/organic/tasks_ready",
-      { method: "POST", body: JSON.stringify([]) },
+      { method: "GET" },
     );
     const ready = new Set<string>();
     for (const task of records(response.tasks)) {
@@ -703,20 +725,54 @@ export class DataForSeoClient {
   }
 }
 
-export class AhrefsClient {
+export class DataForSeoAuthorityClient {
   private readonly http: ProviderHttpClient;
 
   constructor(
-    apiKey: string,
+    credentials: string,
     fetchImplementation: typeof fetch = fetch,
     wait?: (milliseconds: number) => Promise<void>,
   ) {
-    if (!apiKey.trim()) throw new Error("Ahrefs API key is required.");
+    if (!credentials.trim()) throw new Error("DataForSEO credentials are required.");
+    const value = credentials.trim();
     this.http = new ProviderHttpClient(
-      `Bearer ${apiKey}`,
+      `Basic ${value.includes(":") ? Buffer.from(value).toString("base64") : value}`,
       fetchImplementation,
       wait,
     );
+  }
+
+  private async request(path: string, task: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+    const response = await this.http.json(`https://api.dataforseo.com/v3/backlinks/${path}/live`, {
+      method: "POST",
+      body: JSON.stringify([{ ...task, rank_scale: "one_hundred" }]),
+    }, (payload) => {
+      const code = numberOrNull(payload.status_code);
+      if (code !== 20000) throw new DataForSeoTaskError(code ?? 50000);
+      const tasks = records(payload.tasks);
+      if (tasks.length !== 1) throw new DataForSeoTaskError(50000);
+      const taskCode = numberOrNull(tasks[0]?.status_code);
+      if (taskCode !== 20000) throw new DataForSeoTaskError(taskCode ?? 50000);
+    });
+    const results = records(records(response.tasks)[0]?.result);
+    return path === "summary" ? results : records(results[0]?.items);
+  }
+
+  private parse(row: Record<string, unknown>, scope: "domain" | "page"): AuthorityMetrics {
+    const rank = numberOrNull(row.rank);
+    const domainRank = numberOrNull(scope === "domain" ? row.rank : row.main_domain_rank);
+    if ((rank !== null && rank > 100) || (domainRank !== null && domainRank > 100)) {
+      throw new Error("DataForSEO returned authority outside the requested 0–100 scale.");
+    }
+    return {
+      ahrefsRank: null,
+      backlinks: numberOrNull(row.backlinks),
+      domainRating: domainRank,
+      referringDomains: numberOrNull(row.referring_domains),
+      urlRating: scope === "page" ? rank : null,
+      source: "dataforseo",
+      scope,
+    };
   }
 
   async metrics(
@@ -724,227 +780,63 @@ export class AhrefsClient {
   ): Promise<Map<string, AuthorityMetrics>> {
     const output = new Map<string, AuthorityMetrics>();
     try {
-      for (const group of batches(targets, 100)) {
-        const response = await this.http.json(
-          "https://api.ahrefs.com/v3/batch-analysis/batch-analysis",
-          {
-            body: JSON.stringify({
-              output: "json",
-              select: [
-                "url",
-                "url_rating",
-                "domain_rating",
-                "ahrefs_rank",
-                "refdomains",
-                "backlinks",
-              ],
-              targets: group.map((target) => ({
-                mode: target.mode,
-                protocol: "both",
-                url: target.url,
-              })),
-            }),
-            method: "POST",
-          },
-        );
-        const rows = records(response.targets);
-        group.forEach((target, index) => {
-          const row =
-            rows.find((candidate) => candidate.url === target.url) ??
-            rows[index] ??
-            {};
-          output.set(target.url, {
-            ahrefsRank: numberOrNull(row.ahrefs_rank),
-            backlinks: numberOrNull(row.backlinks),
-            domainRating: numberOrNull(row.domain_rating),
-            referringDomains: numberOrNull(
-              row.refdomains ?? row.referring_domains,
-            ),
-            urlRating: numberOrNull(row.url_rating),
-          });
-        });
+      const domains = new Map<string, AuthorityMetrics>();
+      const domainMetrics = async (domain: string) => {
+        const cached = domains.get(domain);
+        if (cached) return cached;
+        const rows = await this.request("summary", { target: domain, include_subdomains: true });
+        const row = rows.find((item) => item.target === domain);
+        if (!row) throw new Error("DataForSEO omitted the requested domain.");
+        const value = this.parse(row, "domain");
+        if ([value.domainRating, value.backlinks, value.referringDomains].some((item) => item === null)) {
+          throw new Error("DataForSEO returned incomplete domain authority.");
+        }
+        domains.set(domain, value);
+        return value;
+      };
+      for (const target of targets.filter((target) => target.mode === "domain")) {
+        output.set(target.url, await domainMetrics(cleanDomain(target.url)));
+      }
+      const urls = [...new Set(targets.filter((target) => target.mode === "exact").map((target) => target.url))];
+      for (const group of batches(urls, 100)) {
+        const rows = await this.request("bulk_pages_summary", { targets: group });
+        for (const url of group) {
+          const row = rows.find((item) => item.url === url);
+          const value = this.parse(row ?? {}, "page");
+          const incomplete = [value.urlRating, value.domainRating, value.backlinks, value.referringDomains].some((item) => item === null);
+          if (incomplete) {
+            const fallback = await domainMetrics(cleanDomain(url));
+            value.urlRating ??= fallback.domainRating;
+            value.domainRating ??= fallback.domainRating;
+            value.backlinks ??= fallback.backlinks;
+            value.referringDomains ??= fallback.referringDomains;
+            value.scope = "domain_fallback";
+          }
+          output.set(url, value);
+        }
       }
     } catch (error) {
-      throw ahrefsFailure(error);
+      throw backlinksFailure(error);
     }
     return output;
-  }
-}
-
-export const ANTHROPIC_MAX_ATTEMPTS = 30;
-export const ANTHROPIC_RETRY_WAIT_MS = 2_000;
-
-export interface AnthropicRetryProgress {
-  attempt: number;
-  batch: number;
-  batchCount: number;
-  maxAttempts: number;
-  waitMilliseconds: number;
-}
-
-type AnthropicRetryReporter = (
-  progress: AnthropicRetryProgress,
-) => Promise<void> | void;
-
-export class AnthropicSiteArchitectureClient {
-  constructor(
-    private readonly apiKey: string,
-    private readonly fetchImplementation: typeof fetch = fetch,
-    private readonly wait: (milliseconds: number) => Promise<void> = (
-      milliseconds,
-    ) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  ) {
-    if (!apiKey.trim()) throw new Error("Anthropic API key is required.");
-  }
-
-  async score(
-    rows: readonly { keyword: string; rankingUrl: string }[],
-    reportRetry: AnthropicRetryReporter = () => undefined,
-  ): Promise<Map<string, Omit<SiteArchitectureResult, "keyword" | "matchedUrl">>> {
-    const output = new Map<
-      string,
-      Omit<SiteArchitectureResult, "keyword" | "matchedUrl">
-    >();
-    const groups = batches(rows, 40);
-    for (const [batchIndex, group] of groups.entries()) {
-      const scores = await this.scoreGroup(
-        group,
-        batchIndex + 1,
-        groups.length,
-        reportRetry,
-      );
-      for (const [keyword, score] of scores) output.set(keyword, score);
-    }
-    return output;
-  }
-
-  private async scoreGroup(
-    group: readonly { keyword: string; rankingUrl: string }[],
-    batch: number,
-    batchCount: number,
-    reportRetry: AnthropicRetryReporter,
-  ): Promise<Map<string, Omit<SiteArchitectureResult, "keyword" | "matchedUrl">>> {
-    for (let attempt = 1; attempt <= ANTHROPIC_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        const response = await this.fetchImplementation(
-          "https://api.anthropic.com/v1/messages",
-          {
-            body: JSON.stringify({
-              max_tokens: 4_000,
-              messages: [
-                {
-                  content: JSON.stringify(
-                    group.map((row, index) => ({ index, ...row })),
-                  ),
-                  role: "user",
-                },
-              ],
-              model: "claude-sonnet-4-6",
-              system:
-                "Return only a JSON array. For each input index return index, relevancyScore from 0 to 100, contentStatus as green/amber/red, and tacticalStatus as no_action_needed/optimise_content/create_content/new_content.",
-            }),
-            headers: {
-              "anthropic-version": "2023-06-01",
-              "content-type": "application/json",
-              "x-api-key": this.apiKey,
-            },
-            method: "POST",
-            signal: AbortSignal.timeout(120_000),
-          },
-        );
-        if (!response.ok) {
-          if (response.status !== 429 && response.status < 500) {
-            throw new HttpError(
-              424,
-              "anthropic_request_rejected",
-              "Claude content-fit scoring could not start. Check the Anthropic provider configuration.",
-            );
-          }
-          throw new Error("Claude content-fit scoring is temporarily unavailable.");
-        }
-        const payload = record(await response.json());
-        const text = records(payload.content)
-          .map((content) => stringOrNull(content.text))
-          .filter((value): value is string => value !== null)
-          .join("\n")
-          .replace(/^```(?:json)?\s*/i, "")
-          .replace(/\s*```$/, "");
-        const parsed: unknown = (() => {
-          try {
-            return JSON.parse(text);
-          } catch {
-            return [];
-          }
-        })();
-        const scores = new Map<
-          string,
-          Omit<SiteArchitectureResult, "keyword" | "matchedUrl">
-        >();
-        for (const value of records(parsed)) {
-          const index = numberOrNull(value.index);
-          const score = numberOrNull(value.relevancyScore);
-          const contentStatus = stringOrNull(value.contentStatus);
-          const tacticalStatus = stringOrNull(value.tacticalStatus);
-          const row = index === null ? null : group[Math.round(index)];
-          if (
-            !row ||
-            score === null ||
-            score > 100 ||
-            !["amber", "green", "red"].includes(contentStatus ?? "") ||
-            ![
-              "create_content",
-              "new_content",
-              "no_action_needed",
-              "optimise_content",
-            ].includes(tacticalStatus ?? "")
-          ) {
-            continue;
-          }
-          scores.set(normaliseKeyword(row.keyword), {
-            contentStatus: contentStatus as "amber" | "green" | "red",
-            relevancyScore: score,
-            tacticalStatus: tacticalStatus as SiteArchitectureResult["tacticalStatus"],
-          });
-        }
-        if (scores.size !== group.length) {
-          throw new Error("Claude returned an incomplete content-fit result.");
-        }
-        return scores;
-      } catch (error) {
-        if (error instanceof HttpError) throw error;
-        if (attempt === ANTHROPIC_MAX_ATTEMPTS) break;
-        const progress: AnthropicRetryProgress = {
-          attempt: attempt + 1,
-          batch,
-          batchCount,
-          maxAttempts: ANTHROPIC_MAX_ATTEMPTS,
-          waitMilliseconds: ANTHROPIC_RETRY_WAIT_MS,
-        };
-        console.warn(
-          `Claude content-fit batch ${batch}/${batchCount} did not return a usable result; retrying attempt ${progress.attempt}/${progress.maxAttempts} in 2s.`,
-        );
-        try {
-          await reportRetry(progress);
-        } catch {
-          console.warn("Claude retry progress could not be recorded.");
-        }
-        await this.wait(ANTHROPIC_RETRY_WAIT_MS);
-      }
-    }
-    throw new HttpError(
-      424,
-      "anthropic_retry_exhausted",
-      "Claude content-fit scoring did not return a usable result after 30 attempts.",
-    );
   }
 }
 
 export interface PipelineProviderHydrator {
+  refineStage?(
+    pool: DatabasePool,
+    projectId: string,
+    runId: string,
+    source: ProjectPipelineSource,
+    data: DataDrivenStageData,
+    deadline?: number,
+  ): Promise<DataDrivenStageData>;
   hydrate(
     pool: DatabasePool,
     projectId: string,
     runId: string,
     stageId: PipelineStageId,
+    deadline?: number,
   ): Promise<void>;
 }
 
@@ -957,8 +849,8 @@ export const SERP_HYDRATION_BUDGET_MS = 1_700_000;
 export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
   constructor(
     private readonly dataForSeo: DataForSeoClient,
-    private readonly ahrefs: AhrefsClient,
-    private readonly siteArchitecture: AnthropicSiteArchitectureClient,
+    private readonly authorityProvider: DataForSeoAuthorityClient,
+    private readonly ai: OpenRouterPipelineClient,
     private readonly wait: (milliseconds: number) => Promise<void> = (
       milliseconds,
     ) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -970,11 +862,85 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     private readonly serpSubmitChunk = SERP_SUBMIT_CHUNK,
   ) {}
 
+  private aiOptions(pool: DatabasePool, projectId: string, runId: string, stageId: PipelineStageId, deadline?: number): AiOptions {
+    let completedBatches: Promise<Map<string, unknown>> | undefined;
+    return {
+      deadline,
+      cache: {
+        startAttempt: async (key) => {
+          const result = await pool.query<{ attempt_count: number }>(
+            `INSERT INTO provider_work_items (pipeline_run_id, project_id, stage_id, item_key, provider, state, attempt_count)
+             VALUES ($1, $2, $3, $4, 'openrouter', 'pending', 1)
+             ON CONFLICT (pipeline_run_id, stage_id, item_key) DO UPDATE
+             SET attempt_count = provider_work_items.attempt_count + 1, updated_at = now()
+             RETURNING attempt_count`, [runId, projectId, stageId, key]);
+          return result.rows[0]!.attempt_count;
+        },
+        get: async (key) => {
+          completedBatches ??= pool.query<{ item_key: string; result: unknown }>(
+            `SELECT result, item_key FROM provider_work_items
+             WHERE pipeline_run_id = $1 AND stage_id = $2
+               AND provider = 'openrouter' AND state = 'succeeded'`, [runId, stageId])
+            .then((result) => new Map(result.rows.map((row) => [row.item_key, row.result])));
+          return (await completedBatches).get(key);
+        },
+        set: async (key, output) => {
+          await pool.query(
+            `INSERT INTO provider_work_items (pipeline_run_id, project_id, stage_id, item_key, provider, state, result, completed_at)
+             VALUES ($1, $2, $3, $4, 'openrouter', 'succeeded', $5::jsonb, now())
+             ON CONFLICT (pipeline_run_id, stage_id, item_key) DO UPDATE
+             SET state = 'succeeded', result = EXCLUDED.result, completed_at = now(), updated_at = now()`,
+            [runId, projectId, stageId, key, JSON.stringify(output)]);
+          (await completedBatches)?.set(key, output);
+        },
+      },
+      progress: async (progress) => {
+        await pool.query(
+          `UPDATE pipeline_stage_runs SET output = COALESCE(output, '{}'::jsonb) ||
+             jsonb_build_object('message', $3::text, 'provider', 'openrouter', 'model', $4::text, 'providerProgress', $5::jsonb)
+           WHERE run_id = $1 AND stage_id = $2 AND state = 'running'`,
+          [runId, stageId, `GLM 5.3 Flash: ${progress.operation}, batch ${progress.batch} of ${progress.batchCount}, attempt ${progress.attempt} of ${progress.maxAttempts}.`, OPENROUTER_MODEL, JSON.stringify(progress)]);
+      },
+    };
+  }
+
+  async refineStage(pool: DatabasePool, projectId: string, runId: string, source: ProjectPipelineSource, data: DataDrivenStageData, deadline?: number): Promise<DataDrivenStageData> {
+    const mode = await pool.query<{ mode: string }>(`SELECT input->>'mode' AS mode FROM pipeline_runs WHERE id = $1`, [runId]);
+    if (mode.rows[0]?.mode === "recalculate") return data;
+    if (data.handlerVersion === "detox-v1") {
+      const candidates = data.keywords.filter((keyword) => keyword.detox.rule === "manual-review" || keyword.detox.rule === "category-relevance");
+      const decisions = await this.ai.detox(candidates.map((keyword) => ({ keyword: keyword.text })), source, this.aiOptions(pool, projectId, runId, "detox", deadline));
+      const keywords = data.keywords.map((keyword) => {
+        const decision = decisions.get(keyword.normalisedText);
+        return decision ? { ...keyword, detox: { ...decision, rule: `openrouter:${OPENROUTER_MODEL}` } } : keyword;
+      });
+      return { ...data, keywords,
+        keptKeywordCount: keywords.filter((keyword) => keyword.detox.decision === "keep").length,
+        removedKeywordCount: keywords.filter((keyword) => keyword.detox.decision === "remove").length,
+        reviewKeywordCount: keywords.filter((keyword) => keyword.detox.decision === "review").length,
+      };
+    }
+    if (data.handlerVersion === "categorisation-v1") {
+      const candidates = data.keywords.filter((keyword) => !keyword.preCurated);
+      const categories = await this.ai.categorise(candidates.map((keyword) => ({ keyword: keyword.text })), source, this.aiOptions(pool, projectId, runId, "categorisation", deadline));
+      const keywords = data.keywords.map((keyword) => {
+        const category = categories.get(keyword.normalisedText);
+        return category ? { ...keyword, categorisation: { ...category, source: "openrouter" as const, tier: decideTier(keyword.text, category.intent) } } : keyword;
+      });
+      return { ...data, keywords, summary: { ...data.summary,
+        liveKeywordCount: keywords.filter((keyword) => keyword.categorisation.tier === "live").length,
+        deferredKeywordCount: keywords.filter((keyword) => keyword.categorisation.tier === "deferred").length,
+      } };
+    }
+    return data;
+  }
+
   async hydrate(
     pool: DatabasePool,
     projectId: string,
     runId: string,
     stageId: PipelineStageId,
+    deadline?: number,
   ): Promise<void> {
     const runResult = await pool.query<{ mode: string | null }>(
       `SELECT input->>'mode' AS mode FROM pipeline_runs WHERE id = $1`,
@@ -1001,7 +967,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         await this.hydrateBacklinks(pool, projectId);
         return;
       case "site-architecture":
-        await this.hydrateSiteArchitecture(pool, projectId, runId);
+        await this.hydrateSiteArchitecture(pool, projectId, runId, deadline);
         return;
       default:
         return;
@@ -1549,12 +1515,16 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       backlinks: string;
       domain_rating: string;
       referring_domains: number;
+      authority_metric_source: string | null;
+      authority_fetched_at: Date | null;
     }>(
       `
         SELECT
           authority_domain_rating::text AS domain_rating,
           authority_referring_domains AS referring_domains,
-          authority_backlinks::text AS backlinks
+          authority_backlinks::text AS backlinks,
+          authority_metric_source,
+          authority_fetched_at
         FROM navigator_projects
         WHERE id = $1
       `,
@@ -1563,9 +1533,11 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     const stored = current.rows[0];
     if (
       stored &&
-      (Number(stored.domain_rating) > 0 ||
+      ((stored.authority_metric_source === "dataforseo" && stored.authority_fetched_at &&
+        stored.authority_fetched_at.getTime() >= this.now() - 30 * 86_400_000) ||
+      (!stored.authority_metric_source && (Number(stored.domain_rating) > 0 ||
         stored.referring_domains > 0 ||
-        Number(stored.backlinks) > 0)
+        Number(stored.backlinks) > 0)))
     ) {
       return;
     }
@@ -1584,6 +1556,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           fetched_at
         FROM authority_domain_cache
         WHERE domain = $1
+          AND metric_source = 'dataforseo'
           AND fetched_at >= now() - interval '30 days'
       `,
       [domain],
@@ -1596,6 +1569,8 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           SET authority_domain_rating = COALESCE($2, authority_domain_rating),
               authority_referring_domains = COALESCE($3, authority_referring_domains),
               authority_backlinks = COALESCE($4, authority_backlinks),
+              authority_metric_source = 'dataforseo',
+              authority_fetched_at = $5,
               updated_at = now()
           WHERE id = $1
         `,
@@ -1604,15 +1579,16 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           cachedValue.domainRating,
           cachedValue.referringDomains,
           cachedValue.backlinks,
+          cachedValue.fetched_at,
         ],
       );
       return;
     }
-    const metrics = await this.ahrefs.metrics([
+    const metrics = await this.authorityProvider.metrics([
       { mode: "domain", url: domain },
     ]);
     const value = metrics.get(domain);
-    if (!value) throw new Error("Ahrefs returned no client-domain record.");
+    if (!value) throw new Error("DataForSEO returned no client-domain record.");
     await pool.query(
       `
         UPDATE navigator_projects
@@ -1620,6 +1596,8 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           authority_domain_rating = COALESCE($2, authority_domain_rating),
           authority_referring_domains = COALESCE($3, authority_referring_domains),
           authority_backlinks = COALESCE($4, authority_backlinks),
+          authority_metric_source = 'dataforseo',
+          authority_fetched_at = now(),
           updated_at = now()
         WHERE id = $1
       `,
@@ -1641,7 +1619,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           metric_source,
           fetched_at
         )
-        VALUES ($1, $2, $3, $4, $5, 'ahrefs', now())
+        VALUES ($1, $2, $3, $4, $5, 'dataforseo', now())
         ON CONFLICT (domain)
         DO UPDATE SET
           domain_rating = EXCLUDED.domain_rating,
@@ -1676,7 +1654,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       [projectId],
     );
     const cached = await pool.query<
-      AuthorityMetrics & { url: string }
+      AuthorityMetrics & { url: string; fetchedAt: Date }
     >(
       `
         SELECT
@@ -1685,21 +1663,25 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           domain_rating AS "domainRating",
           ahrefs_rank AS "ahrefsRank",
           referring_domains AS "referringDomains",
-          backlinks
+          backlinks,
+          metric_source AS source,
+          authority_scope AS scope,
+          fetched_at AS "fetchedAt"
         FROM authority_url_cache
         WHERE url = ANY($1::text[])
+          AND metric_source = 'dataforseo'
           AND fetched_at >= now() - interval '30 days'
       `,
       [result.rows.map((row) => row.url)],
     );
-    const metrics = new Map<string, AuthorityMetrics>(
+    const metrics = new Map<string, AuthorityMetrics & { fetchedAt?: Date }>(
       cached.rows.map((row) => [row.url, row]),
     );
     const missingUrls = result.rows
       .map((row) => row.url)
       .filter((url) => !metrics.has(url));
     if (missingUrls.length > 0) {
-      const fetched = await this.ahrefs.metrics(
+      const fetched = await this.authorityProvider.metrics(
         missingUrls.map((url) => ({ mode: "exact" as const, url })),
       );
       for (const [url, value] of fetched) metrics.set(url, value);
@@ -1717,9 +1699,10 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
               referring_domains,
               backlinks,
               metric_source,
+              authority_scope,
               fetched_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'ahrefs', now())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'dataforseo', $8, COALESCE($9, now()))
             ON CONFLICT (url)
             DO UPDATE SET
               domain = EXCLUDED.domain,
@@ -1729,6 +1712,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
               referring_domains = EXCLUDED.referring_domains,
               backlinks = EXCLUDED.backlinks,
               metric_source = EXCLUDED.metric_source,
+              authority_scope = EXCLUDED.authority_scope,
               fetched_at = EXCLUDED.fetched_at,
               updated_at = now()
           `,
@@ -1740,6 +1724,8 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
             value.ahrefsRank,
             value.referringDomains,
             value.backlinks,
+            value.scope ?? "page",
+            value.fetchedAt ?? null,
           ],
         );
         await client.query(
@@ -1750,7 +1736,9 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
               domain_rating = $4,
               ahrefs_rank = $5,
               referring_domains = $6,
-              backlinks = $7
+              backlinks = $7,
+              metric_source = 'dataforseo',
+              authority_scope = $8
             WHERE project_id = $1
               AND url = $2
           `,
@@ -1762,6 +1750,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
             value.ahrefsRank,
             value.referringDomains,
             value.backlinks,
+            value.scope ?? "page",
           ],
         );
       }
@@ -1772,15 +1761,11 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     pool: DatabasePool,
     projectId: string,
     runId: string,
+    deadline?: number,
   ): Promise<void> {
     const keywords = await this.keywords(pool, projectId);
-    const requiresScoring = keywords.filter(
-      (
-        keyword,
-      ): keyword is KeywordProviderRow & {
-        ranking_url: string;
-      } => Boolean(keyword.ranking_url),
-    );
+    const project = await this.project(pool, projectId);
+    const requiresScoring = keywords;
     if (requiresScoring.length === 0) {
       await pool.query(
         `DELETE FROM local_provider_site_architecture_inputs WHERE project_id = $1`,
@@ -1788,29 +1773,13 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       );
       return;
     }
-    const scores = await this.siteArchitecture.score(
+    const scores = await this.ai.score(
       requiresScoring.map((keyword) => ({
         keyword: keyword.keyword,
-        rankingUrl: keyword.ranking_url,
+        rankingUrl: keyword.ranking_url ?? `https://${cleanDomain(project.domain)}/`,
+        scope: keyword.ranking_url ? "page" : "domain_fallback",
       })),
-      async (progress) => {
-        await pool.query(
-          `
-            UPDATE pipeline_stage_runs
-            SET output = COALESCE(output, '{}'::jsonb) || jsonb_build_object(
-              'message', $3::text
-            )
-            WHERE run_id = $1
-              AND stage_id = $2
-              AND state = 'running'
-          `,
-          [
-            runId,
-            "site-architecture",
-            `Claude is scoring content-fit batch ${progress.batch} of ${progress.batchCount}; retrying attempt ${progress.attempt} of ${progress.maxAttempts} in 2s.`,
-          ],
-        );
-      },
+      this.aiOptions(pool, projectId, runId, "site-architecture", deadline),
     );
     const values: SiteArchitectureResult[] = requiresScoring.map((keyword) => {
       const score = scores.get(keyword.normalised_keyword);
@@ -1824,21 +1793,11 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         keyword: keyword.keyword,
         matchedUrl: keyword.ranking_url,
         relevancyScore: score.relevancyScore,
+        inputScope: keyword.ranking_url ? "page" : "domain_fallback",
         tacticalStatus: score.tacticalStatus,
       };
     });
     await withTransaction(pool, async (client) => {
-      await client.query(
-        `
-          DELETE FROM local_provider_site_architecture_inputs AS input
-          USING keywords AS keyword
-          WHERE input.project_id = $1
-            AND keyword.project_id = $1
-            AND keyword.normalised_keyword = input.normalised_keyword
-            AND keyword.ranking_url IS NULL
-        `,
-        [projectId],
-      );
       for (const value of values) {
         await client.query(
           `
@@ -1849,16 +1808,20 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
               matched_url,
               relevancy_score,
               content_status,
-              tactical_status
+              tactical_status,
+              metric_source,
+              input_scope
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (project_id, normalised_keyword)
             DO UPDATE SET
               keyword = EXCLUDED.keyword,
               matched_url = EXCLUDED.matched_url,
               relevancy_score = EXCLUDED.relevancy_score,
               content_status = EXCLUDED.content_status,
-              tactical_status = EXCLUDED.tactical_status
+              tactical_status = EXCLUDED.tactical_status,
+              metric_source = EXCLUDED.metric_source,
+              input_scope = EXCLUDED.input_scope
           `,
           [
             projectId,
@@ -1868,6 +1831,8 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
             value.relevancyScore,
             value.contentStatus,
             value.tacticalStatus,
+            `openrouter:${OPENROUTER_MODEL}`,
+            value.inputScope,
           ],
         );
       }

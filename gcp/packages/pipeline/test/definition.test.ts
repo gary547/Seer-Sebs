@@ -70,7 +70,9 @@ describe("canonical pipeline definition", () => {
         "har-readiness",
       ]),
     );
-    expect(harAncestors.has("categorisation")).toBe(false);
+    expect(harAncestors.has("categorisation")).toBe(true);
+    expect(collectAncestors("keyword-enrichment").has("categorisation")).toBe(true);
+    expect(collectAncestors("gsc-intent").has("categorisation")).toBe(true);
   });
 
   it("orders Revenue v2 and calibration after their full dependency chain", () => {

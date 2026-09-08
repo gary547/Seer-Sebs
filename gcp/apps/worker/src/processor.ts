@@ -28,6 +28,8 @@ import {
   projectIdFromInput,
 } from "./project-data.js";
 import type { PipelineProviderHydrator } from "./live-providers.js";
+import { restoreKeywordDecisions } from "./recalculation.js";
+import { StageContinuation, STAGE_EXECUTION_BUDGET_MS } from "./stage-continuation.js";
 
 export interface StageTask {
   runId: string;
@@ -71,6 +73,7 @@ interface MarkRunningResult {
 export interface StageExecutionOptions {
   allowLocalFailureInjection?: boolean;
   providerHydrator?: PipelineProviderHydrator;
+  stageBudgetMilliseconds?: number;
 }
 
 export function pipelineStageExecutionError(error: unknown): unknown {
@@ -292,16 +295,19 @@ async function loadDependencyOutputs(
   dependencies: readonly PipelineStageId[],
 ): Promise<Partial<Record<PipelineStageId, unknown>>> {
   if (dependencies.length === 0) return {};
-  const result = await pool.query<DependencyOutputRow>(
-    `
-      SELECT stage_id, output
-      FROM pipeline_stage_runs
-      WHERE run_id = $1
-        AND stage_id = ANY($2::text[])
-        AND state = 'succeeded'
-    `,
-    [runId, dependencies],
-  );
+  const result = await withTransaction(pool, async (client) => {
+    await client.query("SET LOCAL statement_timeout = '600s'");
+    return client.query<DependencyOutputRow>(
+      `
+        SELECT stage_id, output
+        FROM pipeline_stage_runs
+        WHERE run_id = $1
+          AND stage_id = ANY($2::text[])
+          AND state = 'succeeded'
+      `,
+      [runId, dependencies],
+    );
+  });
   const outputs = Object.fromEntries(
     result.rows.map((row) => [row.stage_id, row.output]),
   ) as Partial<Record<PipelineStageId, unknown>>;
@@ -316,6 +322,26 @@ export async function executeStageTask(
   pool: DatabasePool,
   task: StageTask,
   options: StageExecutionOptions = {},
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + (options.stageBudgetMilliseconds ?? STAGE_EXECUTION_BUDGET_MS);
+  try {
+    return await executeStageAttempt(pool, task, options, deadline);
+  } catch (error) {
+    if (!(error instanceof StageContinuation)) throw error;
+    await pool.query(
+      `UPDATE pipeline_stage_runs
+       SET output = COALESCE(output, '{}'::jsonb) || jsonb_build_object('message', $3::text)
+       WHERE run_id = $1 AND stage_id = $2 AND state = 'running'`,
+      [task.runId, task.stageId, error.message]);
+    return { runId: task.runId, stageId: task.stageId, status: "continuing" };
+  }
+}
+
+async function executeStageAttempt(
+  pool: DatabasePool,
+  task: StageTask,
+  options: StageExecutionOptions,
+  deadline: number,
 ): Promise<Record<string, unknown>> {
   const definition = PIPELINE_STAGES.find((stage) => stage.id === task.stageId);
 
@@ -370,6 +396,7 @@ export async function executeStageTask(
       projectId,
       task.runId,
       task.stageId,
+      deadline,
     );
   }
   const source: ProjectPipelineSource | null =
@@ -387,6 +414,12 @@ export async function executeStageTask(
       : null;
   } catch (error) {
     throw pipelineStageExecutionError(error);
+  }
+  if (!fixture && projectId && source && stageData && options.providerHydrator?.refineStage) {
+    stageData = await options.providerHydrator.refineStage(pool, projectId, task.runId, source, stageData, deadline);
+  }
+  if (!fixture && projectId && stageData && runMode === "recalculate") {
+    stageData = await restoreKeywordDecisions(pool, projectId, stageData);
   }
   const digest = createHash("sha256")
     .update(`${task.runId}:${task.stageId}`)
@@ -429,6 +462,7 @@ export async function executeStageTask(
       await persistProjectStageData(client, projectId, task.runId, stageData);
     }
 
+    await client.query("SET LOCAL statement_timeout = '600s'");
     await client.query(
       `
         UPDATE pipeline_stage_runs

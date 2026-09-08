@@ -536,7 +536,7 @@ async function validateEndToEnd() {
       (summary) =>
         summary.bandMethod === "conf_interp_band_v1" &&
         summary.forecastCount === 12 &&
-        summary.modelVersion === "revenue_v2.1.0" &&
+        summary.modelVersion === "revenue_v2.1.1" &&
         summary.monthlyForecastCount === 12,
     ) ||
     calculations.calibration?.matched < 1 ||

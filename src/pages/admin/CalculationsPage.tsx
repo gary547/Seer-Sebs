@@ -10,6 +10,7 @@ import { Link, Navigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import CalculationControlPanels from "@/components/admin/CalculationControlPanels";
+import CalculationExportButton from "@/components/CalculationExportButton";
 import CalculationInspectors from "@/components/admin/CalculationInspectors";
 import AutonomousPipelinePanel from "@/components/admin/AutonomousPipelinePanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -248,6 +249,7 @@ export default function CalculationsPage() {
                 ))}
               </SelectContent>
             </Select>
+            {projectId && !archived && <CalculationExportButton projectId={projectId} disabled={latestRun?.status !== "succeeded"} />}
             {projectId && !archived && (
               <Button variant="outline" asChild>
                 <Link to={`/admin/projects/${projectId}/conversion-overrides`}>
@@ -309,6 +311,7 @@ export default function CalculationsPage() {
       {projectId && !archived && (
         <AutonomousPipelinePanel
           archived={archived}
+          hasCompletedRun={Boolean(summary.data?.runId)}
           onSaveBrandTerms={saveBrandTerms}
           onRun={runPipeline}
           onSavePolicy={savePolicy}

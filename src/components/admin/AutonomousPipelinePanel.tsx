@@ -116,6 +116,7 @@ function StageMeter({ stage }: { stage: PipelineStage | undefined }) {
 
 interface Props {
   archived: boolean;
+  hasCompletedRun?: boolean;
   onSaveBrandTerms: (brandTerms: string[]) => Promise<void>;
   onRun: (mode: RunMode) => Promise<void>;
   onSavePolicy: (policy: PipelineReadiness["policy"]) => Promise<void>;
@@ -130,6 +131,7 @@ interface Props {
 
 export default function AutonomousPipelinePanel({
   archived,
+  hasCompletedRun = false,
   onSaveBrandTerms,
   onRun,
   onSavePolicy,
@@ -150,6 +152,8 @@ export default function AutonomousPipelinePanel({
     competitiveFloor ??
     String(readiness?.policy.competitiveEnrichmentVolumeFloor ?? 0);
   const canRun = Boolean(readiness?.ready) && !archived && !running;
+  const canRestoreQualification = hasCompletedRun && readiness?.missing.length === 1 && readiness.missing[0] === "qualified_keywords";
+  const canRecalculate = (Boolean(readiness?.ready) || canRestoreQualification) && !archived && !running;
   const configuredBrandTerms = readiness?.configuration.explicitBrandTerms ?? [];
   const displayedBrandTerms = configuredBrandTerms.length
     ? configuredBrandTerms
@@ -442,8 +446,9 @@ export default function AutonomousPipelinePanel({
             </Button>
             <Button
               disabled={
-                !canRun ||
-                run?.status !== "succeeded" ||
+                !canRecalculate ||
+                (!hasCompletedRun && run?.status !== "succeeded") ||
+                run?.status === "running" || run?.status === "pending" ||
                 readiness?.dirty.keywords ||
                 readiness?.dirty.serp
               }

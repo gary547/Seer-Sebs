@@ -108,6 +108,7 @@ locals {
   secret_names = toset([
     "seer-ahrefs-api-key",
     "seer-anthropic-api-key",
+    "seer-openrouter-api-key",
     "seer-dataforseo-credentials",
     "seer-internal-service-token",
     "seer-workspace-oauth",

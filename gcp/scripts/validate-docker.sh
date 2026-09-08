@@ -118,6 +118,9 @@ docker compose -f "$compose_file" exec -T postgres \
   -f /docker-entrypoint-initdb.d/031_calculation_inspector_indexes.sql
 docker compose -f "$compose_file" exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
+  -f /docker-entrypoint-initdb.d/032_provider_migration_contract.sql
+docker compose -f "$compose_file" exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
   -f /docker-entrypoint-initdb.d/999_local_runtime_users.sql
 docker compose -f "$compose_file" up -d --wait
 
@@ -126,6 +129,7 @@ run_npm run test:gcp-database-canonical
 run_npm run test:gcp-url-monitor-maintenance
 run_npm run test:gcp-backup-restore
 run_npm run test:gcp-database-access
+run_npm run test:gcp-volume-history
 
 SEER_LOCAL_VALIDATION_STATE="$validation_state" "$node_executable" gcp/scripts/validate-local.mjs
 "$node_executable" gcp/scripts/validate-synthetic.mjs

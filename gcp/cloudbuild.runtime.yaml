@@ -242,6 +242,12 @@ steps:
       set -a
       source /workspace/release/image.env
       set +a
+      openrouter_secret_state="$(gcloud secrets versions describe latest \
+        --secret=seer-openrouter-api-key --project="${PROJECT_ID}" --format='value(state)')"
+      if [[ "${openrouter_secret_state}" != "ENABLED" ]]; then
+        echo "Provision the approved OpenRouter credential before releasing the pipeline worker." >&2
+        exit 1
+      fi
       gcloud run jobs update seer-database-migration \
         --image="${SEER_RELEASE_DATABASE_IMAGE}" \
         --project="${PROJECT_ID}" \
@@ -254,11 +260,17 @@ steps:
         --quiet
       for service in seer-api seer-worker seer-events
       do
-        gcloud run services update "${service}" \
-          --image="${SEER_RELEASE_IMAGE}" \
-          --project="${PROJECT_ID}" \
-          --region="${_REGION}" \
+        service_flags=(
+          --image="${SEER_RELEASE_IMAGE}"
+          --project="${PROJECT_ID}"
+          --region="${_REGION}"
           --quiet
+        )
+        if [[ "${service}" == "seer-worker" ]]; then
+          service_flags+=(--update-secrets=OPENROUTER_API_KEY=seer-openrouter-api-key:latest)
+          service_flags+=(--remove-secrets=AHREFS_API_KEY,ANTHROPIC_API_KEY)
+        fi
+        gcloud run services update "${service}" "${service_flags[@]}"
       done
       gcloud workflows deploy seer-pipeline \
         --description="Durable 24-stage SEER calculation pipeline" \

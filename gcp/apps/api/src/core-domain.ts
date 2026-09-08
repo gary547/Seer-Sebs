@@ -329,6 +329,8 @@ interface ClientAuthorityRow {
 }
 
 interface LinkPowerDetailRow {
+  metric_source: string;
+  authority_scope: string;
   backlinks: string | null;
   confidence: string;
   domain: string;
@@ -3183,7 +3185,9 @@ export async function getProjectLinkPowerInspector(
           result.referring_domains::text,
           result.backlinks::text,
           score.score::text,
-          score.confidence
+          score.confidence,
+          result.metric_source,
+          result.authority_scope
         FROM link_power_scores AS score
         JOIN keywords AS keyword ON keyword.id = score.keyword_id
         JOIN serp_results AS result ON result.id = score.serp_result_id
@@ -3292,6 +3296,8 @@ export async function getProjectLinkPowerInspector(
     })),
     items: items.rows.map((row) => ({
       backlinks: row.backlinks === null ? null : Number(row.backlinks),
+      metricSource: row.metric_source,
+      authorityScope: row.authority_scope,
       confidence: row.confidence,
       domain: row.domain,
       domainRating:

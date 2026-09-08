@@ -58,6 +58,7 @@ import {
   deleteProjectGscUpload,
   getProjectCalculationControl,
 } from "./calculation-control.js";
+import { getCalculationExportPage } from "./calculation-export.js";
 import {
   assertApprovedUser,
   getCurrentProfile,
@@ -517,6 +518,7 @@ async function handleRequest(
     "/calculation-control",
   );
   const projectGscUpload = projectGscUploadPath(url.pathname);
+  const calculationExportProjectId = uuidSubresourcePath(url.pathname, "/v1/projects/", "/calculation-export");
   const forecastRowsProjectId = uuidSubresourcePath(
     url.pathname,
     "/v1/projects/",
@@ -702,6 +704,7 @@ async function handleRequest(
     serpFeaturesProjectId !== null ||
     calculationsProjectId !== null ||
     calculationInspectorProjectId !== null ||
+    calculationExportProjectId !== null ||
     linkPowerInspectorProjectId !== null ||
     calculationControlProjectId !== null ||
     projectGscUpload !== null ||
@@ -1874,6 +1877,12 @@ async function handleRequest(
         calculationsProjectId,
       ),
     );
+    return;
+  }
+
+  if (calculationExportProjectId) {
+    if (method !== "GET") methodNotAllowed(response, ["GET"]);
+    sendJson(response, 200, await getCalculationExportPage(runtime.pool, user, calculationExportProjectId, url.searchParams));
     return;
   }
 

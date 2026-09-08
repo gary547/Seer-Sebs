@@ -14,6 +14,7 @@ import {
 
 import {
   calculationFlags,
+  harOutcomeLabel,
   type DiagnosticFlag,
   humanise,
 } from "@/components/admin/calculationDiagnostics";
@@ -341,7 +342,9 @@ export default function CalculationInspectors({ projectId, summary }: Props) {
                           </TableCell>
                           {SCENARIOS.map((scenario) => (
                             <TableCell key={scenario} className="text-right font-mono tabular-nums">
-                              {number(row.scenarios[scenario]?.harPosition, 0)}
+                              {row.scenarios[scenario]?.harPosition == null
+                                ? <span className="text-[11px]" title={harOutcomeLabel(row.scenarios[scenario]?.explanation)}>{harOutcomeLabel(row.scenarios[scenario]?.explanation)}</span>
+                                : number(row.scenarios[scenario]?.harPosition, 0)}
                             </TableCell>
                           ))}
                           <TableCell className="text-right font-mono tabular-nums">
@@ -544,13 +547,16 @@ export default function CalculationInspectors({ projectId, summary }: Props) {
                 <Badge variant="outline">{humanise(linkPower.data.clientAuthority.metricSource)}</Badge>
               </div>
               <dl className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                <Detail label="UR" value={number(linkPower.data.clientAuthority.urlRating)} />
-                <Detail label="DR" value={number(linkPower.data.clientAuthority.domainRating)} />
-                <Detail label="Ahrefs rank" value={number(linkPower.data.clientAuthority.ahrefsRank, 0)} />
+                <Detail label="Page authority" value={number(linkPower.data.clientAuthority.urlRating)} />
+                <Detail label="Domain authority" value={number(linkPower.data.clientAuthority.domainRating)} />
+                {linkPower.data.clientAuthority.ahrefsRank !== null && <Detail label="Legacy Ahrefs rank" value={number(linkPower.data.clientAuthority.ahrefsRank, 0)} />}
                 <Detail label="Ref. domains" value={number(linkPower.data.clientAuthority.referringDomains, 0)} />
                 <Detail label="Backlinks" value={number(linkPower.data.clientAuthority.backlinks, 0)} />
                 <Detail label="Fetched" value={new Date(linkPower.data.clientAuthority.fetchedAt).toLocaleDateString("en-GB")} />
               </dl>
+              {linkPower.data.clientAuthority.metricSource === "dataforseo" && (
+                <p className="mt-3 text-xs text-ink-muted">DataForSEO authority uses a 0–100 scale. It is a comparable input, not an identical Ahrefs score.</p>
+              )}
             </div>
           )}
 
@@ -575,11 +581,12 @@ export default function CalculationInspectors({ projectId, summary }: Props) {
                       <TableHead className="text-right">Rank</TableHead>
                       <TableHead>Domain</TableHead>
                       <TableHead className="text-right">LPS</TableHead>
-                      <TableHead className="text-right">UR</TableHead>
-                      <TableHead className="text-right">DR</TableHead>
+                      <TableHead className="text-right">Page authority</TableHead>
+                      <TableHead className="text-right">Domain authority</TableHead>
                       <TableHead className="text-right">Ref. domains</TableHead>
                       <TableHead className="text-right">Backlinks</TableHead>
                       <TableHead>Confidence</TableHead>
+                      <TableHead>Source / scope</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -603,6 +610,10 @@ export default function CalculationInspectors({ projectId, summary }: Props) {
                         <TableCell className="text-right font-mono tabular-nums">{number(row.referringDomains, 0)}</TableCell>
                         <TableCell className="text-right font-mono tabular-nums">{number(row.backlinks, 0)}</TableCell>
                         <TableCell><Badge variant="outline">{row.confidence}</Badge></TableCell>
+                        <TableCell>
+                          <div className="text-xs">{humanise(row.metricSource ?? "unknown")}</div>
+                          <Badge variant={row.authorityScope === "domain_fallback" ? "secondary" : "outline"}>{humanise(row.authorityScope ?? "page")}</Badge>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -642,7 +653,7 @@ export default function CalculationInspectors({ projectId, summary }: Props) {
                 <div key={scenario} className="rounded-lg border border-hairline bg-canvas/50 p-4">
                   <div className="text-xs font-semibold uppercase tracking-[0.14em] text-signal">{scenario}</div>
                   <dl className="mt-3 space-y-2 text-xs">
-                    <Detail label="HAR" value={number(item?.harPosition, 0)} />
+                    <Detail label="HAR" value={item?.harPosition == null ? harOutcomeLabel(item?.explanation) : number(item.harPosition, 0)} />
                     <Detail label="Confidence" value={percent(item?.harConfidence)} />
                     <Detail label="Attainment" value={percent(item?.rankAttainmentProbability)} />
                     <Detail label="LPS" value={number(item?.linkPowerScore)} />

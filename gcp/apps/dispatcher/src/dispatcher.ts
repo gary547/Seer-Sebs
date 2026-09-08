@@ -4,6 +4,7 @@ import type { PoolClient } from "pg";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
+import { pipelineStageFailureMessage, userFacingPipelineFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 import {
   PIPELINE_STAGES,
   type PipelineStageId,
@@ -222,9 +223,10 @@ async function retryOrFailTask(
   pool: DatabasePool,
   task: TaskRow,
   error: string,
+  terminal = false,
 ): Promise<void> {
   await withTransaction(pool, async (client) => {
-    if (task.attempt_count < MAXIMUM_ATTEMPTS) {
+    if (!terminal && task.attempt_count < MAXIMUM_ATTEMPTS) {
       await client.query(
         `
           UPDATE local_task_queue
@@ -256,18 +258,16 @@ async function retryOrFailTask(
       `
         UPDATE pipeline_stage_runs
         SET state = 'failed',
-            output = COALESCE(
-              output,
-              jsonb_build_object(
+            output = COALESCE(output, '{}'::jsonb) || jsonb_build_object(
                 'reason', 'pipeline_failed',
-                'failedStage', $2::text
-              )
+                'failedStage', $2::text,
+                'message', $3::text
             ),
             completed_at = COALESCE(completed_at, now())
         WHERE run_id = $1
           AND state <> 'succeeded'
       `,
-      [task.run_id, task.stage_id],
+      [task.run_id, task.stage_id, terminal ? userFacingPipelineFailureMessage(task.stage_id, error) : pipelineStageFailureMessage(task.stage_id)],
     );
     await client.query(
       `
@@ -326,9 +326,27 @@ export async function dispatchTask(
 
     if (!response.ok) {
       const body = await response.text();
+      if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+        let message = pipelineStageFailureMessage(task.stage_id);
+        try {
+          const parsed = JSON.parse(body);
+          if (typeof parsed.error?.message === "string") message = parsed.error.message;
+        } catch { /* A non-JSON rejection uses the stage-specific message. */ }
+        await retryOrFailTask(config.pool, task, message, true);
+        return;
+      }
       throw new Error(`Worker returned ${response.status}: ${body}`);
     }
 
+    const result = await response.json() as { status?: string };
+    if (result.status === "continuing") {
+      await config.pool.query(
+        `UPDATE local_task_queue
+         SET state = 'ready', available_at = now() + interval '2 seconds',
+             attempt_count = 0, lease_owner = NULL, lease_expires_at = NULL, last_error = NULL
+         WHERE id = $1 AND state = 'leased'`, [task.id]);
+      return;
+    }
     await completeTask(config.pool, task.id);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

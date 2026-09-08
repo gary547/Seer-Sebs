@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 import { PipelinePreflightError } from "../../../packages/pipeline/src/stage-handlers.js";
 import {
   failPipelineRun,
+  executeStageTask,
   pipelineStageExecutionError,
   shouldInjectLocalFailure,
 } from "../src/processor.js";
@@ -41,6 +42,43 @@ describe("local worker failure injection", () => {
 });
 
 describe("pipeline failure recording", () => {
+  it("loads large dependency outputs with a transaction-local timeout", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("SELECT state")) return { rows: [{ state: "running" }], rowCount: 1 };
+      if (sql.includes("SELECT stage_id, state")) return { rows: [{ stage_id: "calibration", state: "running" }, { stage_id: "revenue-v2", state: "succeeded" }], rowCount: 2 };
+      if (sql.includes("RETURNING attempts")) return { rows: [{ attempts: 1 }], rowCount: 1 };
+      if (sql.includes("SELECT input")) return { rows: [{ input: {} }], rowCount: 1 };
+      if (sql.includes("SELECT stage_id, output")) return { rows: [{ stage_id: "revenue-v2", output: {} }], rowCount: 1 };
+      if (sql.includes("count(*)::text")) return { rows: [{ count: "1" }], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+    const client = { query, release: vi.fn() };
+    const pool = { query, connect: async () => client } as unknown as DatabasePool;
+    expect(await executeStageTask(pool, { runId: "test-run", stageId: "calibration", taskId: "test-task" })).toMatchObject({ status: "succeeded" });
+    const statements = query.mock.calls.map(([sql]) => sql);
+    const dependencyIndex = statements.findIndex(sql => sql.includes("SELECT stage_id, output"));
+    expect(statements[dependencyIndex - 1]).toBe("SET LOCAL statement_timeout = '600s'");
+    expect(statements[dependencyIndex + 1]).toBe("COMMIT");
+  });
+
+  it("extends only the transactional stage-output write timeout for large results", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("SELECT state")) return { rows: [{ state: "running" }], rowCount: 1 };
+      if (sql.includes("SELECT stage_id, state")) return { rows: [{ stage_id: "intake", state: "running" }], rowCount: 1 };
+      if (sql.includes("RETURNING attempts")) return { rows: [{ attempts: 1 }], rowCount: 1 };
+      if (sql.includes("SELECT input")) return { rows: [{ input: {} }], rowCount: 1 };
+      if (sql.includes("count(*)::text")) return { rows: [{ count: "23" }], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+    const client = { query, release: vi.fn() };
+    const pool = { query, connect: async () => client } as unknown as DatabasePool;
+    expect(await executeStageTask(pool, { runId: "test-run", stageId: "intake", taskId: "test-task" })).toMatchObject({ status: "succeeded" });
+    const statements = query.mock.calls.map(([sql]) => sql);
+    const persistIndex = statements.findIndex(sql => sql.includes("SET state = 'succeeded'"));
+    expect(statements[persistIndex - 1]).toBe("SET LOCAL statement_timeout = '600s'");
+    expect(statements.at(-1)).toBe("COMMIT");
+  });
+
   it("maps deterministic preflight failures to a non-retryable response", () => {
     const error = pipelineStageExecutionError(
       new PipelinePreflightError(["kept_keywords"]),

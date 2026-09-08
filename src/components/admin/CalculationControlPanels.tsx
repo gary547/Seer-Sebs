@@ -395,11 +395,15 @@ export default function CalculationControlPanels({
       <CollapsibleSection id="content-fit" storageKey={key} title="Content-fit diagnostics" icon={<ListChecks className="h-4 w-4 text-signal" />} summary={`${control.contentFit.scored}/${control.contentFit.total} scored`}>
         <div className="space-y-4 pt-4">
           <MetricStrip items={[
-            { label: "Matched", value: number(control.contentFit.matched) },
+            { label: "Provider-scored", value: number(control.contentFit.matched) },
+            { label: "Domain fallback", value: number(control.contentFit.domainFallback ?? 0) },
             { label: "Missing", value: number(control.contentFit.missing) },
             { label: "Zero scores", value: number(control.contentFit.zero) },
             { label: "Average score", value: number(control.contentFit.averageScore, 1) },
           ]} />
+          {(control.contentFit.metricSources ?? []).some((source) => source.startsWith("openrouter:")) && (
+            <p className="text-xs text-ink-muted">GLM 5.3 Flash estimates relevance from URL context. Where no ranking page is available, the client domain is used and recorded as a domain fallback. This is not a page-content crawl.</p>
+          )}
           {control.contentFit.zeroRows.length > 0 && <div className="overflow-auto rounded-lg border border-hairline"><Table><TableHeader><TableRow><TableHead>Zero-score keyword</TableHead><TableHead>Ranking URL</TableHead><TableHead>Action</TableHead></TableRow></TableHeader><TableBody>{control.contentFit.zeroRows.map((row) => <TableRow key={row.keyword}><TableCell className="font-medium">{row.keyword}</TableCell><TableCell className="max-w-[420px] truncate text-xs">{row.rankingUrl ?? "—"}</TableCell><TableCell>{row.tacticalStatus ?? "—"}</TableCell></TableRow>)}</TableBody></Table></div>}
         </div>
       </CollapsibleSection>

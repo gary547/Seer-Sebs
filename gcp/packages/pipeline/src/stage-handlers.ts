@@ -74,6 +74,7 @@ export interface PipelineKeyword {
   preCurated: boolean;
   rankingUrl: string | null;
   searchIntent: SearchIntent;
+  searchIntentSource?: string;
   sources: Array<"gsc" | "source">;
   text: string;
   volumeSource: "manual" | "provider" | null;
@@ -127,7 +128,7 @@ export interface CategorisedKeyword extends DetoxedKeyword {
   categorisation: {
     category: string;
     intent: Exclude<SearchIntent, null>;
-    source: "client_supplied" | "rule" | "taxonomy";
+    source: "client_supplied" | "rule" | "taxonomy" | "openrouter";
     tags: string[];
     tier: "deferred" | "live";
   };
@@ -147,6 +148,7 @@ export interface EnrichedKeyword extends DetoxedKeyword {
     competitiveEligibilityReason: string;
     coreKeyword: string;
     intent: Exclude<SearchIntent, null>;
+    intentSource?: string;
     keywordDifficulty: number | null;
     source: "existing" | "local-provider" | "mixed" | "missing-provider";
     volumeSource: "manual" | "provider" | "missing";
@@ -245,7 +247,7 @@ export interface AuthorityStageData {
     domain: string;
     domainRating: number;
     referringDomains: number;
-    source: "project-input";
+    source: string;
     urlRating: number | null;
   };
   clientResultCount: number;
@@ -258,7 +260,8 @@ export interface BacklinkResult extends SerpResult {
   ahrefsRank: number | null;
   backlinks: number | null;
   domainRating: number | null;
-  metricSource: "local-provider" | "missing-provider";
+  metricSource: string;
+  authorityScope?: "page" | "domain" | "domain_fallback";
   referringDomains: number | null;
   urlRating: number | null;
 }
@@ -280,6 +283,8 @@ export interface SiteArchitectureStageData {
     normalisedText: string;
     relevancyScore: number | null;
     status: "matched" | "missing-provider";
+    metricSource?: string;
+    inputScope?: "page" | "domain_fallback";
     tacticalStatus:
       | "create_content"
       | "green"
@@ -884,20 +889,26 @@ function executeDetox(
   };
 }
 
+function hasClientAuthority(authority: ProjectPipelineSource["authority"]): boolean {
+  return (authority.source === "dataforseo" &&
+    [authority.domainRating, authority.referringDomains, authority.backlinks]
+      .every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)) ||
+    authority.domainRating > 0 || authority.referringDomains > 0 || authority.backlinks > 0;
+}
+
 function executePreflight(
   fixture: ProjectPipelineSource,
   detox: DetoxStageData,
+  categorisation?: CategorisationStageData,
 ): PreflightStageData {
   const missing: string[] = [];
+  const categories = new Map(categorisation?.keywords.map((keyword) => [keyword.id, keyword.categorisation]));
   const domain = normaliseHost(fixture.client.domain);
   const competitorCount = fixture.competitorDomains?.length ?? 0;
   const brandTermCount = fixture.client.brandTerms
     .map(normaliseKeyword)
     .filter(Boolean).length;
-  const authorityReady =
-    fixture.authority.domainRating > 0 ||
-    fixture.authority.referringDomains > 0 ||
-    fixture.authority.backlinks > 0;
+  const authorityReady = hasClientAuthority(fixture.authority);
 
   if (!domain) missing.push("client_domain");
   if (competitorCount === 0) missing.push("competitor_domains");
@@ -924,7 +935,12 @@ function executePreflight(
       { id: "kept_keywords", ok: true, value: detox.keptKeywordCount },
     ],
     handlerVersion: "preflight-v1",
-    keywords: detox.keywords,
+    keywords: detox.keywords.map((keyword) => {
+      const category = categories.get(keyword.id);
+      return category && ["openrouter", "client_supplied"].includes(category.source)
+        ? { ...keyword, category: category.category, searchIntent: category.intent, searchIntentSource: category.source }
+        : keyword;
+    }),
     derivedBrandSuggestions: derivedBrandTerms(fixture).filter(
       (term) => !fixture.client.brandTerms.map(normaliseKeyword).includes(term),
     ),
@@ -1146,8 +1162,9 @@ function executeKeywordEnrichment(
     const keywordDifficulty =
       keyword.keywordDifficulty ?? input?.keywordDifficulty ?? null;
     const fallbackCategorisation = categoriseKeyword(keyword, fixture);
-    const intent =
-      input?.intent ?? keyword.searchIntent ?? fallbackCategorisation.intent;
+    const intent = keyword.searchIntentSource
+      ? keyword.searchIntent ?? fallbackCategorisation.intent
+      : input?.intent ?? keyword.searchIntent ?? fallbackCategorisation.intent;
     const usedProvider =
       (keyword.avgMonthlyVolume === null && input?.avgMonthlyVolume !== null && input?.avgMonthlyVolume !== undefined) ||
       (keyword.keywordDifficulty === null && input?.keywordDifficulty !== null && input?.keywordDifficulty !== undefined) ||
@@ -1178,6 +1195,7 @@ function executeKeywordEnrichment(
         coreKeyword:
           input?.coreKeyword ?? keyword.coreKeyword ?? clusterKey(keyword.normalisedText),
         intent,
+        intentSource: keyword.searchIntentSource,
         keywordDifficulty,
         source,
         volumeSource:
@@ -1300,8 +1318,12 @@ function executeGscIntent(
   const distinctQueries = [
     ...new Set(fixture.gscRows.map((row) => normaliseKeyword(row.query))),
   ];
+  const reviewedIntents = new Map(preflight.keywords
+    .filter((keyword) => keyword.searchIntentSource)
+    .map((keyword) => [keyword.normalisedText, keyword.searchIntent]));
   const keywords = distinctQueries.map((normalisedText) => ({
     intent:
+      reviewedIntents.get(normalisedText) ??
       provider.get(normalisedText) ??
       classifications.get(normalisedText) ??
       ("generic" as const),
@@ -1472,7 +1494,7 @@ function executeAuthority(
       domain: normaliseHost(fixture.client.domain),
       domainRating: fixture.authority.domainRating,
       referringDomains: fixture.authority.referringDomains,
-      source: "project-input",
+      source: fixture.authority.source ?? "project-input",
       urlRating: null,
     },
     clientResultCount: serp.keywords.reduce(
@@ -1530,8 +1552,9 @@ function executeBacklinks(
         backlinks: metrics?.backlinks ?? null,
         domainRating: metrics?.domainRating ?? null,
         metricSource: hasMetrics
-          ? ("local-provider" as const)
+          ? (metrics?.metricSource ?? "local-provider")
           : ("missing-provider" as const),
+        authorityScope: metrics?.authorityScope,
         referringDomains: metrics?.referringDomains ?? null,
         urlRating: metrics?.urlRating ?? null,
       };
@@ -1540,7 +1563,7 @@ function executeBacklinks(
   const results = keywords.flatMap((keyword) => keyword.results);
   return {
     enrichedResultCount: results.filter(
-      (result) => result.metricSource === "local-provider",
+      (result) => result.metricSource !== "missing-provider",
     ).length,
     handlerVersion: "backlinks-v1",
     keywords,
@@ -1582,6 +1605,8 @@ function executeSiteArchitecture(
       relevancyScore: input.relevancyScore,
       status: "matched" as const,
       tacticalStatus: input.tacticalStatus,
+      metricSource: input.metricSource,
+      inputScope: input.inputScope,
     };
   });
   return {
@@ -1621,7 +1646,7 @@ function executeLinkPowerScore(
       }
       return {
         ...result,
-        confidence: score.confidence,
+        confidence: result.authorityScope === "domain_fallback" ? "low" as const : score.confidence,
         score: score.score,
       };
     }),
@@ -1946,10 +1971,7 @@ function executeHarV2(
           client_ur: clientResult?.urlRating ?? null,
           competitors,
           content_fit_score: contentFit,
-          has_client_authority:
-            fixture.authority.domainRating > 0 ||
-            fixture.authority.referringDomains > 0 ||
-            fixture.authority.backlinks > 0,
+          has_client_authority: hasClientAuthority(fixture.authority),
           has_client_lps_row:
             clientResult !== undefined || syntheticClientLps !== null,
           latest_lps_run_exists: (lpsKeyword?.results.length ?? 0) > 0,
@@ -1968,6 +1990,9 @@ function executeHarV2(
         explanation: {
           ...result.explanation_json,
           clientDomain: fixture.client.domain,
+          authorityProvider: fixture.authority.source ?? "project-input",
+          contentFitSource: siteById.get(keyword.id)?.metricSource ?? "local-provider",
+          contentFitScope: siteById.get(keyword.id)?.inputScope ?? "page",
           serpStatus: serpKeyword?.status ?? "missing-provider",
         },
         harPosition: result.har_position,
@@ -2203,6 +2228,8 @@ function executeRevenueV2(
         ctr_tp: ctrTarget,
         cvr: assumptions.conversionRate,
         har_confidence: harScenario.confidence,
+        no_attainable_target: harScenario.harPosition === null &&
+          (harScenario.explanation.no_beat_reason as { reason?: string } | null)?.reason === "authority_below_threshold",
         monthly_volumes: demandSignal?.monthlyVolumes ?? [],
         pos_now: keyword.baseRank,
         pos_tp: harScenario.harPosition,
@@ -2313,6 +2340,11 @@ function executeHarReadiness(
     keywords: ranking.keywords.map(({ id, normalisedText }) => ({ id, normalisedText })),
     ready: true,
     substitutions: [
+      {
+        count: siteArchitecture.keywords.filter((keyword) => keyword.inputScope === "domain_fallback").length,
+        input: "page_content_fit",
+        substitute: "domain_level_glm_estimate",
+      },
       {
         count: siteArchitecture.keywords.filter(
           (keyword) => keyword.relevancyScore === null,
@@ -2575,6 +2607,7 @@ export function executeDataDrivenStage(
       return executePreflight(
         fixture,
         dependency<DetoxStageData>(outputs, "detox", "detox-v1"),
+        outputs["categorisation"] as CategorisationStageData | undefined,
       );
     case "categorisation":
       return executeCategorisation(

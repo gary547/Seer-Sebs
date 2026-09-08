@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import SyncStaleBanner from "@/components/SyncStaleBanner";
+import CalculationExportButton from "@/components/CalculationExportButton";
 import { MetricHelp } from "@/components/briefing/MetricHelp";
 import { listAllProjectForecastRows } from "@/integrations/gcp/calculations";
 import { listAllProjectKeywords } from "@/integrations/gcp/project-data";
@@ -309,6 +310,8 @@ export default function PerformanceOutputSection({ projectId }: Props) {
             Performance Output
           </CardTitle>
           {forecasts.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2">
+            <CalculationExportButton projectId={projectId} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
@@ -325,6 +328,7 @@ export default function PerformanceOutputSection({ projectId }: Props) {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            </div>
           )}
         </div>
       </CardHeader>

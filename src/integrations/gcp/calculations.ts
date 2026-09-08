@@ -215,6 +215,8 @@ export interface LinkPowerInspectorPage {
   }>;
   items: Array<{
     backlinks: number | null;
+    metricSource: string;
+    authorityScope: string;
     confidence: string;
     domain: string;
     domainRating: number | null;

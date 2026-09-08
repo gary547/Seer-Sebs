@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-const files = ["revenue-v2.ts", "calibration.ts"];
+const files = ["calibration.ts"];
 const normalise = (value) =>
   value
     .replace(
@@ -40,5 +40,5 @@ if (
 }
 
 process.stdout.write(
-  `GCP model checks passed (${files.length} parity modules plus the corrected HAR ladder).\n`,
+  `GCP model checks passed (${files.length} unchanged parity module plus the corrected HAR ladder; revenue compatibility is covered by revenue-legacy-parity.test.ts).\n`,
 );

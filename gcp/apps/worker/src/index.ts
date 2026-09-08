@@ -5,35 +5,34 @@ import { installShutdownHandlers, resolvePort } from "../../../packages/runtime/
 import { executeStageTask, failPipelineRun } from "./processor.js";
 import { createWorkerServer, WORKER_SERVICE_NAME } from "./server.js";
 import {
-  AhrefsClient,
-  AnthropicSiteArchitectureClient,
+  DataForSeoAuthorityClient,
   DataForSeoClient,
   LivePipelineProviderHydrator,
 } from "./live-providers.js";
+import { OpenRouterPipelineClient } from "./openrouter.js";
 
 const internalToken = process.env.INTERNAL_SERVICE_TOKEN;
 const environment = process.env.SEER_ENVIRONMENT ?? "local";
 const dataForSeoCredentials = process.env.DATAFORSEO_CREDENTIALS;
-const ahrefsApiKey = process.env.AHREFS_API_KEY;
-const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+const openRouterApiKey = process.env.OPENROUTER_API_KEY;
 
 if (!internalToken) {
   throw new Error("INTERNAL_SERVICE_TOKEN is required.");
 }
 if (
   environment !== "local" &&
-  (!dataForSeoCredentials || !ahrefsApiKey || !anthropicApiKey)
+  (!dataForSeoCredentials || !openRouterApiKey)
 ) {
   throw new Error("The managed provider configuration is incomplete.");
 }
 
 const pool = createDatabasePool();
 const providerHydrator =
-  dataForSeoCredentials && ahrefsApiKey && anthropicApiKey
+  dataForSeoCredentials && openRouterApiKey
     ? new LivePipelineProviderHydrator(
         new DataForSeoClient(dataForSeoCredentials),
-        new AhrefsClient(ahrefsApiKey),
-        new AnthropicSiteArchitectureClient(anthropicApiKey),
+        new DataForSeoAuthorityClient(dataForSeoCredentials),
+        new OpenRouterPipelineClient(openRouterApiKey),
       )
     : undefined;
 const port = resolvePort(process.env.PORT);

@@ -66,8 +66,77 @@ The Docker gate validates container builds, fresh and repeated schema
 application, database transfer, backup and restore, access boundaries, API and
 worker workflows, event delivery, object persistence, and restart persistence.
 
+## Seer Google Cloud identity
+
+- User-confirmed identity: **Seer = `nobrainer`, never `master`**. When the
+  user refers to "the other profile" for Seer, use `nobrainer` directly; do
+  not ask them to identify it again or rediscover unrelated client profiles.
+- Use the `devo` skill for every Seer GCP inspection, deployment, log query, or
+  incident check. This workstation has multiple gcloud accounts; never rely on
+  the globally active account or a bare `gcloud` invocation.
+- Seer uses the isolated Devo identity profile `nobrainer`:
+  - account: `seer@nobraineragency.com`
+  - configuration root: `/Users/zencrust/.config/gcloud-profiles/nobrainer`
+  - project: `secure-cipher-503913-f1`
+  - primary runtime region: `europe-west2`
+- Prefix every Seer gcloud, Cloud SQL Auth Proxy, OpenTofu helper, or script
+  that consumes Google credentials with the isolated configuration root. Pass
+  the account, project, and region explicitly whenever the command supports
+  them:
+
+```bash
+CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
+  gcloud --account=seer@nobraineragency.com \
+  --project=secure-cipher-503913-f1 \
+  COMMAND --region=europe-west2
+```
+
+- Validate the selected identity before interpreting cloud state:
+
+  Run Devo checks with the same explicit root:
+  `CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer ~/.local/bin/devo doctor --provider gcp --json`.
+  A successful doctor check or `auth list` confirms local configuration only;
+  the project read below is required to verify live access. Do not infer that
+  Seer needs authentication from failures in the global or `master` profile.
+
+```bash
+CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
+  gcloud auth list --filter=status:ACTIVE --format='value(account)'
+
+CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
+  gcloud --account=seer@nobraineragency.com \
+  --project=secure-cipher-503913-f1 \
+  projects describe secure-cipher-503913-f1 --format='value(projectId)'
+```
+
+- If this isolated profile needs authentication repair, never use bare
+  `gcloud auth login`, never switch the global active account, and never use
+  `--update-adc`. Authenticate the profile explicitly:
+
+```bash
+CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
+  gcloud auth login seer@nobraineragency.com
+```
+
+- Do not fall back to the Devo `master` profile for Seer. Its account,
+  `sebastiano.cataudo@gmail.com`, is a separate client context and does not have
+  access to `secure-cipher-503913-f1`.
+- Do not select the global named configuration `ragusa` for Seer operations.
+  It currently reuses the `seer@nobraineragency.com` email while targeting a
+  different project, so the account email alone is not a sufficient tenant
+  boundary.
+
 ## Implementation rules
 
+- DataForSEO is the only live SEO data provider for the autonomous pipeline.
+  Never call Ahrefs or use it as a fallback. Retained imported history and
+  legacy schema field names are not permission to introduce Ahrefs requests.
+- The user-approved model for Seer pipeline AI work is OpenRouter
+  `z-ai/glm-5.3-flash`. Use this exact model for the provider migration,
+  including keyword detox, categorisation with intent, and content-fit work.
+  Never use Claude/Anthropic, automatic model aliases, or a fallback to a
+  different model. Retries must retain the same model, and adapter tests must
+  assert the requested model. Model changes require explicit user approval.
 - Keep production code free of Supabase runtime imports and environment
   variables. `npm run check:gcp-boundary` enforces the deployable boundary.
 - Identity Platform authorized domains must include the Firebase web app
@@ -108,7 +177,7 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Large detox results are persisted transactionally in batches of at most 2,000
   keyword decisions with a stage-local extended statement timeout. Preserve the
   total updated-row assertion so a partial qualification write rolls back.
-- Anthropic content-fit batches retry transient transport failures and unusable
+- GLM 5.3 Flash content-fit batches must retry transient transport failures and unusable
   model responses up to 30 attempts with a fixed two-second delay. Retry state
   is written to the running `site-architecture` stage output for operator
   visibility; terminal exhaustion uses a non-retryable dependency response so
@@ -116,6 +185,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Workflow failure payloads are internal diagnostics and must never be exposed
   by run-status APIs or the admin calculation UI. Store curated stage-specific
   failure messages and sanitize legacy HTTP/trace payloads at the API boundary.
+- Deterministic preflight gate failures are non-retryable worker responses.
+  Keep transient retries for recoverable transport/provider failures; invalid
+  project readiness must be recorded once without consuming Workflow retries.
 - GSC CSV and XLSX imports skip individual queries longer than 200 characters
   and report the skipped count as an import warning. One malformed SAFS row
   must not reject an otherwise valid upload.
@@ -137,6 +209,21 @@ worker workflows, event delivery, object persistence, and restart persistence.
   recent runs capped at 20, comparison rows capped at 50, and detail samples
   capped at 20. The route is administrator-only and may inspect archived
   projects; archived UI state must remain read-only.
+- The calculation-control contract includes bounded keyword diagnostics for
+  Demand and SERP visibility. Keep confidence and warning distributions,
+  category rollups, feature ownership, and per-keyword multipliers visible in
+  the restored admin panels without expanding those endpoints into unbounded
+  result sets.
+- `GET /v1/projects/:projectId/calculation-inspector` accepts the optional
+  comma-separated filters `clamped`, `delta`, `missing_lps`, `overrides`, and
+  `synthetic_lps`. Apply them in SQL before pagination and keep HAR, Revenue,
+  legacy v1 values, model versions, confidence ranges, and warnings available
+  to the read-only keyword drill-down.
+- The admin Calculations page must keep the restored operational views mounted:
+  CTR curve chart and evidence table, Volume coverage, Demand diagnostics, SERP
+  feature visibility, HAR and Revenue scenario inspectors, and Link Power
+  authority coverage. All mutations still run through the canonical pipeline;
+  these inspectors never trigger standalone model jobs.
 - Keep calculation-control and calculation-inspector bounded on 18,000-keyword
   projects. Select the realistic revenue page before expanding the three HAR
   scenarios, and select comparison sample keys before joining detail rows.
@@ -148,6 +235,9 @@ worker workflows, event delivery, object persistence, and restart persistence.
   month. Prefer the latest `fetched_at`, then use source and row ID as stable
   tie-breakers; live-provider data may fill only months absent from migrated
   history.
+- Worker inputs and the Volume History inspector share the same monthly-history
+  resolver. Include cached DataForSEO months when imported history is absent;
+  preserve imported observations, including zero, and keep project isolation.
 - `DELETE /v1/projects/:projectId/gsc-uploads/:uploadId` is an
   administrator-only, project-scoped mutation. It must reject archived
   projects, rely on cascading child-row deletion, and mark calculation inputs
@@ -170,6 +260,11 @@ worker workflows, event delivery, object persistence, and restart persistence.
   `GET /v1/pipeline-runs/:id/stages?ids=a,b` returns a bounded output batch.
   The web client assembles a full run from those batches instead of requesting
   `includeOutput=true`, which exceeds the Cloud Run response limit.
+- The admin calculation control room exposes a `Pipeline activity` modal for
+  the complete 24-stage run. Keep state, progress, attempts, timestamps, and
+  item counts visible there, and route every operator-facing message through
+  the shared pipeline activity sanitizer so transport errors and trace payloads
+  never reach the UI.
 - Pipeline readiness resolves client brand terms from reviewed explicit terms
   first and may fall back only to a safe registrable-domain label. Short or
   generic labels such as `ao` and `tvs` must remain blocked until an operator
@@ -179,10 +274,16 @@ worker workflows, event delivery, object persistence, and restart persistence.
   `qualified_keywords` readiness gate before a paid run starts. Only the
   explicit `pipeline-precurated` operator action may bypass detox for a curated
   manual set.
-- Missing client domain authority is hydrated from Ahrefs during full-run
+- Missing client domain authority is hydrated from DataForSEO during full-run
   preflight and cached for later projects; existing positive authority metrics
   must not be refetched. Provider failures must surface as failed preflight,
   never as a permanently healthy readiness state.
+- DataForSEO Backlinks retries are bounded to five attempts and apply only to transport
+  failures, rate limits, and provider 5xx responses. Authentication, plan, and
+  usage rejections must fail immediately; terminal Backlinks errors use a
+  non-retryable worker response so Cloud Workflows cannot multiply provider
+  attempts. Log only the provider name and status category, and keep the admin
+  failure message actionable without exposing raw transport payloads.
 - Keep domain and URL authority caches shared across projects, preserve source
   and freshness provenance, and never overwrite a positive manually imported
   volume with an empty provider value. Competitive SERP fetching is performed
@@ -199,6 +300,10 @@ worker workflows, event delivery, object persistence, and restart persistence.
   taxonomy applies only to television/electronics projects; other industries
   fall back to the configured project category focus rather than inheriting an
   unrelated hardcoded category.
+- Project `category_focus` and client `industry` are nullable production
+  metadata. Detox must skip category matching when both are absent, and
+  categorisation must use `Uncategorised`; never pass nullable metadata to
+  string normalisers.
 - Migration `027_calculation_control_contract` materializes legacy v1 forecast
   values from the lossless migration archive into
   `legacy_keyword_forecasts` for read-only HAR/Revenue comparison and adds the
@@ -233,6 +338,39 @@ worker workflows, event delivery, object persistence, and restart persistence.
 - Keep the system CA certificate bundle in the database-transfer runtime; the
   embedded Cloud SQL Auth Proxy requires it to verify Google API endpoints.
 - Use static imports in production code.
+- Forecast recalculation must preserve the latest successful detox and
+  categorisation decisions, including their OpenRouter provenance, without
+  calling providers. Reject missing or changed qualification baselines; never
+  replace approved AI decisions with a fresh rules-only detox during recalculation.
+- A verified HAR `authority_below_threshold` outcome has no attainable target,
+  not a fabricated rank. Revenue preserves current revenue and records zero
+  uplift for that outcome. Missing competitor data or financial inputs must
+  remain distinguishable from a genuine zero result.
+- Complete calculation CSV export is project-authorised, run-pinned and
+  keyset-paginated. Reject active or stale-input results and incomplete revenue;
+  retain numeric zeros, explicit unavailable/outcome markers and provider
+  provenance, and protect all text cells against spreadsheet formula injection.
+- `GET /v1/projects/:projectId/calculation-export` supplies the complete
+  three-scenario download. The shared complete-results button appears in
+  Performance Output and admin Calculations alongside the existing Performance
+  Output CSV export; preserve both export paths.
+- Migration `032_provider_migration_contract` adds persisted provider batch
+  results, OpenRouter categorisation provenance and page/domain input scopes.
+  Completed AI batches are cached by run, stage and request hash; preserve that
+  identity when resuming a stage so successful batches are not requested again.
+- Long AI stages checkpoint before the delivery timeout and acknowledge
+  `status: continuing`. Dispatcher and managed Workflow must repeat the same
+  stage without completing its task or advancing dependencies. Persist the
+  per-batch OpenRouter attempt count across continuations so the 30-attempt
+  provider limit is never reset by a new delivery. Keep the continuation
+  message visible in pipeline activity and retain transactional stage writes.
+- Load completed AI batches with one run/stage-scoped query per delivery;
+  avoid one database round trip per cached batch during checkpoint replay.
+- Large forecast stage outputs can exceed the default ten-second SQL write
+  timeout even when normalized forecast rows are batched. Keep the extended
+  timeout transaction-local at the final stage-output write and while reading
+  the exact succeeded dependencies. Commit rows, stage success and the outbox
+  event atomically; never change pooled-session timeouts globally.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.
 - Do not commit secrets or generated migration evidence.

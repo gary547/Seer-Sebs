@@ -45,6 +45,8 @@ export interface SyntheticProviderKeyword {
 }
 
 export interface SyntheticSerpResult {
+  metricSource?: string;
+  authorityScope?: "page" | "domain" | "domain_fallback";
   ahrefsRank: number | null;
   backlinks: number | null;
   domain: string;
@@ -62,6 +64,8 @@ export interface SyntheticProviderSerpKeyword {
 }
 
 export interface SyntheticProviderSiteArchitectureKeyword {
+  metricSource?: string;
+  inputScope?: "page" | "domain_fallback";
   contentStatus: "amber" | "green" | "red";
   matchedUrl: string | null;
   relevancyScore: number;
@@ -118,6 +122,7 @@ export interface ProjectConversionOverride {
 
 export interface ProjectPipelineSource {
   authority: {
+    source?: string;
     backlinks: number;
     domainRating: number;
     referringDomains: number;

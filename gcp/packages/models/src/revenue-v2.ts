@@ -4,7 +4,7 @@
 // Source of truth for the Revenue v2 model version. All producers/consumers
 // MUST import this constant — no string literals for "revenue_v2.*" are
 // allowed outside the canonical model package (enforced by drift guard test).
-export const REVENUE_V2_MODEL_VERSION = "revenue_v2.1.0";
+export const REVENUE_V2_MODEL_VERSION = "revenue_v2.1.1";
 
 
 export type ScenarioName = "conservative" | "realistic" | "stretch";
@@ -27,6 +27,7 @@ export interface RevenueV2Inputs {
   pos_tp: number | null;
   rank_attainment_probability: number | null;
   har_confidence: number | null;
+  no_attainable_target?: boolean;
   monthly_volumes: MonthlyVolumeRow[]; // may be empty
   /**
    * Prompt 2.4 — trend-adjusted forward volume. Both optional; when either is
@@ -163,11 +164,13 @@ export function computeRevenueV2(
   nowUtc: Date = new Date(),
 ): RevenueV2Outputs {
   const warnings: string[] = [];
+  const noAttainableTarget = inputs.no_attainable_target === true && inputs.pos_tp == null;
   const svm = inputs.svm != null && Number.isFinite(inputs.svm) ? Number(inputs.svm) : 1;
   if (inputs.svm == null) warnings.push("missing_svm");
   const pAtt = clamp01(inputs.rank_attainment_probability);
   const harConf = clamp01(inputs.har_confidence);
-  if (inputs.rank_attainment_probability == null) warnings.push("missing_rank_prob");
+  if (inputs.rank_attainment_probability == null && !noAttainableTarget) warnings.push("missing_rank_prob");
+  if (noAttainableTarget) warnings.push("no_attainable_target");
   if (pAtt < 0.2) warnings.push("low_rank_prob");
   if (inputs.har_confidence == null) warnings.push("missing_har_confidence");
   else if (harConf < 0.5) warnings.push("low_har_confidence");
@@ -179,10 +182,10 @@ export function computeRevenueV2(
   const isNotRanking = inputs.pos_now == null;
   if (!isNotRanking && inputs.ctr_now == null) warnings.push("missing_ctr_now");
   if (isNotRanking) warnings.push("not_ranking");
-  if (inputs.ctr_tp == null) warnings.push("missing_ctr_tp");
+  if (inputs.ctr_tp == null && !noAttainableTarget) warnings.push("missing_ctr_tp");
   if (inputs.cvr == null) warnings.push("missing_cvr");
   if (inputs.aov == null) warnings.push("missing_aov");
-  if (inputs.pos_tp == null) warnings.push("missing_pos_tp");
+  if (inputs.pos_tp == null && !noAttainableTarget) warnings.push("missing_pos_tp");
   if (inputs.volume_annual == null) warnings.push("missing_volume");
 
   // Prompt 2.4 — trend-adjusted forward volume. Base volume stays intact in
@@ -199,7 +202,7 @@ export function computeRevenueV2(
     inputs.cvr != null &&
     inputs.aov != null &&
     (isNotRanking || inputs.ctr_now != null);
-  const canTp =
+  const canTp = noAttainableTarget ? canCurrent :
     volumeForward != null &&
     inputs.ctr_tp != null &&
     inputs.pos_tp != null &&
@@ -212,7 +215,7 @@ export function computeRevenueV2(
         : Number(volumeForward) * Number(inputs.ctr_now) * svm *
           Number(inputs.cvr) * Number(inputs.aov))
     : null;
-  const tpAbs = canTp
+  const tpAbs = noAttainableTarget ? current : canTp
     ? Number(volumeForward) * Number(inputs.ctr_tp) * svm *
       Number(inputs.cvr) * Number(inputs.aov)
     : null;
@@ -266,8 +269,8 @@ export function computeRevenueV2(
     expected_incremental_high_annual: round2(expectedHigh),
     monthly_revenue_json: monthly,
     warnings,
-    ctr_now: inputs.ctr_now,
-    ctr_tp: inputs.ctr_tp,
+    ctr_now: isNotRanking ? 0 : inputs.ctr_now,
+    ctr_tp: noAttainableTarget ? (isNotRanking ? 0 : inputs.ctr_now) : inputs.ctr_tp,
     svm_used: svm,
     p_att_used: pAtt,
     har_conf_used: harConf,

@@ -2,6 +2,7 @@ import type { PipelineStageId } from "../../../packages/pipeline/src/definition.
 import { userFacingPipelineFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 
 export interface StageWorkCounts {
+  unit?: "items" | "batches";
   failed: number;
   lastError: string | null;
   pending: number;
@@ -18,15 +19,15 @@ export interface StageProgress {
   percent: number | null;
   submitted: number;
   total: number | null;
-  unit: "items" | null;
+  unit: "items" | "batches" | null;
 }
 
 const RUNNING_HINT: Record<PipelineStageId, string> = {
   intake: "Loading project inputs",
   "gsc-promotion": "Promoting GSC queries into keywords",
-  detox: "Applying qualification rules and saving keyword decisions in batches",
+  detox: "Qualifying keywords with GLM 5.3 Flash and project rules",
   preflight: "Checking authority and provider readiness",
-  categorisation: "Assigning keyword categories",
+  categorisation: "Assigning categories and intent with GLM 5.3 Flash",
   "brand-classification": "Detecting brand terms",
   "keyword-enrichment": "Fetching search volumes",
   clustering: "Grouping related keywords",
@@ -35,9 +36,9 @@ const RUNNING_HINT: Record<PipelineStageId, string> = {
   "gsc-intent": "Classifying search intent",
   "serp-collection": "Collecting Google SERP results",
   authority: "Refreshing client domain authority",
-  backlinks: "Fetching URL ratings and backlinks",
+  backlinks: "Fetching DataForSEO page authority and backlinks",
   "site-architecture":
-    "Scoring ranking-page content fit with Claude; transient failures retry every 2s",
+    "Scoring page or domain content fit with GLM 5.3 Flash; transient failures retry every 2s",
   "link-power-score": "Computing link-power scores",
   "demand-signals": "Measuring demand trend and seasonality",
   "ctr-curves": "Building CTR curves",
@@ -76,19 +77,30 @@ export function buildStageProgress(input: {
   id: PipelineStageId;
   now: Date;
   outputMessage: string | null;
+  providerProgress?: unknown;
   startedAt: Date | null;
   state: string;
   waitingOn: readonly string[];
   work: StageWorkCounts | null;
 }): StageProgress {
-  const work = input.work && input.work.total > 0 ? input.work : null;
+  const provider = input.providerProgress && typeof input.providerProgress === "object"
+    ? input.providerProgress as Record<string, unknown> : {};
+  const batch = Number(provider.batch);
+  const batchCount = Number(provider.batchCount);
+  const aiRunning = input.state === "running" && provider.model === "z-ai/glm-5.3-flash"
+    && Number.isInteger(batch) && Number.isInteger(batchCount) && batch >= 1 && batch <= batchCount;
+  const work = aiRunning
+    ? { total: batchCount, succeeded: batch - 1, submitted: 1, pending: batchCount - batch, failed: 0, lastError: null }
+    : input.work && input.work.total > 0 ? input.work : null;
+  const unit = aiRunning ? "batches" : input.work?.unit ?? "items";
+  const countUnit = (count: number) => count === 1 ? (unit === "batches" ? "batch" : "item") : unit;
   const percent =
     input.state === "succeeded"
       ? 100
       : input.state === "pending" || input.state === "queued"
         ? 0
         : work
-          ? Math.min(100, Math.round((work.succeeded / work.total) * 100))
+          ? Math.min(99, Math.round((work.succeeded / work.total) * 100))
           : null;
   const parts: string[] = [];
 
@@ -104,7 +116,7 @@ export function buildStageProgress(input: {
     } else {
       parts.push("Completed");
     }
-    if (work) parts.push(`${formatCount(work.succeeded)} items`);
+    if (work) parts.push(`${formatCount(work.succeeded)} ${countUnit(work.succeeded)}`);
   } else if (input.state === "failed") {
     parts.push(
       compactError(
@@ -115,13 +127,15 @@ export function buildStageProgress(input: {
     );
     if (work) {
       parts.push(
-        `${formatCount(work.succeeded)} of ${formatCount(work.total)} items`,
+        `${formatCount(work.succeeded)} of ${formatCount(work.total)} ${countUnit(work.total)}`,
       );
     }
   } else {
-    if (work) {
+    if (aiRunning) {
+      parts.push(compactError(input.outputMessage) ?? RUNNING_HINT[input.id]);
+    } else if (work) {
       parts.push(
-        `${formatCount(work.succeeded)} of ${formatCount(work.total)} items done`,
+        `${formatCount(work.succeeded)} of ${formatCount(work.total)} ${countUnit(work.total)} done`,
       );
       if (work.submitted > 0) {
         parts.push(`${formatCount(work.submitted)} in flight`);
@@ -152,6 +166,6 @@ export function buildStageProgress(input: {
     percent,
     submitted: work?.submitted ?? 0,
     total: work ? work.total : input.state === "succeeded" ? 1 : null,
-    unit: work ? "items" : null,
+    unit: work ? unit : null,
   };
 }

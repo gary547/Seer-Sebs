@@ -41,6 +41,9 @@ describe("Pilltime SAFS control fixture", () => {
     expect(parsed.originalFilename).toBe(filename);
     expect(parsed.rows.length).toBeGreaterThan(0);
     expect(parsed.rows.every((row) => row.device !== "all")).toBe(true);
+    expect([...new Set(parsed.rows.map((row) => row.device))].sort()).toEqual([
+      "desktop", "mobile", "tablet",
+    ]);
     expect(parsed.warnings).toContain(
       "Per-row Device column detected; upload marked mixed.",
     );

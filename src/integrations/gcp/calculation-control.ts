@@ -45,6 +45,8 @@ export interface CalculationControl {
     keywordCount: number;
   };
   contentFit: {
+    domainFallback: number;
+    metricSources: string[];
     averageScore: number | null;
     matched: number;
     missing: number;

@@ -42,7 +42,7 @@ function worksheet(rows: Array<Array<string | number>>): string {
   return `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${body}</sheetData></worksheet>`;
 }
 
-function workbookBase64(): string {
+function workbookBase64(device = "desktop"): string {
   const workbook =
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
@@ -64,13 +64,13 @@ function workbookBase64(): string {
     "xl/worksheets/sheet2.xml": strToU8(
       worksheet([
         ["Top queries", "Clicks", "Impressions", "CTR", "Position", "Device"],
-        ["television offers", 25, 1000, "2.5%", 8.2, "mobile"],
+        ["television offers", 25, 1000, "2.5%", 8.2, device === "tablet" ? device : "mobile"],
       ]),
     ),
     "xl/worksheets/sheet3.xml": strToU8(
       worksheet([
         ["Top pages", "Clicks", "Impressions", "CTR", "Position", "Device"],
-        ["https://example.com/tv", 20, 800, "2.5%", 6.4, "desktop"],
+        ["https://example.com/tv", 20, 800, "2.5%", 6.4, device],
       ]),
     ),
   });
@@ -78,6 +78,47 @@ function workbookBase64(): string {
 }
 
 describe("GSC workbook parsing", () => {
+  it("preserves tablet SAFS rows and merges duplicates only within the same device", () => {
+    const parsed = parseGscWorkbookImport({
+      csvText: [
+        "Query,Device,Clicks,Impressions,CTR,Position",
+        "offers,DESKTOP,20,100,20%,2",
+        "offers,MOBILE,30,300,10%,4",
+        "offers,TABLET,2,20,10%,6",
+        " offers , tablet ,3,30,10%,8",
+      ].join("\n"),
+      dateRangeStart: "2026-01-01", dateRangeEnd: "2026-04-01",
+      filename: "safs.csv", format: "csv_text",
+    });
+    expect(parsed.device).toBe("mixed");
+    expect(parsed.rows).toHaveLength(3);
+    expect(parsed.rows).toContainEqual(expect.objectContaining({
+      device: "tablet", clicks: 5, impressions: 50, ctr: 0.1, position: 7.2,
+    }));
+    expect(parsed.rows.reduce((sum, row) => sum + row.clicks, 0)).toBe(55);
+    expect(parsed.rows.reduce((sum, row) => sum + row.impressions, 0)).toBe(450);
+    expect(parsed.warnings).toContain("1 duplicate row was merged into 3 unique GSC entries.");
+  });
+
+  it("preserves tablet identity in XLSX query and page sheets", () => {
+    const parsed = parseGscWorkbookImport({
+      fileBase64: workbookBase64("tablet"), filename: "tablet.xlsx", format: "xlsx_base64",
+    });
+    expect(parsed.device).toBe("mixed");
+    expect(parsed.rows[0]?.device).toBe("tablet");
+    expect(parsed.pages[0]?.device).toBe("tablet");
+  });
+
+  it.each(["all", "desktop", "mobile", "tablet"])("preserves the explicit %s device when CSV has no device column", (device) => {
+    const parsed = parseGscWorkbookImport({
+      csvText: "Query,Clicks,Impressions,CTR,Position\noffers,10,100,10%,2",
+      dateRangeStart: "2026-01-01", dateRangeEnd: "2026-04-01",
+      filename: "queries.csv", format: "csv_text", device,
+    });
+    expect(parsed.device).toBe(device);
+    expect(parsed.rows[0]?.device).toBe(device);
+  });
+
   it("parses quoted CSV values and locale-formatted numbers", () => {
     expect(parseCsvRows('Query,Clicks\n"tv, offers","2,074"\n')).toEqual([
       ["Query", "Clicks"],

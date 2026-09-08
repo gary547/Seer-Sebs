@@ -41,6 +41,17 @@ afterEach(async () => {
 });
 
 describe("seer-worker integration", () => {
+  it("acknowledges checkpoint continuation without exposing stage payloads", async () => {
+    processTask.mockResolvedValueOnce({ status: "continuing", output: { privateBatch: "not for HTTP" } });
+    const response = await fetch(`${baseUrl}/internal/tasks`, {
+      method: "POST",
+      headers: { authorization: "Bearer integration-token", "content-type": "application/json" },
+      body: JSON.stringify({ runId: "00000000-0000-4000-8000-000000000001", stageId: "detox", taskId: "1" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ runId: "00000000-0000-4000-8000-000000000001", stageId: "detox", status: "continuing" });
+  });
+
   it("rejects unauthenticated task delivery", async () => {
     const response = await fetch(`${baseUrl}/internal/tasks`, {
       body: JSON.stringify({
