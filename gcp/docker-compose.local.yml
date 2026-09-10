@@ -29,7 +29,7 @@ services:
       POSTGRES_PASSWORD: local-owner-only
       POSTGRES_USER: seer_owner
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U seer_owner -d seer"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U seer_owner -d seer"]
       interval: 2s
       timeout: 2s
       retries: 30

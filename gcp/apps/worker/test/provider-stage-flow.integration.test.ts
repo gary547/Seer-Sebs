@@ -8,17 +8,21 @@ import { parseRepresentativeProjectFixture } from "../../../packages/fixtures/sr
 import { executeDataDrivenStage, type CategorisationStageData, type DetoxStageData, type KeywordEnrichmentStageData, type PreflightStageData } from "../../../packages/pipeline/src/stage-handlers.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { DataForSeoClient, DataForSeoAuthorityClient, LivePipelineProviderHydrator } from "../src/live-providers.js";
-import { OPENROUTER_MODEL, OpenRouterPipelineClient } from "../src/openrouter.js";
+import { OPENROUTER_MODEL, OpenRouterPipelineClient, type AiProgress } from "../src/openrouter.js";
 
 describe("provider-backed keyword stage integration", () => {
-  it("persists GLM batch results, honors project rules, resumes without duplicate calls and propagates intent to calculations", async () => {
+  it("persists DeepSeek batch results, honors project rules, resumes without duplicate calls and propagates intent to calculations", async () => {
     const fixture = parseRepresentativeProjectFixture(JSON.parse(readFileSync(new URL("../../../fixtures/representative-project.json", import.meta.url), "utf8")));
     const requests: Array<Record<string, unknown>> = [];
+    let activeRequests = 0;
+    let peakRequests = 0;
     const server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString());
       requests.push(body);
+      peakRequests = Math.max(peakRequests, ++activeRequests);
+      await new Promise((resolve) => setTimeout(resolve, 25));
       const input = JSON.parse(body.messages[1].content).items as Array<{ index: number }>;
       const detox = String(body.messages[0].content).includes("decision (keep/remove/review)");
       response.setHeader("content-type", "application/json");
@@ -27,6 +31,7 @@ describe("provider-backed keyword stage integration", () => {
           ? { index, decision: "keep", reason: "Relevant to the configured client" }
           : { index, category: "Model assigned category", intent: "informational", tags: ["Model assigned category"] }),
       }) } }] }));
+      activeRequests -= 1;
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     try {
@@ -34,6 +39,7 @@ describe("provider-backed keyword stage integration", () => {
       const cache = new Map<string, unknown>();
       const attempts = new Map<string, number>();
       const messages: string[] = [];
+      const progressUpdates: AiProgress[] = [];
       const query = vi.fn(async (sql: string, values: unknown[] = []) => {
         if (sql.includes("input->>'mode'")) return { rows: [{ mode: "full" }], rowCount: 1 };
         if (sql.includes("RETURNING attempt_count")) {
@@ -48,12 +54,15 @@ describe("provider-backed keyword stage integration", () => {
           return { rows, rowCount: rows.length };
         }
         if (sql.includes("INSERT INTO provider_work_items")) cache.set(`${values[2]}:${values[3]}`, JSON.parse(String(values[4])));
-        else if (sql.includes("UPDATE pipeline_stage_runs")) messages.push(String(values[2]));
+        else if (sql.includes("UPDATE pipeline_stage_runs")) {
+          messages.push(String(values[2]));
+          progressUpdates.push(JSON.parse(String(values[4])) as AiProgress);
+        }
         else throw new Error("Unexpected persistence operation in integration test.");
         return { rows: [], rowCount: 1 };
       });
       const pool = { query } as unknown as DatabasePool;
-      const ai = new OpenRouterPipelineClient("integration-key", (_input, init) => fetch(url, init));
+      const ai = new OpenRouterPipelineClient("integration-key", (_input, init) => fetch(url, init), undefined, 3);
       const hydrator = new LivePipelineProviderHydrator({} as DataForSeoClient, {} as DataForSeoAuthorityClient, ai);
       const intake = executeDataDrivenStage("intake", fixture, {});
       const promotion = executeDataDrivenStage("gsc-promotion", fixture, { intake });
@@ -74,6 +83,9 @@ describe("provider-backed keyword stage integration", () => {
         normalisedText: `housing query ${index}`, preCurated: false,
       })) };
       await hydrator.refineStage(pool, fixture.project.id, "test-run", fixture, manyCategories);
+      expect(peakRequests).toBe(3);
+      expect(progressUpdates.at(-1)).toMatchObject({ completedBatches: 4, activeBatches: 0, batchCount: 4, concurrency: 3 });
+      expect(messages.some((message) => message.includes("3 in parallel"))).toBe(true);
       const requestsBeforeResume = requests.length;
       const cacheReadsBeforeResume = query.mock.calls.filter(([sql]) => sql.includes("SELECT result, item_key")).length;
       await hydrator.refineStage(pool, fixture.project.id, "test-run", fixture, manyCategories);
@@ -87,7 +99,8 @@ describe("provider-backed keyword stage integration", () => {
         expect(keyword.category).toBe("Model assigned category");
       }
       expect(requests.every((request) => request.model === OPENROUTER_MODEL && !("models" in request))).toBe(true);
-      expect(messages.every((message) => message.includes("GLM 5.3 Flash") && !/claude|anthropic|\b500\b/i.test(message))).toBe(true);
+      expect(messages.every((message) => message.includes("DeepSeek V4.1 Flash") && !/claude|anthropic|\b500\b/i.test(message))).toBe(true);
+      expect(categorisation.keywords.filter((keyword) => !keyword.preCurated).every((keyword) => keyword.categorisation.model === OPENROUTER_MODEL)).toBe(true);
       expect(cache.size).toBeGreaterThanOrEqual(2);
     } finally {
       server.closeAllConnections();

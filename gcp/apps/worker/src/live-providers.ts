@@ -8,6 +8,7 @@ import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 import { OpenRouterPipelineClient, OPENROUTER_MODEL, type AiOptions } from "./openrouter.js";
+import { PIPELINE_AI_MODEL_LABEL } from "../../../packages/pipeline/src/ai-model.js";
 
 interface ProjectProviderRow {
   country: string | null;
@@ -68,6 +69,7 @@ interface AuthorityMetrics {
 }
 
 interface SiteArchitectureResult {
+  model: string;
   contentStatus: "amber" | "green" | "red";
   keyword: string;
   matchedUrl: string | null;
@@ -895,11 +897,15 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         },
       },
       progress: async (progress) => {
+        const activity = progress.phase === "checkpointing" ? " Saved results; continuing automatically."
+          : progress.phase === "failed" ? " Remaining batches could not finish; completed results are saved."
+          : progress.phase === "completed" ? ""
+          : ` Batch ${progress.batch}, attempt ${progress.attempt}/${progress.maxAttempts}${progress.phase === "retrying" ? "; retrying in 2s" : ""}.`;
         await pool.query(
           `UPDATE pipeline_stage_runs SET output = COALESCE(output, '{}'::jsonb) ||
              jsonb_build_object('message', $3::text, 'provider', 'openrouter', 'model', $4::text, 'providerProgress', $5::jsonb)
            WHERE run_id = $1 AND stage_id = $2 AND state = 'running'`,
-          [runId, stageId, `GLM 5.3 Flash: ${progress.operation}, batch ${progress.batch} of ${progress.batchCount}, attempt ${progress.attempt} of ${progress.maxAttempts}.`, OPENROUTER_MODEL, JSON.stringify(progress)]);
+          [runId, stageId, `${PIPELINE_AI_MODEL_LABEL}: ${progress.operation}, ${progress.completedBatches}/${progress.batchCount} batches complete, ${progress.activeBatches} in parallel.${activity}`, OPENROUTER_MODEL, JSON.stringify(progress)]);
       },
     };
   }
@@ -912,7 +918,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       const decisions = await this.ai.detox(candidates.map((keyword) => ({ keyword: keyword.text })), source, this.aiOptions(pool, projectId, runId, "detox", deadline));
       const keywords = data.keywords.map((keyword) => {
         const decision = decisions.get(keyword.normalisedText);
-        return decision ? { ...keyword, detox: { ...decision, rule: `openrouter:${OPENROUTER_MODEL}` } } : keyword;
+        return decision ? { ...keyword, detox: { ...decision, rule: `openrouter:${decision.model}` } } : keyword;
       });
       return { ...data, keywords,
         keptKeywordCount: keywords.filter((keyword) => keyword.detox.decision === "keep").length,
@@ -1789,6 +1795,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         );
       }
       return {
+        model: score.model,
         contentStatus: score.contentStatus,
         keyword: keyword.keyword,
         matchedUrl: keyword.ranking_url,
@@ -1831,7 +1838,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
             value.relevancyScore,
             value.contentStatus,
             value.tacticalStatus,
-            `openrouter:${OPENROUTER_MODEL}`,
+            `openrouter:${value.model}`,
             value.inputScope,
           ],
         );

@@ -12,7 +12,7 @@ const STAGE_FAILURE_MESSAGES: Partial<Record<PipelineStageId, string>> = {
   detox:
     "Keyword qualification did not finish after automatic retries. Project data was left unchanged; resume the pipeline to try again.",
   "site-architecture":
-    "GLM 5.3 Flash content-fit scoring did not finish after automatic retries. Saved progress is preserved; check OpenRouter access before resuming.",
+    "OpenRouter content-fit scoring did not finish after automatic retries. Saved progress is preserved; check OpenRouter access before resuming.",
 };
 
 const TECHNICAL_FAILURE_PATTERN =

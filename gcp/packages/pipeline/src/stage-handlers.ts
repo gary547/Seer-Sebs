@@ -134,6 +134,7 @@ export interface DetoxStageData {
 export interface CategorisedKeyword extends DetoxedKeyword {
   categorisation: {
     category: string;
+    model?: string;
     intent: Exclude<SearchIntent, null>;
     source: "client_supplied" | "rule" | "taxonomy" | "openrouter";
     tags: string[];

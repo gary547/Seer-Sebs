@@ -75,7 +75,7 @@ describe("stage progress", () => {
         work: null,
       }).message,
     ).toBe(
-      "Scoring page or domain content fit with GLM 5.3 Flash; transient failures retry every 2s · 30m elapsed · attempt 3",
+      "Scoring page or domain content fit with DeepSeek V4.1 Flash; transient failures retry every 2s · 30m elapsed · attempt 3",
     );
   });
 
@@ -127,6 +127,25 @@ describe("stage progress", () => {
     expect(progress).toMatchObject({ done: 1, total: 8, submitted: 1, pending: 6, percent: 13, unit: "batches" });
     expect(progress.message).toContain("batch 2 of 8, attempt 4 of 30");
     expect(progress.message).not.toContain("1 of 1");
+  });
+
+  it("counts completed and active DeepSeek batches independently of out-of-order batch indexes", () => {
+    const progress = buildStageProgress({
+      attempts: 2, completedAt: null, id: "categorisation", now,
+      outputMessage: "DeepSeek V4.1 Flash: keyword categorisation, 3/12 batches complete, 8 in parallel.",
+      providerProgress: { model: "deepseek/deepseek-v4.1-flash", batch: 11, batchCount: 12, completedBatches: 3, activeBatches: 8 },
+      startedAt: null, state: "running", waitingOn: [], work: null,
+    });
+    expect(progress).toMatchObject({ done: 3, total: 12, submitted: 8, pending: 1, percent: 25, unit: "batches" });
+    expect(progress.message).toContain("8 in parallel");
+  });
+
+  it("reports fully cached batches while final stage persistence is still running", () => {
+    expect(buildStageProgress({
+      attempts: 2, completedAt: null, id: "detox", now, outputMessage: null,
+      providerProgress: { model: "z-ai/glm-5.3-flash", batch: 12, batchCount: 12, completedBatches: 12, activeBatches: 0 },
+      startedAt: null, state: "running", waitingOn: [], work: null,
+    })).toMatchObject({ done: 12, total: 12, submitted: 0, pending: 0, percent: 99, unit: "batches" });
   });
 
   it("marks succeeded stages complete with duration", () => {

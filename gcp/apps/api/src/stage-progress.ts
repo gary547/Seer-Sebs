@@ -1,4 +1,5 @@
 import type { PipelineStageId } from "../../../packages/pipeline/src/definition.js";
+import { LEGACY_PIPELINE_AI_MODEL, PIPELINE_AI_MODEL, PIPELINE_AI_MODEL_LABEL } from "../../../packages/pipeline/src/ai-model.js";
 import { userFacingPipelineFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 
 export interface StageWorkCounts {
@@ -25,9 +26,9 @@ export interface StageProgress {
 const RUNNING_HINT: Record<PipelineStageId, string> = {
   intake: "Loading project inputs",
   "gsc-promotion": "Promoting GSC queries into keywords",
-  detox: "Qualifying keywords with GLM 5.3 Flash and project rules",
+  detox: `Qualifying keywords with ${PIPELINE_AI_MODEL_LABEL} and project rules`,
   preflight: "Checking authority and provider readiness",
-  categorisation: "Assigning categories and intent with GLM 5.3 Flash",
+  categorisation: `Assigning categories and intent with ${PIPELINE_AI_MODEL_LABEL}`,
   "brand-classification": "Detecting brand terms",
   "keyword-enrichment": "Fetching search volumes",
   clustering: "Grouping related keywords",
@@ -38,7 +39,7 @@ const RUNNING_HINT: Record<PipelineStageId, string> = {
   authority: "Refreshing client domain authority",
   backlinks: "Fetching DataForSEO page authority and backlinks",
   "site-architecture":
-    "Scoring page or domain content fit with GLM 5.3 Flash; transient failures retry every 2s",
+    `Scoring page or domain content fit with ${PIPELINE_AI_MODEL_LABEL}; transient failures retry every 2s`,
   "link-power-score": "Computing link-power scores",
   "demand-signals": "Measuring demand trend and seasonality",
   "ctr-curves": "Building CTR curves",
@@ -87,10 +88,17 @@ export function buildStageProgress(input: {
     ? input.providerProgress as Record<string, unknown> : {};
   const batch = Number(provider.batch);
   const batchCount = Number(provider.batchCount);
-  const aiRunning = input.state === "running" && provider.model === "z-ai/glm-5.3-flash"
+  const aiRunning = input.state === "running" && (provider.model === PIPELINE_AI_MODEL || provider.model === LEGACY_PIPELINE_AI_MODEL)
     && Number.isInteger(batch) && Number.isInteger(batchCount) && batch >= 1 && batch <= batchCount;
+  const completed = provider.completedBatches;
+  const active = provider.activeBatches;
+  const concurrentProgress = typeof completed === "number" && Number.isInteger(completed)
+    && typeof active === "number" && Number.isInteger(active)
+    && completed >= 0 && active >= 0 && completed + active <= batchCount;
   const work = aiRunning
-    ? { total: batchCount, succeeded: batch - 1, submitted: 1, pending: batchCount - batch, failed: 0, lastError: null }
+    ? concurrentProgress
+      ? { total: batchCount, succeeded: completed, submitted: active, pending: batchCount - completed - active, failed: 0, lastError: null }
+      : { total: batchCount, succeeded: batch - 1, submitted: 1, pending: batchCount - batch, failed: 0, lastError: null }
     : input.work && input.work.total > 0 ? input.work : null;
   const unit = aiRunning ? "batches" : input.work?.unit ?? "items";
   const countUnit = (count: number) => count === 1 ? (unit === "batches" ? "batch" : "item") : unit;

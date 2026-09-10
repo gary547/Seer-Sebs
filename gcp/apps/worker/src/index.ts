@@ -9,7 +9,7 @@ import {
   DataForSeoClient,
   LivePipelineProviderHydrator,
 } from "./live-providers.js";
-import { OpenRouterPipelineClient } from "./openrouter.js";
+import { OpenRouterPipelineClient, resolveOpenRouterConcurrency } from "./openrouter.js";
 
 const internalToken = process.env.INTERNAL_SERVICE_TOKEN;
 const environment = process.env.SEER_ENVIRONMENT ?? "local";
@@ -32,7 +32,8 @@ const providerHydrator =
     ? new LivePipelineProviderHydrator(
         new DataForSeoClient(dataForSeoCredentials),
         new DataForSeoAuthorityClient(dataForSeoCredentials),
-        new OpenRouterPipelineClient(openRouterApiKey),
+        new OpenRouterPipelineClient(openRouterApiKey, undefined, undefined,
+          resolveOpenRouterConcurrency(process.env.OPENROUTER_BATCH_CONCURRENCY)),
       )
     : undefined;
 const port = resolvePort(process.env.PORT);

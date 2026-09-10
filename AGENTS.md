@@ -65,6 +65,8 @@ npm run test:gcp:docker
 The Docker gate validates container builds, fresh and repeated schema
 application, database transfer, backup and restore, access boundaries, API and
 worker workflows, event delivery, object persistence, and restart persistence.
+The local PostgreSQL readiness probe must use TCP loopback, not the Unix
+socket exposed by the temporary initialization server.
 
 Host-run compiled GCP scripts resolve backend packages through
 `dist/node_modules`, linked to `../gcp/node_modules`. The frontend build
@@ -166,12 +168,15 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
 - DataForSEO is the only live SEO data provider for the autonomous pipeline.
   Never call Ahrefs or use it as a fallback. Retained imported history and
   legacy schema field names are not permission to introduce Ahrefs requests.
-- The user-approved model for Seer pipeline AI work is OpenRouter
-  `z-ai/glm-5.3-flash`. Use this exact model for the provider migration,
-  including keyword detox, categorisation with intent, and content-fit work.
-  Never use Claude/Anthropic, automatic model aliases, or a fallback to a
-  different model. Retries must retain the same model, and adapter tests must
-  assert the requested model. Model changes require explicit user approval.
+- The user-approved model for new Seer pipeline AI calls is OpenRouter
+  `deepseek/deepseek-v4.1-flash`, explicitly selected on 2026-09-10 to replace
+  GLM 5.3 Flash for detox, categorisation with intent and content fit. Use the
+  shared pipeline model constants. Never call GLM, Claude/Anthropic, automatic
+  model aliases or alternative models as a fallback. Retries retain DeepSeek.
+  Completed GLM batches may be read only from the same run/stage cache when
+  the entire request matches except for the model; preserve their original
+  model provenance and never relabel them as DeepSeek. Model changes require
+  explicit user approval.
 - Keep production code free of Supabase runtime imports and environment
   variables. `npm run check:gcp-boundary` enforces the deployable boundary.
 - Identity Platform authorized domains must include the Firebase web app
@@ -221,11 +226,18 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
 - Large detox results are persisted transactionally in batches of at most 2,000
   keyword decisions with a stage-local extended statement timeout. Preserve the
   total updated-row assertion so a partial qualification write rolls back.
-- GLM 5.3 Flash content-fit batches must retry transient transport failures and unusable
+- DeepSeek V4.1 Flash content-fit batches must retry transient transport failures and unusable
   model responses up to 30 attempts with a fixed two-second delay. Retry state
   is written to the running `site-architecture` stage output for operator
   visibility; terminal exhaustion uses a non-retryable dependency response so
   the managed Workflow does not multiply the 30 provider attempts.
+- Detox, categorisation and content-fit share bounded OpenRouter batch execution:
+  eight concurrent batches by default, configurable through worker
+  `OPENROUTER_BATCH_CONCURRENCY` (integer 1–32). Preserve request-body hashes and
+  per-batch attempt counts across releases and checkpoints. Drain in-flight work
+  before continuing or failing, save successful sibling batches, and assemble
+  results in input order. Persist progress serially with actual completed/active
+  batch counts; a batch index is not a completion count under concurrency.
 - Workflow failure payloads are internal diagnostics and must never be exposed
   by run-status APIs or the admin calculation UI. Store curated stage-specific
   failure messages and sanitize legacy HTTP/trace payloads at the API boundary.

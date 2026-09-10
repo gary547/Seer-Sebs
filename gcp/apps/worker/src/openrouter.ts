@@ -3,17 +3,32 @@ import { createHash } from "node:crypto";
 import type { DetoxDecision, ProjectPipelineSource, SearchIntent } from "../../../packages/fixtures/src/representative-project.js";
 import { normaliseKeyword } from "../../../packages/fixtures/src/representative-project.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
+import { LEGACY_PIPELINE_AI_MODEL, PIPELINE_AI_MODEL, PIPELINE_AI_MODEL_LABEL, type PipelineAiModel } from "../../../packages/pipeline/src/ai-model.js";
 import { StageContinuation } from "./stage-continuation.js";
 
-export const OPENROUTER_MODEL = "z-ai/glm-5.3-flash";
+export const OPENROUTER_MODEL = PIPELINE_AI_MODEL;
 export const OPENROUTER_MAX_ATTEMPTS = 30;
 export const OPENROUTER_RETRY_WAIT_MS = 2_000;
 export const OPENROUTER_BATCH_SIZE = 20;
+export const OPENROUTER_BATCH_CONCURRENCY = 8;
+
+export function resolveOpenRouterConcurrency(value?: string): number {
+  const concurrency = value === undefined ? OPENROUTER_BATCH_CONCURRENCY : Number(value);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) {
+    throw new Error("OPENROUTER_BATCH_CONCURRENCY must be an integer between 1 and 32.");
+  }
+  return concurrency;
+}
 
 export interface AiProgress {
   attempt: number;
   batch: number;
   batchCount: number;
+  completedBatches: number;
+  activeBatches: number;
+  completedBatchesByModel: Partial<Record<PipelineAiModel, number>>;
+  concurrency: number;
+  phase: "running" | "retrying" | "completed" | "checkpointing" | "failed";
   maxAttempts: number;
   waitMilliseconds: number;
   model: typeof OPENROUTER_MODEL;
@@ -36,18 +51,22 @@ export interface AiKeyword {
   keyword: string;
 }
 
-export interface AiDetoxResult {
+interface AiModelResult {
+  model: PipelineAiModel;
+}
+
+export interface AiDetoxResult extends AiModelResult {
   decision: DetoxDecision;
   reason: string;
 }
 
-export interface AiCategorisationResult {
+export interface AiCategorisationResult extends AiModelResult {
   category: string;
   intent: Exclude<SearchIntent, null>;
   tags: string[];
 }
 
-export interface AiContentFitResult {
+export interface AiContentFitResult extends AiModelResult {
   contentStatus: "amber" | "green" | "red";
   relevancyScore: number;
   tacticalStatus: "create_content" | "new_content" | "no_action_needed" | "optimise_content";
@@ -89,8 +108,10 @@ export class OpenRouterPipelineClient {
     private readonly fetchImplementation: typeof fetch = fetch,
     private readonly wait: (milliseconds: number) => Promise<void> = (milliseconds) =>
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    private readonly concurrency = OPENROUTER_BATCH_CONCURRENCY,
   ) {
     if (!apiKey.trim()) throw new Error("OpenRouter API key is required.");
+    resolveOpenRouterConcurrency(String(concurrency));
   }
 
   detox(rows: readonly AiKeyword[], source: ProjectPipelineSource, options: AiOptions = {}): Promise<Map<string, AiDetoxResult>> {
@@ -130,11 +151,40 @@ export class OpenRouterPipelineClient {
       }, options);
   }
 
-  private async complete<T>(operation: string, rows: readonly AiKeyword[], instruction: string, context: object,
-    parse: (value: Record<string, unknown>) => T, options: AiOptions): Promise<Map<string, T>> {
-    const output = new Map<string, T>();
+  private async complete<T extends object>(operation: string, rows: readonly AiKeyword[], instruction: string, context: object,
+    parse: (value: Record<string, unknown>) => T, options: AiOptions): Promise<Map<string, T & AiModelResult>> {
     const batchCount = Math.ceil(rows.length / OPENROUTER_BATCH_SIZE);
+    const results: T[][] = new Array(batchCount);
+    const resultModels: PipelineAiModel[] = new Array(batchCount).fill(OPENROUTER_MODEL);
+    const completedBatchesByModel: Partial<Record<PipelineAiModel, number>> = {};
+    const pending: Array<{ batch: number; run: () => Promise<T[]> }> = [];
+    let completedBatches = 0;
+    let activeBatches = 0;
+    let stopped: Error | undefined;
+    let progressTail = Promise.resolve();
+    const report = (batch: number, attempt: number, phase: AiProgress["phase"]): Promise<void> => {
+      const progress: AiProgress = {
+        attempt, batch, batchCount, completedBatches, activeBatches,
+        completedBatchesByModel: { ...completedBatchesByModel },
+        concurrency: this.concurrency, phase, maxAttempts: OPENROUTER_MAX_ATTEMPTS,
+        waitMilliseconds: phase === "retrying" ? OPENROUTER_RETRY_WAIT_MS : 0,
+        model: OPENROUTER_MODEL, operation,
+      };
+      const delivery = progressTail.then(() => options.progress?.(progress));
+      progressTail = delivery.catch(() => undefined);
+      return delivery;
+    };
+    const checkDeadline = (): void => {
+      if (stopped) throw stopped;
+      if (options.deadline !== undefined && Date.now() >= options.deadline) throw new StageContinuation();
+    };
+    const stop = (error: unknown): void => {
+      if (!stopped || stopped instanceof StageContinuation) {
+        stopped = error instanceof Error ? error : new Error("AI batch processing failed.");
+      }
+    };
     for (let offset = 0; offset < rows.length; offset += OPENROUTER_BATCH_SIZE) {
+      const batch = Math.floor(offset / OPENROUTER_BATCH_SIZE);
       const group = rows.slice(offset, offset + OPENROUTER_BATCH_SIZE);
       const body = {
         model: OPENROUTER_MODEL,
@@ -161,61 +211,102 @@ export class OpenRouterPipelineClient {
         }
         return group.map((_, index) => ordered.get(index)!);
       };
-      const cached = await options.cache?.get(key);
+      let cached = await options.cache?.get(key);
+      if (cached === undefined && options.cache) {
+        const legacyKey = createHash("sha256").update(JSON.stringify({ ...body, model: LEGACY_PIPELINE_AI_MODEL })).digest("hex");
+        cached = await options.cache.get(legacyKey);
+        if (cached !== undefined) resultModels[batch] = LEGACY_PIPELINE_AI_MODEL;
+      }
       if (cached !== undefined) {
-        const values = decode(cached);
-        group.forEach((row, index) => output.set(normaliseKeyword(row.keyword), values[index]!));
+        results[batch] = decode(cached);
+        completedBatches += 1;
+        const model = resultModels[batch]!;
+        completedBatchesByModel[model] = (completedBatchesByModel[model] ?? 0) + 1;
         continue;
       }
-      let completed = false;
-      for (let deliveryAttempt = 1; deliveryAttempt <= OPENROUTER_MAX_ATTEMPTS; deliveryAttempt += 1) {
-        if (options.deadline !== undefined && Date.now() >= options.deadline) throw new StageContinuation();
-        const attempt = await options.cache?.startAttempt?.(key) ?? deliveryAttempt;
-        if (attempt > OPENROUTER_MAX_ATTEMPTS) break;
-        await options.progress?.({
-          attempt, batch: Math.floor(offset / OPENROUTER_BATCH_SIZE) + 1, batchCount,
-          maxAttempts: OPENROUTER_MAX_ATTEMPTS, waitMilliseconds: attempt === 1 ? 0 : OPENROUTER_RETRY_WAIT_MS,
-          model: OPENROUTER_MODEL, operation,
-        });
-        if (attempt > 1) await this.wait(OPENROUTER_RETRY_WAIT_MS);
-        let result: unknown;
-        let values: T[];
-        try {
-          const response = await this.fetchImplementation("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: { authorization: `Bearer ${this.apiKey.trim()}`, "content-type": "application/json" },
-            body: JSON.stringify(body), signal: AbortSignal.timeout(120_000),
-          });
-          if (!response.ok) {
-            if (response.status !== 429 && response.status !== 408 && response.status < 500) {
-              throw new HttpError(424, "openrouter_access_rejected", "GLM 5.3 Flash could not start. Check OpenRouter API access, model availability and account balance.");
+      pending.push({ batch, run: async () => {
+        for (let deliveryAttempt = 1; deliveryAttempt <= OPENROUTER_MAX_ATTEMPTS; deliveryAttempt += 1) {
+          checkDeadline();
+          const attempt = await options.cache?.startAttempt?.(key) ?? deliveryAttempt;
+          if (attempt > OPENROUTER_MAX_ATTEMPTS) break;
+          await report(batch + 1, attempt, attempt === 1 ? "running" : "retrying");
+          if (attempt > 1) await this.wait(OPENROUTER_RETRY_WAIT_MS);
+          if (stopped) throw stopped;
+          let result: unknown;
+          let values: T[];
+          try {
+            const response = await this.fetchImplementation("https://openrouter.ai/api/v1/chat/completions", {
+              method: "POST",
+              headers: { authorization: `Bearer ${this.apiKey.trim()}`, "content-type": "application/json" },
+              body: JSON.stringify(body), signal: AbortSignal.timeout(120_000),
+            });
+            if (!response.ok) {
+              if (response.status !== 429 && response.status !== 408 && response.status < 500) {
+                throw new HttpError(424, "openrouter_access_rejected", `${PIPELINE_AI_MODEL_LABEL} could not start. Check OpenRouter API access, model availability and account balance.`);
+              }
+              throw new Error(`${PIPELINE_AI_MODEL_LABEL} is temporarily unavailable.`);
             }
-            throw new Error("GLM 5.3 Flash is temporarily unavailable.");
+            const payload = object(await response.json());
+            if (payload.model !== OPENROUTER_MODEL) {
+              if (payload.error) throw new Error("OpenRouter returned a provider failure.");
+              throw new HttpError(424, "openrouter_model_mismatch", `OpenRouter returned an unapproved model. The pipeline requires ${PIPELINE_AI_MODEL_LABEL}.`);
+            }
+            const choices = Array.isArray(payload.choices) ? payload.choices : [];
+            const first = object(choices[0]);
+            if (first.finish_reason !== "stop") throw new Error("The model response was truncated or rejected.");
+            const content = object(first.message).content;
+            if (typeof content !== "string") throw new Error("The model response omitted JSON content.");
+            result = JSON.parse(content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+            values = decode(result);
+          } catch (error) {
+            if (error instanceof HttpError) throw error;
+            if (attempt === OPENROUTER_MAX_ATTEMPTS) break;
+            continue;
           }
-          const payload = object(await response.json());
-          if (payload.model !== OPENROUTER_MODEL) {
-            if (payload.error) throw new Error("OpenRouter returned a provider failure.");
-            throw new HttpError(424, "openrouter_model_mismatch", "OpenRouter returned an unapproved model. The pipeline requires GLM 5.3 Flash.");
-          }
-          const choices = Array.isArray(payload.choices) ? payload.choices : [];
-          const first = object(choices[0]);
-          if (first.finish_reason !== "stop") throw new Error("The model response was truncated or rejected.");
-          const content = object(first.message).content;
-          if (typeof content !== "string") throw new Error("The model response omitted JSON content.");
-          result = JSON.parse(content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
-          values = decode(result);
-        } catch (error) {
-          if (error instanceof HttpError) throw error;
-          if (attempt === OPENROUTER_MAX_ATTEMPTS) break;
-          continue;
+          await options.cache?.set(key, result);
+          return values;
         }
-        await options.cache?.set(key, result);
-        group.forEach((row, index) => output.set(normaliseKeyword(row.keyword), values[index]!));
-        completed = true;
-        break;
-      }
-      if (!completed) throw new HttpError(424, "openrouter_retry_exhausted", "GLM 5.3 Flash did not return complete, valid results after 30 attempts. Resume after provider availability is restored.");
+        throw new HttpError(424, "openrouter_retry_exhausted", `${PIPELINE_AI_MODEL_LABEL} did not return complete, valid results after 30 attempts. Resume after provider availability is restored.`);
+      } });
     }
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (!stopped && next < pending.length) {
+        const item = pending[next++]!;
+        activeBatches += 1;
+        try {
+          results[item.batch] = await item.run();
+          completedBatches += 1;
+          completedBatchesByModel[OPENROUTER_MODEL] = (completedBatchesByModel[OPENROUTER_MODEL] ?? 0) + 1;
+        } catch (error) {
+          stop(error);
+        } finally {
+          activeBatches -= 1;
+        }
+        if (!stopped) {
+          try {
+            await report(item.batch + 1, 0, "completed");
+          } catch (error) {
+            stop(error);
+          }
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(this.concurrency, pending.length) }, () => worker()));
+    if (stopped) {
+      try {
+        await report(pending[Math.max(0, next - 1)]!.batch + 1, 0, stopped instanceof StageContinuation ? "checkpointing" : "failed");
+      } catch {
+        // Preserve the original failure after all in-flight batches have settled.
+      }
+      throw stopped;
+    }
+    if (batchCount > 0) await report(batchCount, 0, "completed");
+    const output = new Map<string, T & AiModelResult>();
+    rows.forEach((row, index) => {
+      const batch = Math.floor(index / OPENROUTER_BATCH_SIZE);
+      output.set(normaliseKeyword(row.keyword), { ...results[batch]![index % OPENROUTER_BATCH_SIZE]!, model: resultModels[batch]! });
+    });
     return output;
   }
 }
