@@ -420,6 +420,9 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   rank. Preserve the raw ladder result and baseline clamp in explanations;
   explicit manual overrides retain precedence. A clamped no-improvement target
   uses the current-rank CTR and must reconcile to zero incremental revenue.
+- The baseline guardrail is versioned as `har_v2.1.1` in calculated results and
+  release manifests. The scoring-configuration schema remains `har_v2.1.0`;
+  it is not the calculation model version. Revenue remains `revenue_v2.1.1`.
 - Complete calculation CSV export is project-authorised, run-pinned and
   keyset-paginated. Reject active or stale-input results and incomplete revenue;
   retain numeric zeros, explicit unavailable/outcome markers and provider
