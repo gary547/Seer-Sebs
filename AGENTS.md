@@ -238,6 +238,10 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   before continuing or failing, save successful sibling batches, and assemble
   results in input order. Persist progress serially with actual completed/active
   batch counts; a batch index is not a completion count under concurrency.
+  `providerProgress.completedBatchesByModel` distinguishes reused historical
+  batches from new calls. Preserve the actual model in detox rules,
+  `categorisation.model` stage records and `site_architecture.metric_source`.
+  A current model label must not overwrite historical result provenance.
 - Workflow failure payloads are internal diagnostics and must never be exposed
   by run-status APIs or the admin calculation UI. Store curated stage-specific
   failure messages and sanitize legacy HTTP/trace payloads at the API boundary.
