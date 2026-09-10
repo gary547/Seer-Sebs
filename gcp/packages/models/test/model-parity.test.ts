@@ -53,7 +53,7 @@ describe("canonical model contracts", () => {
   it("keeps the exact HAR v2.1 contract and SERP penalty", () => {
     const result = computeScenario(harInputs, "realistic", null);
 
-    expect(HAR_V2_MODEL_VERSION).toBe("har_v2.1.0");
+    expect(HAR_V2_MODEL_VERSION).toBe("har_v2.1.1");
     expect(serpPenalty(100, "featured_snippet")).toBe(0.35);
     expect(result.har_position).not.toBeNull();
     expect(result.rank_attainment_probability).not.toBeNull();

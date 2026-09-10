@@ -1422,6 +1422,7 @@ interface ParsedGscImport {
   rows: ParsedGscRow[];
   sheetsSeen: string[];
   sourceName: string;
+  sourceFiles: Array<{ filename: string; rowCount: number; sha256: string }>;
   warnings: string[];
 }
 
@@ -1465,7 +1466,7 @@ function gscDevice(
 function parseGscRows(value: unknown): ParsedGscImport {
   const record = bodyRecord(value);
   const sourceName = requireString(record.sourceName, "sourceName", 200);
-  const rows = valueArray(record.rows, "rows", 50_000).map((item, index) => {
+  const rows = valueArray(record.rows, "rows", 100_000).map((item, index) => {
     const row = bodyRecord(item);
     const path = `rows[${index}]`;
     return {
@@ -1497,6 +1498,9 @@ function parseGscRows(value: unknown): ParsedGscImport {
       };
     },
   );
+  if (rows.length + pages.length > 100_000) {
+    throw new HttpError(400, "gsc_batch_too_large", "A GSC upload supports up to 100,000 query and page observations.");
+  }
   const uniqueRows = new Set(
     rows.map(
       (row) =>
@@ -1543,6 +1547,16 @@ function parseGscRows(value: unknown): ParsedGscImport {
         requireString(sheet, `sheetsSeen[${index}]`, 100),
     ),
     sourceName,
+    sourceFiles: valueArray(record.sourceFiles ?? [], "sourceFiles", 10).map((item, index) => {
+      const source = bodyRecord(item);
+      const sha256 = requireString(source.sha256, `sourceFiles[${index}].sha256`, 64);
+      if (!/^[a-f0-9]{64}$/.test(sha256)) throw new HttpError(400, "invalid_request", "Invalid GSC source checksum.");
+      return {
+        filename: requireString(source.filename, `sourceFiles[${index}].filename`, 255),
+        rowCount: metric(source, "rowCount", `sourceFiles[${index}]`, 100_000),
+        sha256,
+      };
+    }),
     warnings: valueArray(record.warnings ?? [], "warnings", 100).map(
       (warning, index) =>
         requireString(warning, `warnings[${index}]`, 500),
@@ -1571,9 +1585,10 @@ export async function importProjectGscRows(
           date_range_end,
           date_range_start,
           device,
-          original_filename
+          original_filename,
+          source_files
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
       `,
       [
         uploadId,
@@ -1584,9 +1599,10 @@ export async function importProjectGscRows(
         parsed.dateRangeStart,
         parsed.device,
         parsed.originalFilename,
+        JSON.stringify(parsed.sourceFiles),
       ],
     );
-    for (const row of rows) {
+    for (let offset = 0; offset < rows.length; offset += 1_000) {
       await client.query(
         `
           INSERT INTO gsc_upload_keywords (
@@ -1601,23 +1617,22 @@ export async function importProjectGscRows(
             ctr,
             position
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          SELECT row.id, $1::uuid, row.query, row.normalised_query, row.page,
+            row.device, row.clicks, row.impressions, row.ctr, row.position
+          FROM jsonb_to_recordset($2::jsonb) AS row(
+            id uuid, query text, normalised_query text, page text, device text,
+            clicks integer, impressions integer, ctr numeric, position numeric
+          )
         `,
         [
-          row.id,
           uploadId,
-          row.query,
-          normaliseKeyword(row.query),
-          row.page,
-          row.device,
-          row.clicks,
-          row.impressions,
-          row.ctr,
-          row.position,
+          JSON.stringify(rows.slice(offset, offset + 1_000).map((row) => ({
+            ...row, normalised_query: normaliseKeyword(row.query),
+          }))),
         ],
       );
     }
-    for (const page of pages) {
+    for (let offset = 0; offset < pages.length; offset += 1_000) {
       await client.query(
         `
           INSERT INTO gsc_upload_pages (
@@ -1630,17 +1645,16 @@ export async function importProjectGscRows(
             ctr,
             position
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          SELECT page.id, $1::uuid, page."pageUrl", page.device, page.clicks,
+            page.impressions, page.ctr, page.position
+          FROM jsonb_to_recordset($2::jsonb) AS page(
+            id uuid, "pageUrl" text, device text, clicks integer,
+            impressions integer, ctr numeric, position numeric
+          )
         `,
         [
-          page.id,
           uploadId,
-          page.pageUrl,
-          page.device,
-          page.clicks,
-          page.impressions,
-          page.ctr,
-          page.position,
+          JSON.stringify(pages.slice(offset, offset + 1_000)),
         ],
       );
     }
@@ -1665,6 +1679,7 @@ export async function importProjectGscRows(
     row_count: rows.length,
     sheets_seen: parsed.sheetsSeen,
     source: sourceName,
+    source_files: parsed.sourceFiles,
     upload_device: parsed.device,
     upload_id: uploadId,
     warnings: parsed.warnings,

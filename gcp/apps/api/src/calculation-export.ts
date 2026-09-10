@@ -26,6 +26,10 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   const limit = Number(params.get("limit") ?? "200");
   const after = params.get("after");
   const requestedRun = params.get("runId");
+  const scenario = params.get("scenario");
+  if (scenario !== null && !["conservative", "realistic", "stretch"].includes(scenario)) {
+    throw new HttpError(400, "invalid_export_scenario", "Choose conservative, realistic or stretch.");
+  }
   if (!Number.isInteger(limit) || limit < 1 || limit > 500 || (after && !uuid.test(after)) || (requestedRun && !uuid.test(requestedRun)) || (after && !requestedRun)) {
     throw new HttpError(400, "invalid_export_page", "Export pagination is invalid.");
   }
@@ -81,7 +85,8 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
        WHERE member.keyword_id = keyword.id AND cluster.pipeline_run_id = $2 LIMIT 1
      ) AS cluster ON true
      LEFT JOIN keywords AS canonical ON canonical.id = cluster.canonical_keyword_id
-     ORDER BY keyword.id, scenario.value`, [projectId, run.id, after, limit]);
+     WHERE ($5::text IS NULL OR scenario.value = $5)
+     ORDER BY keyword.id, scenario.value`, [projectId, run.id, after, limit, scenario]);
   const keys = new Set(page.rows.map((row) => String(row.keyword_id)));
   if (page.rows.some((row) => !row.har_model_version || !row.revenue_model_version || row.expected_incremental_annual == null)) {
     throw new HttpError(409, "export_incomplete", "The completed run does not contain forecasts for every eligible keyword. Re-run the pipeline before exporting final results.");
@@ -96,6 +101,6 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   }));
   return { columns, rows, runId: run.id, keywordCount: keys.size, completedAt: run.completed_at.toISOString(),
     nextAfter: keys.size === limit ? [...keys].at(-1) : null,
-    filename: `seer-results-${projectId}-${run.id}.csv`,
+    filename: `seer-results-${projectId}-${run.id}${scenario ? `-${scenario}` : ""}.csv`,
   };
 }

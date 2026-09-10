@@ -1,6 +1,8 @@
 import { getAccessToken } from "./auth";
 import { seerApiRequest } from "./api";
 
+export type ExportScenario = "conservative" | "realistic" | "stretch";
+
 interface CalculationExportPage {
   columns: string[];
   rows: Array<Record<string, string | number | null>>;
@@ -15,7 +17,7 @@ export function calculationCsvCell(value: string | number | null | undefined): s
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-export async function downloadCalculationResults(projectId: string): Promise<void> {
+export async function downloadCalculationResults(projectId: string, scenario?: ExportScenario): Promise<void> {
   const token = await getAccessToken();
   if (!token) throw new Error("Authentication is required.");
   const lines: string[] = [];
@@ -25,6 +27,7 @@ export async function downloadCalculationResults(projectId: string): Promise<voi
   let filename = "seer-results.csv";
   do {
     const params = new URLSearchParams({ limit: "200" });
+    if (scenario) params.set("scenario", scenario);
     if (runId) params.set("runId", runId);
     if (after) params.set("after", after);
     const page: CalculationExportPage = await seerApiRequest(`/v1/projects/${projectId}/calculation-export?${params}`, {}, token);

@@ -490,7 +490,7 @@ describe("data-driven pipeline handlers", () => {
 
     expect(har).toMatchObject({
       handlerVersion: "har-v2.1",
-      modelVersion: "har_v2.1.0",
+      modelVersion: "har_v2.1.1",
       scenarioCount: 36,
     });
     expect(har.keywords.every((keyword) => keyword.scenarios.length === 3)).toBe(

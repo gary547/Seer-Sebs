@@ -258,6 +258,16 @@ export default function CalculationControlPanels({
                     <TableRow key={upload.id}>
                       <TableCell className="font-medium">
                         {upload.originalFilename ?? upload.sourceName}
+                        {(upload.sourceFiles?.length ?? 0) > 1 && (
+                          <details className="mt-1 text-xs font-normal text-ink-muted">
+                            <summary className="cursor-pointer">View included files</summary>
+                            <ul className="mt-2 space-y-1">
+                              {upload.sourceFiles?.map((source, index) => (
+                                <li key={index} className="max-w-md break-words">{source.filename} · {number(source.rowCount)} observations</li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         {upload.dateRangeStart ?? "—"} → {upload.dateRangeEnd ?? "—"}

@@ -78,6 +78,17 @@ function workbookBase64(device = "desktop"): string {
 }
 
 describe("GSC workbook parsing", () => {
+  it("preserves SAFS query-page observations instead of collapsing distinct landing pages", () => {
+    const parsed = parseGscWorkbookImport({
+      csvText: "Query,Page,Clicks,Impressions,CTR,Position\ntv,https://example.com/tvs,10,100,10%,8\ntv,https://example.com/offers,5,200,2.5%,12",
+      dateRangeStart: "2026-01-01", dateRangeEnd: "2026-04-01",
+      filename: "safs.csv", format: "csv_text", device: "all",
+    });
+    expect(parsed.rows).toHaveLength(2);
+    expect(parsed.rows.map((row) => row.page)).toEqual(["https://example.com/offers", "https://example.com/tvs"]);
+    expect(parsed.warnings).toEqual([]);
+  });
+
   it("preserves tablet SAFS rows and merges duplicates only within the same device", () => {
     const parsed = parseGscWorkbookImport({
       csvText: [

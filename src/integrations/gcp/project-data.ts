@@ -37,6 +37,7 @@ export interface GscWorkbookImportResult {
   upload_device: string;
   upload_id: string;
   warnings: string[];
+  source_files?: Array<{ filename: string; rowCount: number; sha256: string }>;
 }
 
 export interface ProjectDataKeyword {
@@ -268,7 +269,7 @@ export async function updateProjectKeywordPriority(
 
 export async function importGscWorkbook(
   projectId: string,
-  input: GscWorkbookImportInput,
+  input: GscWorkbookImportInput | { files: GscWorkbookImportInput[] },
 ): Promise<GscWorkbookImportResult> {
   return authenticatedRequest<GscWorkbookImportResult>(
     `/v1/projects/${projectId}/gsc-workbook`,

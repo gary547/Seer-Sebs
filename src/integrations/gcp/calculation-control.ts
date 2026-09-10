@@ -101,6 +101,7 @@ export interface CalculationControl {
       queryRows: number;
       rowCount: number;
       sourceName: string;
+      sourceFiles?: Array<{ filename: string; rowCount: number; sha256: string }>;
     }>;
   };
   latestSuccessfulRun: { completedAt: string; id: string } | null;

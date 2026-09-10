@@ -1,7 +1,7 @@
 // Shared pure helpers for HAR v2 composite scenario computation.
 // No I/O, no external calls. Deterministic. Unit-tested in har-v2.test.ts.
 
-export const HAR_V2_MODEL_VERSION = "har_v2.1.0";
+export const HAR_V2_MODEL_VERSION = "har_v2.1.1";
 
 export type Scenario = "conservative" | "realistic" | "stretch";
 export const SCENARIOS: Scenario[] = ["conservative", "realistic", "stretch"];
@@ -328,12 +328,16 @@ export function computeScenario(
 
   // Observed-rank clamp using base_rank as observed-position proxy.
   let clampedFrom: number | null = null;
-  if (harPosition != null && inp.base_rank != null && inp.base_rank > 0) {
-    const floor = Math.max(1, Math.round(inp.base_rank * scenarioFloorMultiplier(s, cfg)));
+  const baseline = inp.base_rank != null && Number.isFinite(inp.base_rank) && inp.base_rank >= 1
+    ? inp.base_rank : null;
+  if (harPosition != null && baseline != null) {
+    const floor = Math.min(baseline, Math.max(1, Math.round(baseline * scenarioFloorMultiplier(s, cfg))));
+    const rawPosition = harPosition;
     if (harPosition < floor) {
-      clampedFrom = harPosition;
       harPosition = floor;
     }
+    harPosition = Math.min(harPosition, baseline);
+    if (harPosition !== rawPosition) clampedFrom = rawPosition;
   }
 
   let confidence = computeConfidence(inp, s, sortedComps.length, cfg);
@@ -400,6 +404,7 @@ export function computeScenario(
     ladder_considered: ladderConsidered,
     clamps: {
       floor_multiplier: scenarioFloorMultiplier(s, cfg),
+      baseline_ceiling: baseline,
       raw_har_position: clampedFrom,
       clamped_har_position: clampedFrom != null ? harPosition : null,
     },

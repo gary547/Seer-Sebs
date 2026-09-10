@@ -31,6 +31,7 @@ interface GscUploadRow extends QueryResultRow {
   query_count: string;
   row_count: number;
   source_name: string;
+  source_files: Array<{ filename: string; rowCount: number; sha256: string }>;
 }
 
 interface KeywordOverviewRow extends QueryResultRow {
@@ -245,6 +246,7 @@ export async function getProjectCalculationControl(
           upload.id,
           upload.source_name,
           upload.original_filename,
+          upload.source_files,
           upload.row_count,
           upload.device,
           to_char(upload.date_range_start, 'YYYY-MM-DD') AS date_range_start,
@@ -827,6 +829,7 @@ export async function getProjectCalculationControl(
         queryRows: Number(upload.query_count),
         rowCount: upload.row_count,
         sourceName: upload.source_name,
+        sourceFiles: upload.source_files ?? [],
       })),
     },
     latestSuccessfulRun: latestRun

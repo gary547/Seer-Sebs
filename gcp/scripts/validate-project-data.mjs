@@ -535,7 +535,7 @@ async function validateEndToEnd() {
     !calculations.har.every(
       (summary) =>
         summary.forecastCount === 12 &&
-        summary.modelVersion === "har_v2.1.0",
+        summary.modelVersion === "har_v2.1.1",
     ) ||
     calculations.revenue.length !== 3 ||
     !calculations.revenue.every(

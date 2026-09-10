@@ -132,6 +132,35 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   different project, so the account email alone is not a sufficient tenant
   boundary.
 
+### Agent-managed reauthentication
+
+- The user has authorized agent-managed authentication repair for this Seer
+  identity. Reuse the Hush item `SEER_GOOGLE_PASSWORD`; do not ask the user to
+  resend the password or manually run login when an agent-managed flow can
+  complete the repair.
+- Read the Hush and Devo skills first. Verify the isolated `nobrainer` root,
+  active account and project access before diagnosing an authentication issue.
+  A saved active account does not prove that its Google session can refresh.
+- Consume the password only through
+  `hush run --name SEER_GOOGLE_PASSWORD --env SEER_GOOGLE_PASSWORD --redact -- <helper>`.
+  The helper must pass it directly to the matching Google password challenge;
+  never print it, put it in command arguments, save it to a file, or expose it
+  through browser screenshots, traces or recordings.
+- Prefer the supported interactive gcloud reauthentication flow when offered;
+  otherwise use the explicitly scoped `gcloud auth login` browser flow. Keep
+  `CLOUDSDK_CONFIG` set to the Seer root for every child process. Never switch
+  global defaults, use `master`, add `--update-adc`, or change security policies.
+- The verified CLI repair uses a PTY/Expect helper around the project-read
+  command above. Match the exact `Please enter your password:` prompt, submit
+  the Hush-injected password once through stdin, disable terminal output/logging,
+  and require a successful project read. Never retry a repeated password prompt.
+- Ask the user only for a required personal step such as a phone approval,
+  passkey/security key or CAPTCHA. Do not bypass verification or repeatedly
+  submit a rejected password. After repair, verify the account and a successful
+  read of `secure-cipher-503913-f1` before resuming the authorized operation.
+- Store only this procedure and the vault item name in repository notes.
+  Never store the password, Bitwarden Send URL, OAuth tokens or browser sessions.
+
 ## Implementation rules
 
 - DataForSEO is the only live SEO data provider for the autonomous pipeline.
@@ -210,6 +239,13 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   device before persistence. Sum clicks and impressions, recompute CTR, and
   use impression-weighted position; report the merged row count as an import
   warning.
+- Preserve the SAFS `Page` column. Multi-file imports submit `files` to the
+  existing workbook endpoint and create one atomic logical upload, not a union
+  of historical uploads. Require the same date window and consistent query/page
+  and device scopes; count identical cross-file observations once and reject
+  conflicting aggregates. Preserve source filenames, row counts and checksums in
+  `gsc_uploads.source_files` (migration `033_gsc_batch_provenance`). Bound imports
+  at 100,000 observations and persist in batches of at most 1,000 rows.
 - Standard GSC exports may use the aggregate `all` device. Preserve it through
   import, fixtures, pipeline output, and `ctr_curves`; the database device
   constraint must accept `all`, `desktop`, `mobile`, and `tablet`. Prefer an
@@ -380,6 +416,10 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   not a fabricated rank. Revenue preserves current revenue and records zero
   uplift for that outcome. Missing competitor data or financial inputs must
   remain distinguishable from a genuine zero result.
+- Automatic numeric HAR targets must not be worse than a valid observed base
+  rank. Preserve the raw ladder result and baseline clamp in explanations;
+  explicit manual overrides retain precedence. A clamped no-improvement target
+  uses the current-rank CTR and must reconcile to zero incremental revenue.
 - Complete calculation CSV export is project-authorised, run-pinned and
   keyset-paginated. Reject active or stale-input results and incomplete revenue;
   retain numeric zeros, explicit unavailable/outcome markers and provider
@@ -390,6 +430,10 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   three-scenario download. The shared complete-results button appears in
   Performance Output and admin Calculations alongside the existing Performance
   Output CSV export; preserve both export paths.
+- The complete CSV endpoint also accepts an optional validated `scenario`
+  (`conservative`, `realistic`, or `stretch`). Keep that filter and run ID on
+  every pagination request; omitting it preserves the combined three-scenario
+  export. No separate spreadsheet calculations or replacement export format.
 - Migration `032_provider_migration_contract` adds persisted provider batch
   results, OpenRouter categorisation provenance and page/domain input scopes.
   Apply it before deploying the new worker or export API; it also supplies

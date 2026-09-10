@@ -28,7 +28,7 @@ describe("complete calculation export API", () => {
       else if (sql.includes("FROM user_roles AS user_role")) rows = [{ role: allowed ? "admin" : "view_only" }];
       else if (sql.includes("FROM user_client_access")) rows = [];
       else if (sql.includes("SELECT run.id")) rows = latestRun ? [{ id: runId, completed_at: new Date("2026-09-08T09:00:00Z"), currency, dirty, active }] : [];
-      else if (sql.includes("WITH export_keywords")) rows = ["conservative", "realistic", "stretch"].map((scenario) => ({
+      else if (sql.includes("WITH export_keywords")) rows = ["conservative", "realistic", "stretch"].filter((scenario) => !values[4] || values[4] === scenario).map((scenario) => ({
         keyword_id: keywordId, keyword: 'keyword, with "quotes"', scenario, category: "Pharmacy", search_intent: "commercial",
         har_model_version: "har-v2", revenue_model_version: complete ? "revenue-v2" : null,
         link_power_score: "0", content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash", expected_incremental_annual: "125.25",
@@ -54,7 +54,22 @@ describe("complete calculation export API", () => {
     expect(page.rows).toHaveLength(3);
     expect(page.rows[0]).toMatchObject({ link_power_score: 0, expected_incremental_annual: 125.25, content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash" });
     expect(page.columns).toContain("har_explanation");
-    expect(executed.find(({ sql }) => sql.includes("WITH export_keywords"))?.values).toEqual([projectId, runId, null, 1]);
+    expect(executed.find(({ sql }) => sql.includes("WITH export_keywords"))?.values).toEqual([projectId, runId, null, 1, null]);
+  });
+  it.each(["conservative", "realistic", "stretch"])("exports only the selected %s scenario and preserves the run cursor", async (scenario) => {
+    const response = await fetch(`${url}?scenario=${scenario}&limit=1&runId=${runId}&after=${keywordId}`);
+    expect(response.status).toBe(200);
+    const page = await response.json() as { rows: Array<Record<string, unknown>>; filename: string };
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]?.scenario).toBe(scenario);
+    expect(page.filename).toBe(`seer-results-${projectId}-${runId}-${scenario}.csv`);
+    const query = executed.find(({ sql }) => sql.includes("WITH export_keywords"));
+    expect(query?.values).toEqual([projectId, runId, keywordId, 1, scenario]);
+    expect(query?.sql).toContain("scenario.value = $5");
+  });
+  it.each(["", "all", "unknown", "realistic%27%20OR%20true"])("rejects invalid scenario %s", async (scenario) => {
+    expect((await fetch(`${url}?scenario=${scenario}`)).status).toBe(400);
+    expect(executed.some(({ sql }) => sql.includes("WITH export_keywords"))).toBe(false);
   });
   it.each(["limit=501", "limit=0", "after=bad", `after=${keywordId}`, "runId=bad"])("rejects invalid pagination: %s", async (query) => {
     expect((await fetch(`${url}?${query}`)).status).toBe(400);

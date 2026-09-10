@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { importGscWorkbook } from "@/integrations/gcp/project-data";
+import { importGscWorkbook, type GscWorkbookImportInput } from "@/integrations/gcp/project-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,6 +27,7 @@ interface UploadSummary {
   date_range_end: string;
   upload_device: string;
   warnings: string[];
+  source_files: Array<{ filename: string; rowCount: number }>;
 }
 
 function mapErrorCode(code: string | undefined, fallback: string): string {
@@ -75,9 +76,7 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [file, setFile] = useState<File | null>(null);
-  const [fileKind, setFileKind] = useState<"csv" | "xlsx" | null>(null);
-  const [csvHasDevice, setCsvHasDevice] = useState<boolean>(false);
+  const [files, setFiles] = useState<Array<{ file: File; kind: "csv" | "xlsx"; hasDevice: boolean }>>([]);
   const [device, setDevice] = useState<string>(""); // "", "all", "mobile", "desktop"
   const [dateStart, setDateStart] = useState<string>("");
   const [dateEnd, setDateEnd] = useState<string>("");
@@ -86,26 +85,20 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
   const [summary, setSummary] = useState<UploadSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const needsDeviceSelector = useMemo(() => {
-    if (!file) return false;
-    if (fileKind === "csv" && csvHasDevice) return false;
-    return true;
-  }, [file, fileKind, csvHasDevice]);
-
-  const needsDateRange = fileKind === "csv";
+  const needsDeviceSelector = files.some((item) => !item.hasDevice);
+  const needsDateRange = files.some((item) => item.kind === "csv");
+  const busy = mode === "reading" || mode === "uploading";
 
   const canSubmit = useMemo(() => {
     if (!projectId || disabled) return false;
-    if (!file || !fileKind) return false;
+    if (!files.length) return false;
     if (needsDeviceSelector && !device) return false;
     if (needsDateRange && (!dateStart || !dateEnd)) return false;
     return mode === "idle" || mode === "done" || mode === "error";
-  }, [projectId, disabled, file, fileKind, needsDeviceSelector, device, needsDateRange, dateStart, dateEnd, mode]);
+  }, [projectId, disabled, files.length, needsDeviceSelector, device, needsDateRange, dateStart, dateEnd, mode]);
 
   const resetAfter = useCallback(() => {
-    setFile(null);
-    setFileKind(null);
-    setCsvHasDevice(false);
+    setFiles([]);
     setDevice("");
     setDateStart("");
     setDateEnd("");
@@ -113,78 +106,59 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
   }, []);
 
   const onFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0] ?? null;
+    const selected = Array.from(e.target.files ?? []);
     setSummary(null);
     setError(null);
-    setMode("idle");
-    if (!f) {
-      setFile(null);
-      setFileKind(null);
+    setFiles([]);
+    if (selected.length > 10 || selected.some((file) => !/\.(csv|xlsx)$/i.test(file.name))) {
+      setMode("error");
+      setError("Choose up to 10 CSV or XLSX exports from the same Search Console property.");
       return;
     }
-    const lower = f.name.toLowerCase();
-    if (lower.endsWith(".csv")) {
-      setFile(f);
-      setFileKind("csv");
-      const hasDev = await peekCsvHasDeviceColumn(f);
-      setCsvHasDevice(hasDev);
-      if (hasDev) setDevice(""); // per-row overrides
-    } else if (lower.endsWith(".xlsx")) {
-      setFile(f);
-      setFileKind("xlsx");
-      setCsvHasDevice(false);
-    } else {
-      setFile(null);
-      setFileKind(null);
-      setError("Please choose a .csv or .xlsx file exported from Search Console.");
-      toast.error("Unsupported file type — CSV or XLSX only.");
+    if (selected.reduce((sum, file) => sum + file.size, 0) > 20 * 1024 * 1024) {
+      setMode("error");
+      setError("The selected files exceed the 20 MB upload limit. Use smaller exports.");
+      return;
     }
+    setMode("reading");
+    setProgressMsg("Checking selected files…");
+    setFiles(await Promise.all(selected.map(async (file) => ({
+      file,
+      kind: file.name.toLowerCase().endsWith(".csv") ? "csv" as const : "xlsx" as const,
+      hasDevice: file.name.toLowerCase().endsWith(".csv") && await peekCsvHasDeviceColumn(file),
+    }))));
+    setMode("idle");
+    setProgressMsg("");
   }, []);
 
   const onSubmit = useCallback(async () => {
-    if (!projectId || !file || !fileKind) return;
+    if (!projectId || !canSubmit) return;
     setMode("reading");
-    setProgressMsg(fileKind === "csv" ? "Reading CSV…" : "Reading workbook…");
+    setProgressMsg(`Reading ${files.length} selected ${files.length === 1 ? "file" : "files"}…`);
     setError(null);
     setSummary(null);
     try {
-      let body:
-        | {
-            csvText: string;
-            dateRangeEnd: string;
-            dateRangeStart: string;
-            device?: string;
-            filename: string;
-            format: "csv_text";
-          }
-        | {
-            device?: string;
-            fileBase64: string;
-            filename: string;
-            format: "xlsx_base64";
-          };
-      if (fileKind === "csv") {
-        const text = await file.text();
-        body = {
+      const inputs: GscWorkbookImportInput[] = [];
+      for (const { file, kind, hasDevice } of files) {
+        setProgressMsg(`Reading ${inputs.length + 1} of ${files.length}: ${file.name}`);
+        if (kind === "csv") inputs.push({
           format: "csv_text",
-          csvText: text,
+          csvText: await file.text(),
           dateRangeStart: dateStart,
           dateRangeEnd: dateEnd,
           filename: file.name,
-        };
-        if (!csvHasDevice) body.device = device;
-      } else {
-        const fileBase64 = await fileToBase64(file);
-        body = {
+          device: hasDevice ? undefined : device,
+        });
+        else inputs.push({
           format: "xlsx_base64",
-          fileBase64,
+          fileBase64: await fileToBase64(file),
           filename: file.name,
           device: device || undefined,
-        };
+        });
       }
       setMode("uploading");
-      setProgressMsg("Importing to Seer…");
-      const data = await importGscWorkbook(projectId, body);
+      setProgressMsg("Validating and combining files into one GSC dataset…");
+      const data = await importGscWorkbook(projectId, inputs.length === 1 ? inputs[0] : { files: inputs });
 
       const s: UploadSummary = {
         upload_id: data.upload_id,
@@ -195,12 +169,13 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
         date_range_end: data.date_range_end,
         upload_device: data.upload_device,
         warnings: data.warnings ?? [],
+        source_files: data.source_files ?? [],
       };
       setSummary(s);
       setMode("done");
       setProgressMsg("");
       toast.success(
-        `Imported ${s.row_count.toLocaleString()} keywords · ${s.date_range_start} → ${s.date_range_end}`,
+        `Imported ${s.row_count.toLocaleString()} GSC observations · ${s.date_range_start} → ${s.date_range_end}`,
       );
 
       queryClient.invalidateQueries({ queryKey: ["gsc_upload_latest", projectId] });
@@ -227,7 +202,7 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
       setProgressMsg("");
       toast.error(msg);
     }
-  }, [projectId, file, fileKind, csvHasDevice, device, dateStart, dateEnd, queryClient, onUploaded, resetAfter]);
+  }, [projectId, canSubmit, files, device, dateStart, dateEnd, queryClient, onUploaded, resetAfter]);
 
   return (
     <div className="space-y-3">
@@ -243,28 +218,40 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
           onClick={() => fileInputRef.current?.click()}
         >
           <Upload className="h-4 w-4 mr-1" />
-          {file ? "Choose different file" : "Choose CSV or XLSX"}
+          {files.length ? "Change selected files" : "Choose CSV or XLSX files"}
         </Button>
         <input
           ref={fileInputRef}
           type="file"
           accept=".csv,.xlsx"
+          multiple
+          disabled={disabled || busy}
+          aria-label="Choose GSC export files"
           className="hidden"
           onChange={onFileChange}
         />
-        {file && (
-          <span className="text-xs text-muted-foreground truncate max-w-[260px]">
-            {file.name} · {fileKind?.toUpperCase()}
-          </span>
-        )}
       </div>
+      <p className="text-xs text-muted-foreground">
+        Select all exports for this dataset together (up to 10 files, 20 MB). Use the same Search Console property and export period.
+        Identical overlapping rows are counted once. This batch replaces the previous GSC input; it does not append to earlier uploads.
+      </p>
+      {files.length > 0 && (
+        <ul className="divide-y rounded-md border px-3 text-xs">
+          {files.map(({ file }, index) => (
+            <li key={`${index}-${file.name}`} className="flex items-start justify-between gap-3 py-2">
+              <span className="min-w-0 break-words">{file.name}</span>
+              <span className="shrink-0 text-muted-foreground">{Math.ceil(file.size / 1024).toLocaleString()} KB</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
-      {file && (
+      {files.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2">
           {needsDeviceSelector && (
             <div className="space-y-1">
               <Label className="text-xs">Device</Label>
-              <Select value={device} onValueChange={setDevice} disabled={disabled}>
+              <Select value={device} onValueChange={setDevice} disabled={disabled || busy}>
                 <SelectTrigger className="h-9">
                   <SelectValue placeholder="Select device…" />
                 </SelectTrigger>
@@ -272,11 +259,12 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
                   <SelectItem value="all">All (aggregate)</SelectItem>
                   <SelectItem value="mobile">Mobile</SelectItem>
                   <SelectItem value="desktop">Desktop</SelectItem>
+                  <SelectItem value="tablet">Tablet</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           )}
-          {fileKind === "csv" && csvHasDevice && (
+          {files.some((item) => item.hasDevice) && (
             <div className="space-y-1 sm:col-span-2">
               <Label className="text-xs">Device</Label>
               <p className="text-xs text-muted-foreground">
@@ -293,7 +281,7 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
                   type="date"
                   value={dateStart}
                   onChange={(e) => setDateStart(e.target.value)}
-                  disabled={disabled}
+                  disabled={disabled || busy}
                 />
               </div>
               <div className="space-y-1">
@@ -303,7 +291,7 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
                   type="date"
                   value={dateEnd}
                   onChange={(e) => setDateEnd(e.target.value)}
-                  disabled={disabled}
+                  disabled={disabled || busy}
                 />
               </div>
             </>
@@ -311,9 +299,8 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
         </div>
       )}
 
-      {file && (() => {
+      {files.length > 0 && (() => {
         const missing: string[] = [];
-        if (!file || !fileKind) missing.push("select a file");
         if (needsDeviceSelector && !device) missing.push("choose a device");
         if (needsDateRange && !dateStart) missing.push("set export period start");
         if (needsDateRange && !dateEnd) missing.push("set export period end");
@@ -326,7 +313,7 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
         return (
           <div className="space-y-1">
             <Button size="sm" onClick={onSubmit} disabled={!canSubmit}>
-              Upload
+              {files.length > 1 ? `Upload ${files.length} files as one dataset` : "Upload"}
             </Button>
             {showHint && (
               <p className="text-xs text-muted-foreground">
@@ -357,6 +344,14 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
           <p><span className="text-muted-foreground">Date range:</span> {summary.date_range_start} → {summary.date_range_end}</p>
           <p><span className="text-muted-foreground">Device:</span> {summary.upload_device}</p>
           <p><span className="text-muted-foreground">Rows imported:</span> {summary.row_count.toLocaleString()}</p>
+          {summary.source_files.length > 0 && (
+            <div className="pt-1">
+              <p className="text-muted-foreground">Included files:</p>
+              <ul className="list-disc pl-4 break-words">
+                {summary.source_files.map((source, index) => <li key={index}>{source.filename} · {source.rowCount.toLocaleString()} observations</li>)}
+              </ul>
+            </div>
+          )}
           {summary.pages_inserted > 0 && (
             <p><span className="text-muted-foreground">Pages:</span> {summary.pages_inserted.toLocaleString()} rows</p>
           )}

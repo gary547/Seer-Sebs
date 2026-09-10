@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { unzipSync } from "fflate";
 
 import { normaliseKeyword } from "../../../packages/fixtures/src/representative-project.js";
@@ -36,7 +37,8 @@ export interface ParsedGscWorkbook {
   pages: PageRow[];
   rows: QueryRow[];
   sheetsSeen: string[];
-  sourceName: "gsc_csv_v2" | "gsc_workbook_v1";
+  sourceName: "gsc_csv_v2" | "gsc_workbook_v1" | "gsc_batch_v1";
+  sourceFiles: Array<{ filename: string; rowCount: number; sha256: string }>;
   warnings: string[];
 }
 
@@ -303,6 +305,7 @@ function queryRows(rows: unknown[][]): {
   }
   const columns = metricColumns(found.headers);
   const query = findColumn(found.headers, ["top queries", "query", "keyword"]);
+  const page = findColumn(found.headers, ["page", "url"]);
   const output: QueryRow[] = [];
   let skippedLongQueries = 0;
   for (const row of rows.slice(found.index + 1)) {
@@ -319,7 +322,7 @@ function queryRows(rows: unknown[][]): {
       device: columns.device >= 0 ? normaliseDevice(row[columns.device]) : null,
       impressions:
         columns.impressions >= 0 ? parseInteger(row[columns.impressions]) : 0,
-      page: "",
+      page: page >= 0 ? String(row[page] ?? "").trim() : "",
       position,
       query: value,
     });
@@ -523,6 +526,7 @@ function aggregateQueryRows(rows: QueryRow[]): {
 
 export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
   const record = bodyRecord(body);
+  if ("files" in record) return parseGscBatch(record.files);
   const format = requiredString(record.format, "format", 32);
   if (format !== "csv_text" && format !== "xlsx_base64") {
     throw new HttpError(400, "invalid_payload", "format is invalid.");
@@ -637,6 +641,84 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
     rows: aggregated.rows,
     sheetsSeen,
     sourceName,
+    sourceFiles: [{
+      filename: originalFilename,
+      rowCount: aggregated.rows.length,
+      sha256: createHash("sha256").update(format === "csv_text"
+        ? String(record.csvText) : Buffer.from(String(record.fileBase64), "base64")).digest("hex"),
+    }],
     warnings,
+  };
+}
+
+function parseGscBatch(files: unknown): ParsedGscWorkbook {
+  if (!Array.isArray(files) || files.length < 1 || files.length > 10) {
+    throw new HttpError(400, "invalid_gsc_batch", "Select between 1 and 10 GSC files.");
+  }
+  const imports = files.map((file) => {
+    if ("files" in bodyRecord(file)) {
+      throw new HttpError(400, "invalid_gsc_batch", "Nested GSC batches are not supported.");
+    }
+    return parseGscWorkbookImport(file);
+  });
+  const first = imports[0]!;
+  if (imports.length === 1) return first;
+  if (imports.some((file) => file.dateRangeStart !== first.dateRangeStart || file.dateRangeEnd !== first.dateRangeEnd)) {
+    throw new HttpError(400, "gsc_batch_date_mismatch", "All files in a batch must cover the same export period.");
+  }
+  if (imports.reduce((total, file) => total + file.rows.length + file.pages.length, 0) > 100_000) {
+    throw new HttpError(400, "gsc_batch_too_large", "A GSC batch supports up to 100,000 query and page observations.");
+  }
+  let duplicateCount = 0;
+  const merge = <T extends GscMetricRow>(rows: T[], identity: (row: T) => string): T[] => {
+    const unique = new Map<string, T>();
+    const devices = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const base = identity(row);
+      const device = row.device ?? "all";
+      const seenDevices = devices.get(base) ?? new Set<string>();
+      if (seenDevices.size > 0 && !seenDevices.has(device) && (device === "all" || seenDevices.has("all"))) {
+        throw new HttpError(400, "gsc_batch_device_overlap", "The batch mixes All-device totals with device-specific rows for the same observation. Export a consistent device scope.");
+      }
+      seenDevices.add(device);
+      devices.set(base, seenDevices);
+      const key = JSON.stringify([base, device]);
+      const existing = unique.get(key);
+      if (existing) {
+        if (["clicks", "impressions", "position"].some((field) => existing[field as keyof GscMetricRow] !== row[field as keyof GscMetricRow])) {
+          throw new HttpError(400, "gsc_batch_conflicting_rows", "Overlapping files contain different metrics for the same query/page/device. Use non-overlapping exports from the same property and period; no files were imported.");
+        }
+        duplicateCount += 1;
+      } else unique.set(key, row);
+    }
+    return [...unique.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, row]) => row);
+  };
+  const allQueries = imports.flatMap((file) => file.rows);
+  const pageScopes = new Map<string, Set<boolean>>();
+  for (const row of allQueries) {
+    const key = normaliseKeyword(row.query);
+    const scopes = pageScopes.get(key) ?? new Set<boolean>();
+    scopes.add(Boolean(row.page));
+    if (scopes.size > 1) {
+      throw new HttpError(400, "gsc_batch_page_overlap", "The batch mixes query totals with query/page detail for the same keyword. Use a consistent Page column to avoid double counting.");
+    }
+    pageScopes.set(key, scopes);
+  }
+  const rows = merge(allQueries, (row) => JSON.stringify([normaliseKeyword(row.query), row.page]));
+  const pages = merge(imports.flatMap((file) => file.pages), (row) => row.pageUrl);
+  const deviceSet = new Set([...rows, ...pages].map((row) => row.device ?? "all"));
+  return {
+    ...first,
+    device: deviceSet.size === 1 ? [...deviceSet][0]! : "mixed",
+    originalFilename: `${imports.length} files (combined GSC upload)`,
+    rows,
+    pages,
+    sheetsSeen: [...new Set(imports.flatMap((file) => file.sheetsSeen))],
+    sourceName: "gsc_batch_v1",
+    sourceFiles: imports.flatMap((file) => file.sourceFiles),
+    warnings: [
+      ...imports.flatMap((file) => file.warnings.map((warning) => `${file.originalFilename}: ${warning}`)),
+      ...(duplicateCount ? [`${duplicateCount.toLocaleString("en-GB")} identical overlapping observations were counted once across the selected files.`] : []),
+    ],
   };
 }

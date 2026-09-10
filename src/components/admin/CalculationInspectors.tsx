@@ -427,7 +427,7 @@ export default function CalculationInspectors({ projectId, summary }: Props) {
                       </TableHead>
                     ))}
                     <TableHead className="text-right">V1 uplift</TableHead>
-                    <TableHead className="text-right">Real. target</TableHead>
+                    <TableHead className="text-right" title="Total annual revenue at the realistic target rank, before weighting incremental uplift by attainment probability. Not additional revenue.">Realistic target (annual total)</TableHead>
                     <TableHead>Diagnostics</TableHead>
                     <TableHead className="w-10" />
                   </TableRow>

@@ -19,6 +19,10 @@ function record(value: unknown): Record<string, unknown> {
 
 export function harOutcomeLabel(explanation: unknown): string {
   const reason = record(record(explanation).no_beat_reason).reason;
+  const baseRank = record(record(explanation).inputs).base_rank;
+  if (reason === "authority_below_threshold" && typeof baseRank === "number" && Number.isFinite(baseRank) && baseRank >= 1) {
+    return `No improvement forecast (current rank ${Math.round(baseRank)})`;
+  }
   return reason === "authority_below_threshold" ? "No attainable target"
     : reason === "no_comparable_competitors" ? "Insufficient competitor data" : "Not available";
 }

@@ -50,8 +50,8 @@ const manifest = {
   imageRepository: match.groups.repository,
   modelVersions: {
     calibration: "calibration_v1.0.0",
-    har: "har_v2.1.0",
-    revenue: "revenue_v2.1.0",
+    har: "har_v2.1.1",
+    revenue: "revenue_v2.1.1",
   },
   pipelineStageCount: 24,
 };
