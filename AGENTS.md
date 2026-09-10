@@ -365,6 +365,12 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   marking the run successful. Keep verified zero-uplift outcomes valid. Success
   fixtures must contain complete competitive inputs; test partial coverage as
   a separate failure case rather than accepting a false-success pipeline.
+  A matched client-only SERP is a verified zero-uplift case, not missing data.
+  Use the shared `verifiedHarNoTargetReason` predicate for readiness, revenue,
+  inspector labels and native exports. Require zero competitors, an observed
+  client rank and a client-domain SERP URL with genuine row provenance. Preserve
+  the null target and original diagnostic; never infer this from an empty
+  competitor list alone or manufacture a target rank or positive uplift.
   Worker task delivery maps these failures to HTTP 422 `pipeline_inputs_incomplete`;
   they must not consume transient-provider retry attempts.
 - When manual/provider average volume is absent, use the user-approved

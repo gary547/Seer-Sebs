@@ -12,6 +12,9 @@ let complete = true;
 let allowed = true;
 let latestRun = true;
 let currency: string | null = "GBP";
+let harPosition: number | null = 3;
+let harExplanation: Record<string, unknown>;
+let expectedRevenue = "125.25";
 let executed: Array<{ sql: string; values: unknown[] }>;
 
 describe("complete calculation export API", () => {
@@ -19,6 +22,7 @@ describe("complete calculation export API", () => {
   let url: string;
   beforeEach(async () => {
     dirty = false; active = false; complete = true; allowed = true; latestRun = true; currency = "GBP"; executed = [];
+    harPosition = 3; harExplanation = { authorityProvider: "dataforseo" }; expectedRevenue = "125.25";
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       sql = sql.replace(/\s+/g, " ").trim();
       executed.push({ sql, values });
@@ -31,8 +35,8 @@ describe("complete calculation export API", () => {
       else if (sql.includes("WITH export_keywords")) rows = ["conservative", "realistic", "stretch"].filter((scenario) => !values[4] || values[4] === scenario).map((scenario) => ({
         keyword_id: keywordId, keyword: 'keyword, with "quotes"', scenario, category: "Pharmacy", search_intent: "commercial",
         har_model_version: "har-v2", revenue_model_version: complete ? "revenue-v2" : null,
-        link_power_score: "0", content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash", expected_incremental_annual: "125.25",
-        har_explanation: { authorityProvider: "dataforseo" }, warnings: [],
+        link_power_score: "0", content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash", expected_incremental_annual: expectedRevenue,
+        har_position: harPosition, har_explanation: harExplanation, warnings: [],
       }));
       else throw new Error(`Unexpected query: ${sql}`);
       return { rows, rowCount: rows.length };
@@ -66,6 +70,25 @@ describe("complete calculation export API", () => {
     const query = executed.find(({ sql }) => sql.includes("WITH export_keywords"));
     expect(query?.values).toEqual([projectId, runId, keywordId, 1, scenario]);
     expect(query?.sql).toContain("scenario.value = $5");
+  });
+  it("exports client-only SERPs as verified zero uplift with original evidence and unchanged columns", async () => {
+    harPosition = null; expectedRevenue = "0";
+    harExplanation = { clientDomain: "https://client.test", serpStatus: "matched",
+      no_beat_reason: { reason: "no_comparable_competitors", ladder_considered: 0 },
+      inputs: { base_rank: 2, competitor_count: 0, client_lps_source: "serp_row", client_lps_match: "ranking_url",
+        client_resolved_url: "https://client.test/products" } };
+    const response = await fetch(url);
+    expect(response.status).toBe(200);
+    const page = await response.json() as { rows: Array<Record<string, unknown>>; columns: string[] };
+    expect(page.columns).toHaveLength(68);
+    expect(page.rows).toHaveLength(3);
+    for (const row of page.rows) {
+      expect(row).toMatchObject({ har_outcome: "no_attainable_target", har_position: "no_attainable_target", expected_incremental_annual: 0 });
+      expect(JSON.parse(String(row.har_explanation))).toEqual(harExplanation);
+    }
+    harExplanation = { ...harExplanation, serpStatus: "missing-provider" };
+    const invalid = await (await fetch(url)).json() as { rows: Array<Record<string, unknown>> };
+    expect(invalid.rows.every(row => row.har_outcome === "insufficient_inputs")).toBe(true);
   });
   it.each(["", "all", "unknown", "realistic%27%20OR%20true"])("rejects invalid scenario %s", async (scenario) => {
     expect((await fetch(`${url}?scenario=${scenario}`)).status).toBe(400);

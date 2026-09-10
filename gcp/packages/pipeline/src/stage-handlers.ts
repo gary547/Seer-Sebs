@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { domainBrandTerms } from "./brand-terms.js";
+import { verifiedHarNoTargetReason } from "../../models/src/har-outcome.js";
 
 import {
   CALIBRATION_MODEL_VERSION,
@@ -2258,8 +2259,7 @@ function executeRevenueV2(
         ctr_tp: ctrTarget,
         cvr: assumptions.conversionRate,
         har_confidence: harScenario.confidence,
-        no_attainable_target: harScenario.harPosition === null &&
-          (harScenario.explanation.no_beat_reason as { reason?: string } | null)?.reason === "authority_below_threshold",
+        no_attainable_target: harScenario.harPosition === null && verifiedHarNoTargetReason(harScenario.explanation) !== null,
         monthly_volumes: demandSignal?.monthlyVolumes ?? [],
         pos_now: keyword.baseRank,
         pos_tp: harScenario.harPosition,
@@ -2375,7 +2375,7 @@ function executeHarReadiness(
       {
         count: siteArchitecture.keywords.filter((keyword) => keyword.inputScope === "domain_fallback").length,
         input: "page_content_fit",
-        substitute: "domain_level_glm_estimate",
+        substitute: "domain_level_openrouter_estimate",
       },
       {
         count: siteArchitecture.keywords.filter(
@@ -2411,8 +2411,7 @@ function executeRevenueReadiness(
   })) missing.push("search_volume");
   if (har.keywords.some((keyword) => HAR_SCENARIOS.some((scenario) => {
     const result = keyword.scenarios.find((row) => row.scenario === scenario);
-    return !result || (result.harPosition === null &&
-      (result.explanation.no_beat_reason as { reason?: string } | null)?.reason !== "authority_below_threshold");
+    return !result || (result.harPosition === null && verifiedHarNoTargetReason(result.explanation) === null);
   }))) missing.push("attainable_rank_or_verified_no_target");
   if (missing.length > 0) {
     throw new PipelineReadinessError("Revenue", missing);

@@ -2,6 +2,7 @@ import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth.js";
 import { assertProjectAccessByRole } from "./authorization.js";
+import { verifiedHarNoTargetReason } from "../../../packages/models/src/har-outcome.js";
 
 const TEXT_FIELDS = [
   "keyword_id", "keyword", "scenario", "category", "search_intent", "categorisation_source", "intent_source",
@@ -62,9 +63,6 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
        demand.trend_confidence, demand.volatility_score, demand.seasonality_strength, demand.demand_warning_reason,
        har.model_version AS har_model_version, har.base_rank, har.har_position, har.har_confidence,
        har.rank_attainment_probability, har.authority_score, har.link_power_score, har.link_gap_score,
-       CASE WHEN har.har_position IS NOT NULL THEN 'attainable_target'
-         WHEN har.explanation_json #>> '{no_beat_reason,reason}' = 'authority_below_threshold' THEN 'no_attainable_target'
-         ELSE 'insufficient_inputs' END AS har_outcome,
        COALESCE(har.explanation_json #>> '{no_beat_reason,reason}', 'not_applicable') AS har_no_beat_reason,
        har.content_fit_score, har.serp_visibility_multiplier, har.explanation_json AS har_explanation,
        revenue.model_version AS revenue_model_version, revenue.annual_volume, revenue.volume_forward,
@@ -92,6 +90,10 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
     throw new HttpError(409, "export_incomplete", "The completed run does not contain forecasts for every eligible keyword. Re-run the pipeline before exporting final results.");
   }
   const columns = ["project_id", "run_id", "completed_at", "currency", ...TEXT_FIELDS, ...NUMBER_FIELDS];
+  for (const row of page.rows) {
+    row.har_outcome = row.har_position != null ? "attainable_target"
+      : verifiedHarNoTargetReason(row.har_explanation) !== null ? "no_attainable_target" : "insufficient_inputs";
+  }
   const rows = page.rows.map((row) => ({
     project_id: projectId, run_id: run.id, completed_at: run.completed_at.toISOString(), currency: run.currency?.trim() || "not_available",
     ...Object.fromEntries(TEXT_FIELDS.map((key) => [key, row[key] === null || row[key] === undefined || row[key] === "" ? "not_available" : typeof row[key] === "object" ? JSON.stringify(row[key]) : String(row[key])])),

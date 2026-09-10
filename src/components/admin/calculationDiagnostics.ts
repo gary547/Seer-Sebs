@@ -2,6 +2,7 @@ import type {
   CalculationInspectorRow,
   CtrCurve,
 } from "@/integrations/gcp/calculations";
+import { verifiedHarNoTargetReason } from "../../../gcp/packages/models/src/har-outcome";
 
 export type DiagnosticFlag =
   | "clamped"
@@ -18,6 +19,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 export function harOutcomeLabel(explanation: unknown): string {
+  if (verifiedHarNoTargetReason(explanation) === "client_only_serp") return "Client-only SERP — no modelled uplift";
   const reason = record(record(explanation).no_beat_reason).reason;
   const baseRank = record(record(explanation).inputs).base_rank;
   if (reason === "authority_below_threshold" && typeof baseRank === "number" && Number.isFinite(baseRank) && baseRank >= 1) {

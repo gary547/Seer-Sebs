@@ -164,6 +164,38 @@ describe("data-driven pipeline handlers", () => {
       .toThrow("attainable_rank_or_verified_no_target");
   });
 
+  it("completes revenue for a verified client-only SERP without inventing rank or uplift", () => {
+    const { fixture, outputs, har } = executeRepresentativeStages();
+    const resolved = structuredClone(har);
+    const keyword = resolved.keywords[0]!;
+    keyword.baseRank = 2;
+    for (const scenario of keyword.scenarios) {
+      scenario.harPosition = null;
+      scenario.rankAttainmentProbability = null;
+      scenario.explanation = {
+        ...scenario.explanation, clientDomain: "https://client.test", serpStatus: "matched",
+        no_beat_reason: { reason: "no_comparable_competitors", ladder_considered: 0 },
+        inputs: { base_rank: 2, competitor_count: 0, client_lps_source: "serp_row", client_lps_match: "ranking_url",
+          client_resolved_url: "https://client.test/products" },
+      };
+    }
+    const dependencies = { ...outputs, "har-v2": resolved };
+    const readiness = executeDataDrivenStage("revenue-readiness", fixture, dependencies);
+    const revenue = executeDataDrivenStage("revenue-v2", fixture, { ...dependencies, "revenue-readiness": readiness });
+    expect(revenue?.handlerVersion).toBe("revenue-v2.1");
+    if (!revenue || revenue.handlerVersion !== "revenue-v2.1") throw new Error("Unexpected revenue output.");
+    const forecasts = revenue.keywords.find(row => row.id === keyword.id)!.scenarios;
+    expect(forecasts).toHaveLength(3);
+    for (const row of forecasts) {
+      expect(row.expectedIncrementalAnnual).toBe(0);
+      expect(row.targetIncrementalRevenueAnnual).toBe(0);
+      expect(row.targetAbsoluteRevenueAnnual).toBe(row.currentRevenueAnnual);
+      expect(row.warnings).toContain("no_attainable_target");
+    }
+    expect(keyword.scenarios.every(row => row.harPosition === null)).toBe(true);
+    expect(() => executeDataDrivenStage("rollup-output", fixture, { ...dependencies, "revenue-v2": revenue })).not.toThrow();
+  });
+
   it.each(["missing-keyword", "missing-scenario", "null-revenue", "non-finite"])("does not finalise %s results", (mode) => {
     const { fixture, outputs, revenue } = executeRepresentativeStages();
     const incomplete = structuredClone(revenue);
