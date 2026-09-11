@@ -37,10 +37,10 @@ function database(): DatabasePool {
     if (sql.includes("WITH base_sources AS")) {
       return result([{ base_rank_sources: { gsc: 9 }, branded_count: "2", kept_count: "10", missing_base_rank_count: "1", total_count: "12", unbranded_count: "9", unclassified_brand_count: "1", with_base_rank_count: "9" }]);
     }
-    if (sql.includes("), history AS (")) {
+    if (sql.includes("AS history_row_count")) {
       return result([{ earliest_month: calendarDates[2], history_row_count: "240", kept_keyword_count: "10", latest_month: calendarDates[3], maximum_months: "24", median_months: "24", minimum_months: "0", with_12_months_count: "9", with_24_months_count: "8", with_history_count: "9" }]);
     }
-    if (sql.includes("count(volume.month)::text AS month_count")) {
+    if (sql.includes("sample_keywords AS MATERIALIZED")) {
       return result([{ keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", month_count: "24", months: [{ month: "2025-12-01", volume: 1200 }] }]);
     }
     if (sql.includes("WITH clusters AS")) {
@@ -129,11 +129,12 @@ describe("calculation control API", () => {
     });
     expect(
       executedSql.filter((sql) =>
-        sql.includes("DISTINCT ON (volume.keyword_id, volume.month)"),
+        sql.includes("provider_history AS MATERIALIZED"),
       ),
     ).toHaveLength(2);
-    expect(executedSql.filter((sql) => sql.includes("JOIN local_provider_keyword_monthly_volumes AS provider"))).toHaveLength(2);
-    expect(executedSql.filter((sql) => sql.includes("imported.keyword_id = keyword.id AND imported.month = provider.month"))).toHaveLength(2);
+    expect(executedSql.filter((sql) => sql.includes("provider.month = volume.month"))).toHaveLength(2);
+    expect(executedSql.filter((sql) => sql.includes("sample_keywords AS MATERIALIZED"))).toHaveLength(1);
+    expect(executedSql.some(sql => sql.includes("ORDER BY month, priority, fetched_at DESC, source DESC, id DESC"))).toBe(true);
     expect(executedSql.some((sql) => sql.includes("ORDER BY stage.attempts DESC"))).toBe(true);
   });
 

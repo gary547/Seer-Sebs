@@ -18,7 +18,21 @@ const STAGE_FAILURE_MESSAGES: Partial<Record<PipelineStageId, string>> = {
 const TECHNICAL_FAILURE_PATTERN =
   /HTTP server responded|internal_error|x-cloud-trace|traceparent|application\/json|\b5\d\d\b|\{\s*"(?:body|code|headers|message)"/i;
 
-export function pipelineStageFailureMessage(stageId: PipelineStageId): string {
+export function pipelineStageFailureMessage(stageId: PipelineStageId, reason = ""): string {
+  if (stageId === "backlinks") {
+    if (reason.includes("dataforseo_backlinks_unavailable")) {
+      return "DataForSEO Backlinks remained temporarily unavailable after automatic retries. Saved batches are preserved; resume to continue the remaining work.";
+    }
+    if (reason.includes("dataforseo_backlinks_access_rejected")) {
+      return "DataForSEO rejected Backlinks API access. Check the account's Backlinks entitlement before resuming; saved batches are preserved.";
+    }
+    if (reason.includes("dataforseo_backlinks_usage_exhausted")) {
+      return "DataForSEO Backlinks usage is exhausted. Check the account's available usage before resuming; saved batches are preserved.";
+    }
+    if (reason.includes("dataforseo_backlinks_rate_limited")) {
+      return "DataForSEO Backlinks rate limiting persisted after automatic retries. Saved batches are preserved; resume to continue the remaining work.";
+    }
+  }
   return (
     STAGE_FAILURE_MESSAGES[stageId] ??
     "This calculation step did not finish after automatic retries. Saved progress is preserved; resume the pipeline to try again."

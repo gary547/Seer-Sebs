@@ -88,19 +88,21 @@ export function buildStageProgress(input: {
     ? input.providerProgress as Record<string, unknown> : {};
   const batch = Number(provider.batch);
   const batchCount = Number(provider.batchCount);
-  const aiRunning = input.state === "running" && (provider.model === PIPELINE_AI_MODEL || provider.model === LEGACY_PIPELINE_AI_MODEL)
+  const providerPlan = (provider.model === PIPELINE_AI_MODEL || provider.model === LEGACY_PIPELINE_AI_MODEL || provider.provider === "dataforseo_backlinks")
     && Number.isInteger(batch) && Number.isInteger(batchCount) && batch >= 1 && batch <= batchCount;
+  const aiRunning = input.state === "running" && providerPlan;
+  const stopped = input.state === "failed";
   const completed = provider.completedBatches;
   const active = provider.activeBatches;
   const concurrentProgress = typeof completed === "number" && Number.isInteger(completed)
     && typeof active === "number" && Number.isInteger(active)
     && completed >= 0 && active >= 0 && completed + active <= batchCount;
-  const work = aiRunning
+  const work = providerPlan
     ? concurrentProgress
-      ? { total: batchCount, succeeded: completed, submitted: active, pending: batchCount - completed - active, failed: 0, lastError: null }
-      : { total: batchCount, succeeded: batch - 1, submitted: 1, pending: batchCount - batch, failed: 0, lastError: null }
+      ? { total: batchCount, succeeded: completed, submitted: stopped ? 0 : active, pending: batchCount - completed - (stopped ? 0 : active), failed: 0, lastError: null }
+      : { total: batchCount, succeeded: batch - 1, submitted: stopped ? 0 : 1, pending: batchCount - batch + (stopped ? 1 : 0), failed: 0, lastError: null }
     : input.work && input.work.total > 0 ? input.work : null;
-  const unit = aiRunning ? "batches" : input.work?.unit ?? "items";
+  const unit = providerPlan ? (provider.unit === "items" ? "items" : "batches") : input.work?.unit ?? "items";
   const countUnit = (count: number) => count === 1 ? (unit === "batches" ? "batch" : "item") : unit;
   const percent =
     input.state === "succeeded"

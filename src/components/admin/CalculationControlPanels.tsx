@@ -147,9 +147,57 @@ function Empty({ children }: { children: string }) {
   );
 }
 
+export function CalculationSummaryPanels({
+  archived, ctrCurves, onRun, projectId, running, summary,
+}: Omit<Props, "control"> & { archived: boolean }) {
+  const key = storageKey(projectId);
+  const calibration = summary?.calibration;
+  const observedCtrPoints = (ctrCurves?.curves ?? [])
+    .flatMap(curve => curve.points).filter(point => point.source === "gsc").length;
+  return <section className="space-y-3" aria-label="Completed calculation summaries">
+      <CollapsibleSection
+        id="ctr-curves"
+        storageKey={key}
+        title="CTR curves (v2)"
+        icon={<TrendingUp className="h-4 w-4 text-signal" />}
+        badge={<Badge variant="outline">CANONICAL</Badge>}
+        summary={`${ctrCurves?.curves.length ?? 0} curves · ${observedCtrPoints} observed points`}
+      >
+        <div className="space-y-4 pt-4">
+          <CtrVisualPanel data={ctrCurves} />
+          <RefreshAction archived={archived} label="Refresh CTR v2" onRun={onRun} running={running} />
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id="calibration"
+        storageKey={key}
+        title="Calibration (modelled vs actual)"
+        icon={<ShieldCheck className="h-4 w-4 text-signal" />}
+        badge={<Badge variant="outline">GATE</Badge>}
+        summary={calibration ? `${calibration.status} · ${calibration.matched} matched` : "No snapshot"}
+      >
+        <div className="space-y-4 pt-4">
+          <MetricStrip items={[
+            { label: "Status", value: calibration?.status ?? "—" },
+            { label: "Matched", value: number(calibration?.matched) },
+            { label: "Overall ratio", value: number(calibration?.overallRatio as number | null, 3) },
+            { label: "Promotion eligible", value: calibration?.promotionEligible ? "Yes" : "No" },
+          ]} />
+          {calibration ? (
+            <div className="grid gap-3 lg:grid-cols-2">
+              <DataBlock title="By intent" value={calibration.byIntent} />
+              <DataBlock title="By rank band" value={calibration.byRankBand} />
+            </div>
+          ) : <Empty>No calibration snapshot is available.</Empty>}
+          <RefreshAction archived={archived} label="Recompute calibration" onRun={onRun} running={running} />
+        </div>
+      </CollapsibleSection>
+  </section>;
+}
+
 export default function CalculationControlPanels({
   control,
-  ctrCurves,
   onRun,
   projectId,
   running,
@@ -158,11 +206,7 @@ export default function CalculationControlPanels({
   const queryClient = useQueryClient();
   const archived = control.archived;
   const key = storageKey(projectId);
-  const calibration = summary?.calibration;
   const latestUpload = control.gscReadiness.uploads[0] ?? null;
-  const observedCtrPoints = (ctrCurves?.curves ?? [])
-    .flatMap((curve) => curve.points)
-    .filter((point) => point.source === "gsc").length;
   const uploadWindowDays = latestUpload?.dateRangeStart && latestUpload.dateRangeEnd
     ? Math.floor(
         (new Date(latestUpload.dateRangeEnd).getTime() -
@@ -299,44 +343,6 @@ export default function CalculationControlPanels({
         </div>
       </CollapsibleSection>
 
-      <CollapsibleSection
-        id="ctr-curves"
-        storageKey={key}
-        title="CTR curves (v2)"
-        icon={<TrendingUp className="h-4 w-4 text-signal" />}
-        badge={<Badge variant="outline">CANONICAL</Badge>}
-        summary={`${ctrCurves?.curves.length ?? 0} curves · ${observedCtrPoints} observed points`}
-      >
-        <div className="space-y-4 pt-4">
-          <CtrVisualPanel data={ctrCurves} />
-          <RefreshAction archived={archived} label="Refresh CTR v2" onRun={onRun} running={running} />
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        id="calibration"
-        storageKey={key}
-        title="Calibration (modelled vs actual)"
-        icon={<ShieldCheck className="h-4 w-4 text-signal" />}
-        badge={<Badge variant="outline">GATE</Badge>}
-        summary={calibration ? `${calibration.status} · ${calibration.matched} matched` : "No snapshot"}
-      >
-        <div className="space-y-4 pt-4">
-          <MetricStrip items={[
-            { label: "Status", value: calibration?.status ?? "—" },
-            { label: "Matched", value: number(calibration?.matched) },
-            { label: "Overall ratio", value: number(calibration?.overallRatio as number | null, 3) },
-            { label: "Promotion eligible", value: calibration?.promotionEligible ? "Yes" : "No" },
-          ]} />
-          {calibration ? (
-            <div className="grid gap-3 lg:grid-cols-2">
-              <DataBlock title="By intent" value={calibration.byIntent} />
-              <DataBlock title="By rank band" value={calibration.byRankBand} />
-            </div>
-          ) : <Empty>No calibration snapshot is available.</Empty>}
-          <RefreshAction archived={archived} label="Recompute calibration" onRun={onRun} running={running} />
-        </div>
-      </CollapsibleSection>
 
       <CollapsibleSection id="base-rank" storageKey={key} title="base_rank source reconciliation" icon={<Binary className="h-4 w-4 text-signal" />} badge={<Badge variant="outline">BACKFILL</Badge>} summary={`${control.baseRank.withRank}/${control.baseRank.total} ranked`}>
         <div className="space-y-4 pt-4">

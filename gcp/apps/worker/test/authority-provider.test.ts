@@ -1,12 +1,42 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { DataForSeoAuthorityClient } from "../src/live-providers.js";
+import { StageContinuation } from "../src/stage-continuation.js";
 
 function response(result: unknown[], code = 20000): Response {
   return Response.json({ status_code: 20000, tasks: [{ status_code: code, result }] });
 }
 
 describe("DataForSEO authority adapter", () => {
+  it("checkpoints completed pages before continuing at the delivery deadline", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (_, init) => {
+      const [{ targets }] = JSON.parse(String(init?.body)) as [{ targets: string[] }];
+      return response([{ items: targets.map(url => ({ url, rank: 20, main_domain_rank: 30, backlinks: 1, referring_domains: 1 })) }]);
+    });
+    const saved: string[] = [];
+    let budget = 1;
+    await expect(new DataForSeoAuthorityClient("encoded", fetcher).metrics(
+      Array.from({ length: 101 }, (_, i) => ({ mode: "exact" as const, url: `https://example.test/${i}` })), {
+        checkBudget: () => { if (budget-- === 0) throw new StageContinuation(); },
+        savePages: async values => { saved.push(...values.keys()); },
+      },
+    )).rejects.toMatchObject({ code: "stage_continuation" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(saved).toHaveLength(100);
+  });
+
+  it("saves usable pages from a partially completed batch when a domain fallback fails", async () => {
+    const good = "https://example.test/good";
+    const fetcher = vi.fn<typeof fetch>(async url => String(url).includes("bulk_pages")
+      ? response([{ items: [{ url: good, rank: 0, main_domain_rank: 30, backlinks: 0, referring_domains: 0 }] }])
+      : new Response("rejected", { status: 403 }));
+    const saved: string[] = [];
+    await expect(new DataForSeoAuthorityClient("encoded", fetcher).metrics([
+      { mode: "exact", url: good }, { mode: "exact", url: "https://other.test/missing" },
+    ], { savePages: async values => { saved.push(...values.keys()); } }))
+      .rejects.toMatchObject({ code: "dataforseo_backlinks_access_rejected" });
+    expect(saved).toEqual([good]);
+  });
   it("maps domain summaries on the 0–100 scale without fabricating Ahrefs Rank", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => response([{ target: "example.test", rank: 61, backlinks: 250, referring_domains: 80 }]));
     const client = new DataForSeoAuthorityClient("login:password", fetcher);

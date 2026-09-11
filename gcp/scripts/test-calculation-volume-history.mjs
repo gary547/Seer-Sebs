@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { canonicalProjectVolumeCte } from "../../dist/gcp/packages/runtime/src/project-volume-history.js";
+import { canonicalProjectVolumeCte, projectVolumeSampleSql, projectVolumeSummarySql } from "../../dist/gcp/packages/runtime/src/project-volume-history.js";
 
 const projectId = "00000000-0000-4000-8000-000000000001";
 const otherProjectId = "00000000-0000-4000-8000-000000000002";
@@ -43,6 +43,8 @@ const setup = `
     ('${otherProjectId}', 'shared query', '2025-02-01', 9999);
   GRANT SELECT ON keywords, keyword_monthly_volumes,
     local_provider_keyword_monthly_volumes TO seer_api, seer_worker;
+  ALTER TABLE keywords ADD COLUMN keyword text;
+  UPDATE keywords SET keyword = normalised_keyword;
 `;
 
 const kept = [
@@ -72,3 +74,20 @@ for (const [keptOnly, role] of [[true, "seer_api"], [false, "seer_worker"]]) {
 }
 
 console.log("Volume history PostgreSQL integration passed: shared worker/inspector resolution, cache fallback, imported zero preservation, deduplication, qualification and project isolation.");
+
+for (const [kind, sql] of [["summary", projectVolumeSummarySql()], ["sample", projectVolumeSampleSql()]]) {
+  const query = `${setup} SET LOCAL ROLE seer_api;
+    SELECT jsonb_agg(result) FROM (${sql}) AS result; ROLLBACK;`
+    .replaceAll("$1", `'${projectId}'::uuid`);
+  const output = execFileSync("docker", ["compose", "-f", "gcp/docker-compose.local.yml", "exec", "-T", "postgres",
+    "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "seer_owner", "-d", "seer", "-Atq"],
+    { input: query, encoding: "utf8", timeout: 30_000 });
+  const rows = JSON.parse(output.trim());
+  if (kind === "summary") {
+    assert.equal(rows[0].history_row_count, "4");
+    assert.equal(rows[0].kept_keyword_count, "2");
+  } else {
+    assert.deepEqual(rows.flatMap(row => row.months.map(month => ({ keyword_id: row.keyword_id, ...month }))), kept);
+  }
+}
+console.log("Bounded inspector SQL matches canonical volumes, including imported zeros and deterministic ties.");

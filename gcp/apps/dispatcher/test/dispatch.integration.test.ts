@@ -58,7 +58,8 @@ describe("Cloud Run dispatcher delivery", () => {
     }, { attempt_count: 1, id: "task", run_id: "run", stage_id: "site-architecture" });
     expect(query.mock.calls.some(([sql]) => sql.includes("SET state = 'ready'"))).toBe(false);
     const stageFailure = query.mock.calls.find(([sql]) => sql.includes("UPDATE pipeline_stage_runs"));
-    expect(stageFailure?.[0]).toContain("'message', $3::text");
+    expect(stageFailure?.[0]).toContain("'message', CASE WHEN stage_id = $2 THEN $3::text");
+    expect(stageFailure?.[0]).toContain("pipeline_blocked");
     expect(stageFailure?.[1]?.[2]).toContain("after 30 attempts");
     expect(query.mock.calls.some(([sql]) => sql.includes("UPDATE pipeline_runs"))).toBe(true);
   });

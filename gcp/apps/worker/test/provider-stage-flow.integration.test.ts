@@ -37,10 +37,27 @@ describe("provider-backed keyword stage integration", () => {
     try {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       const cache = new Map<string, unknown>();
+      const classifications = new Map<string, unknown>();
       const attempts = new Map<string, number>();
       const messages: string[] = [];
       const progressUpdates: AiProgress[] = [];
       const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("FROM keyword_intent_cache")) {
+          const wanted = Array.isArray(values[2]) ? values[2] : null;
+          const prefix = `${values[0]}:${values[1]}:`;
+          const rows = [...classifications].filter(([key]) => key.startsWith(prefix))
+            .map(([key, result]) => ({ normalised_keyword: key.slice(prefix.length), result }))
+            .filter(row => !wanted || wanted.includes(row.normalised_keyword));
+          return { rows, rowCount: rows.length };
+        }
+        if (sql.includes("INSERT INTO keyword_intent_cache")) {
+          for (const row of JSON.parse(String(values[4]))) {
+            const key = `${values[0]}:${values[1]}:${row.normalised_keyword}`;
+            if (!classifications.has(key)) classifications.set(key, row.result);
+          }
+          return { rows: [], rowCount: 1 };
+        }
         if (sql.includes("input->>'mode'")) return { rows: [{ mode: "full" }], rowCount: 1 };
         if (sql.includes("RETURNING attempt_count")) {
           const key = `${values[2]}:${values[3]}`;
@@ -61,7 +78,7 @@ describe("provider-backed keyword stage integration", () => {
         else throw new Error("Unexpected persistence operation in integration test.");
         return { rows: [], rowCount: 1 };
       });
-      const pool = { query } as unknown as DatabasePool;
+      const pool = { query, connect: async () => ({ query, release: vi.fn() }) } as unknown as DatabasePool;
       const ai = new OpenRouterPipelineClient("integration-key", (_input, init) => fetch(url, init), undefined, 3);
       const hydrator = new LivePipelineProviderHydrator({} as DataForSeoClient, {} as DataForSeoAuthorityClient, ai);
       const intake = executeDataDrivenStage("intake", fixture, {});
@@ -90,7 +107,9 @@ describe("provider-backed keyword stage integration", () => {
       const cacheReadsBeforeResume = query.mock.calls.filter(([sql]) => sql.includes("SELECT result, item_key")).length;
       await hydrator.refineStage(pool, fixture.project.id, "test-run", fixture, manyCategories);
       expect(requests).toHaveLength(requestsBeforeResume);
-      expect(query.mock.calls.filter(([sql]) => sql.includes("SELECT result, item_key"))).toHaveLength(cacheReadsBeforeResume + 1);
+      expect(query.mock.calls.filter(([sql]) => sql.includes("SELECT result, item_key"))).toHaveLength(cacheReadsBeforeResume);
+      expect(classifications.size).toBeGreaterThanOrEqual(61);
+      expect(categorisation.classificationContract).toBe("intent-v2");
       const preflight = executeDataDrivenStage("preflight", fixture, { detox, categorisation }) as PreflightStageData;
       const enrichment = executeDataDrivenStage("keyword-enrichment", fixture, { preflight }) as KeywordEnrichmentStageData;
       for (const keyword of enrichment.keywords) {

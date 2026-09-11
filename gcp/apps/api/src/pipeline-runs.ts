@@ -475,6 +475,7 @@ export async function getProjectPipelineReadiness(
         )::text AS cache_entries_available
       FROM provider_work_items AS item
       JOIN latest_run ON latest_run.id = item.pipeline_run_id
+      WHERE item.provider <> 'input_snapshot'
     `,
     [projectId],
   )]);
@@ -760,6 +761,7 @@ export async function getPipelineRun(
           ) AS last_error
         FROM provider_work_items
         WHERE pipeline_run_id = $1
+          AND provider <> 'input_snapshot'
         GROUP BY stage_id
       `,
       [id],

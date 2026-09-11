@@ -5,6 +5,23 @@ import { buildStageProgress, formatElapsed } from "../src/stage-progress.js";
 const now = new Date("2026-08-20T07:50:00.000Z");
 
 describe("stage progress", () => {
+  it("retains the planned denominator on failure instead of reporting stale cache keys as 99%", () => {
+    expect(buildStageProgress({
+      attempts: 8, completedAt: now, id: "site-architecture", now,
+      outputMessage: "Stopped because backlinks failed.",
+      providerProgress: { model: "deepseek/deepseek-v4.1-flash", batch: 870, batchCount: 2099, completedBatches: 870, activeBatches: 8 },
+      startedAt: null, state: "failed", waitingOn: [],
+      work: { failed: 0, lastError: null, pending: 0, submitted: 1, succeeded: 1708, total: 1709 },
+    })).toMatchObject({ done: 870, total: 2099, percent: 41, submitted: 0, pending: 1229, unit: "batches" });
+  });
+
+  it("reports durable Backlinks URL coverage even when no generic work items exist", () => {
+    expect(buildStageProgress({
+      attempts: 2, completedAt: null, id: "backlinks", now, outputMessage: "DataForSEO Backlinks: 200 of 1000 URLs saved.",
+      providerProgress: { provider: "dataforseo_backlinks", unit: "items", batch: 201, batchCount: 1000, completedBatches: 200, activeBatches: 0 },
+      startedAt: null, state: "running", waitingOn: [], work: null,
+    })).toMatchObject({ done: 200, total: 1000, percent: 20, unit: "items" });
+  });
   it("formats elapsed durations for the operator log line", () => {
     expect(
       formatElapsed(new Date("2026-08-20T07:49:54.000Z"), now),

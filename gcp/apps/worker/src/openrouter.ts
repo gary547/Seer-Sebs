@@ -11,6 +11,17 @@ export const OPENROUTER_MAX_ATTEMPTS = 30;
 export const OPENROUTER_RETRY_WAIT_MS = 2_000;
 export const OPENROUTER_BATCH_SIZE = 20;
 export const OPENROUTER_BATCH_CONCURRENCY = 8;
+export const INTENT_CLASSIFICATION_VERSION = "intent-v2";
+
+const INTENT_INSTRUCTION = `Classification contract ${INTENT_CLASSIFICATION_VERSION}.
+Classify each keyword independently using only its text and the client's business context. Batch neighbours, input order, dataset size and volume must never change its intent.
+Return category (a meaningful concise category), intent (transactional/commercial/informational/navigational), and tags (up to 8 concise strings). Use a consistent taxonomy grounded in this project, not an unrelated industry.
+Apply these intent rules in order:
+1. Informational: the primary request seeks an explanation, instructions, troubleshooting, or a definition. Examples: "what is seo", "how to buy a television", "oven not heating". An action word inside a how-to question is not transactional.
+2. Transactional: an explicit immediate action to buy, book, order, hire, subscribe, request a quote, or obtain a deal/coupon. Examples: "buy oled tv", "book seo consultation", "hire seo agency", "fridge discount code".
+3. Commercial: researching, comparing, reviewing or selecting a product or service, including generic product, model, supplier and service-category searches without an explicit action. Examples: "best ovens", "oled vs qled", "seo agency", "seo agency london", "samsung qn90d". A business service query alone is commercial, not transactional.
+4. Navigational: trying to reach a specific named website, brand homepage, account, login or support destination. Examples: "ao login", "ao.com", or a brand alone. A brand plus a product/service/comparison is commercial unless a preceding rule applies.
+For ambiguity choose informational for learning, commercial for evaluation or an unspecified buying stage, navigational only for a clear destination, and transactional only for an explicit immediate action. Do not infer purchase intent solely because the client sells the subject.`;
 
 export function resolveOpenRouterConcurrency(value?: string): number {
   const concurrency = value === undefined ? OPENROUTER_BATCH_CONCURRENCY : Number(value);
@@ -43,6 +54,7 @@ export interface AiBatchCache {
 
 export interface AiOptions {
   cache?: AiBatchCache;
+  classifications?: AiClassificationCache;
   deadline?: number;
   progress?: (progress: AiProgress) => Promise<void> | void;
 }
@@ -64,6 +76,11 @@ export interface AiCategorisationResult extends AiModelResult {
   category: string;
   intent: Exclude<SearchIntent, null>;
   tags: string[];
+}
+
+export interface AiClassificationCache {
+  get(context: string): Promise<Map<string, unknown>>;
+  set(context: string, items: ReadonlyMap<string, AiCategorisationResult>): Promise<Map<string, unknown>>;
 }
 
 export interface AiContentFitResult extends AiModelResult {
@@ -102,6 +119,21 @@ function projectContext(source: ProjectPipelineSource): object {
   };
 }
 
+function parseCategory(value: Record<string, unknown>) {
+  if (!Array.isArray(value.tags) || value.tags.length > 8) throw new Error("Invalid category tags.");
+  return {
+    category: text(value.category, 200),
+    intent: choice(value.intent, ["transactional", "commercial", "informational", "navigational"]),
+    tags: value.tags.map(tag => text(tag, 100)),
+  };
+}
+
+function cachedCategory(value: unknown): AiCategorisationResult {
+  const row = object(value);
+  if (row.model !== OPENROUTER_MODEL) throw new Error("Incompatible cached classification model.");
+  return { ...parseCategory(row), model: OPENROUTER_MODEL };
+}
+
 export class OpenRouterPipelineClient {
   constructor(
     private readonly apiKey: string,
@@ -123,17 +155,26 @@ export class OpenRouterPipelineClient {
       }), options);
   }
 
-  categorise(rows: readonly AiKeyword[], source: ProjectPipelineSource, options: AiOptions = {}): Promise<Map<string, AiCategorisationResult>> {
-    return this.complete("keyword categorisation", rows,
-      "Categorise every keyword for this client's business. Return category (a meaningful concise category), intent (transactional/commercial/informational/navigational), and tags (up to 8 concise strings). Use a consistent taxonomy grounded in the project context, never a taxonomy from an unrelated industry.",
-      projectContext(source), (value) => {
-        if (!Array.isArray(value.tags) || value.tags.length > 8) throw new Error("Invalid category tags.");
-        return {
-          category: text(value.category, 200),
-          intent: choice(value.intent, ["transactional", "commercial", "informational", "navigational"]),
-          tags: value.tags.map((tag) => text(tag, 100)),
-        };
-      }, options);
+  async categorise(rows: readonly AiKeyword[], source: ProjectPipelineSource, options: AiOptions = {}): Promise<Map<string, AiCategorisationResult>> {
+    const context = projectContext(source);
+    const contextKey = createHash("sha256").update(JSON.stringify({
+      clientId: source.client.id, context, model: OPENROUTER_MODEL, instruction: INTENT_INSTRUCTION,
+    })).digest("hex");
+    const stored = await options.classifications?.get(contextKey) ?? new Map<string, unknown>();
+    const cached = new Map([...stored].map(([key, value]) => [key, cachedCategory(value)]));
+    const missing = rows.filter(row => !cached.has(normaliseKeyword(row.keyword)));
+    const generated = await this.complete("keyword categorisation", missing, INTENT_INSTRUCTION, context, parseCategory, options,
+      options.classifications ? async (group, values, model) => {
+        const items = new Map(group.map((row, index) => [normaliseKeyword(row.keyword), { ...values[index]!, model }]));
+        const winners = await options.classifications!.set(contextKey, items);
+        return group.map(row => cachedCategory(winners.get(normaliseKeyword(row.keyword))));
+      } : undefined);
+    return new Map(rows.map(row => {
+      const key = normaliseKeyword(row.keyword);
+      const value = cached.get(key) ?? generated.get(key);
+      if (!value) throw new Error("Missing keyword classification.");
+      return [key, value];
+    }));
   }
 
   score(rows: readonly { keyword: string; rankingUrl: string; scope?: string }[], options: AiOptions = {}): Promise<Map<string, AiContentFitResult>> {
@@ -152,7 +193,8 @@ export class OpenRouterPipelineClient {
   }
 
   private async complete<T extends object>(operation: string, rows: readonly AiKeyword[], instruction: string, context: object,
-    parse: (value: Record<string, unknown>) => T, options: AiOptions): Promise<Map<string, T & AiModelResult>> {
+    parse: (value: Record<string, unknown>) => T, options: AiOptions,
+    saveBatch?: (rows: readonly AiKeyword[], values: T[], model: PipelineAiModel) => Promise<T[]>): Promise<Map<string, T & AiModelResult>> {
     const batchCount = Math.ceil(rows.length / OPENROUTER_BATCH_SIZE);
     const results: T[][] = new Array(batchCount);
     const resultModels: PipelineAiModel[] = new Array(batchCount).fill(OPENROUTER_MODEL);
@@ -218,7 +260,8 @@ export class OpenRouterPipelineClient {
         if (cached !== undefined) resultModels[batch] = LEGACY_PIPELINE_AI_MODEL;
       }
       if (cached !== undefined) {
-        results[batch] = decode(cached);
+        const values = decode(cached);
+        results[batch] = saveBatch ? await saveBatch(group, values, resultModels[batch]!) : values;
         completedBatches += 1;
         const model = resultModels[batch]!;
         completedBatchesByModel[model] = (completedBatchesByModel[model] ?? 0) + 1;
@@ -264,7 +307,7 @@ export class OpenRouterPipelineClient {
             continue;
           }
           await options.cache?.set(key, result);
-          return values;
+          return saveBatch ? saveBatch(group, values, OPENROUTER_MODEL) : values;
         }
         throw new HttpError(424, "openrouter_retry_exhausted", `${PIPELINE_AI_MODEL_LABEL} did not return complete, valid results after 30 attempts. Resume after provider availability is restored.`);
       } });

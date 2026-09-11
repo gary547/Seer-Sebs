@@ -226,6 +226,9 @@ async function retryOrFailTask(
   terminal = false,
 ): Promise<void> {
   await withTransaction(pool, async (client) => {
+    const run = await client.query<{ status: string }>(
+      `SELECT status FROM pipeline_runs WHERE id = $1 FOR UPDATE`, [task.run_id]);
+    if (run.rows[0]?.status === 'failed' || run.rows[0]?.status === 'succeeded') return;
     if (!terminal && task.attempt_count < MAXIMUM_ATTEMPTS) {
       await client.query(
         `
@@ -259,9 +262,10 @@ async function retryOrFailTask(
         UPDATE pipeline_stage_runs
         SET state = 'failed',
             output = COALESCE(output, '{}'::jsonb) || jsonb_build_object(
-                'reason', 'pipeline_failed',
+                'reason', CASE WHEN stage_id = $2 THEN 'pipeline_failed' ELSE 'pipeline_blocked' END,
                 'failedStage', $2::text,
-                'message', $3::text
+                'message', CASE WHEN stage_id = $2 THEN $3::text
+                  ELSE 'Stopped because ' || $2::text || ' failed. Saved progress is preserved; resume after resolving that step.' END
             ),
             completed_at = COALESCE(completed_at, now())
         WHERE run_id = $1

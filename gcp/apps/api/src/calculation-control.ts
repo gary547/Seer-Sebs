@@ -4,7 +4,7 @@ import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth.js";
-import { canonicalProjectVolumeCte } from "../../../packages/runtime/src/project-volume-history.js";
+import { projectVolumeSampleSql, projectVolumeSummarySql } from "../../../packages/runtime/src/project-volume-history.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertAdministrator } from "./authorization.js";
 
@@ -303,64 +303,8 @@ export async function getProjectCalculationControl(
       `,
       [projectId],
     ),
-    pool.query<VolumeSummaryRow>(
-      `
-        WITH ${canonicalProjectVolumeCte(true)}, history AS (
-          SELECT
-            keyword.id,
-            count(volume.month)::integer AS month_count,
-            min(volume.month) AS earliest_month,
-            max(volume.month) AS latest_month
-          FROM keywords AS keyword
-          LEFT JOIN canonical_volume AS volume
-            ON volume.keyword_id = keyword.id
-          WHERE keyword.project_id = $1
-            AND keyword.detox_status = 'keep'
-          GROUP BY keyword.id
-        )
-        SELECT
-          count(*)::text AS kept_keyword_count,
-          count(*) FILTER (WHERE month_count > 0)::text AS with_history_count,
-          count(*) FILTER (WHERE month_count >= 12)::text AS with_12_months_count,
-          count(*) FILTER (WHERE month_count >= 24)::text AS with_24_months_count,
-          sum(month_count)::text AS history_row_count,
-          min(month_count)::text AS minimum_months,
-          percentile_cont(0.5) WITHIN GROUP (ORDER BY month_count)::text
-            AS median_months,
-          max(month_count)::text AS maximum_months,
-          to_char(min(earliest_month), 'YYYY-MM-DD') AS earliest_month,
-          to_char(max(latest_month), 'YYYY-MM-DD') AS latest_month
-        FROM history
-      `,
-      [projectId],
-    ),
-    pool.query<VolumeSampleRow>(
-      `
-        WITH ${canonicalProjectVolumeCte(true)}
-        SELECT
-          keyword.id AS keyword_id,
-          keyword.keyword,
-          count(volume.month)::text AS month_count,
-          COALESCE(
-            jsonb_agg(
-              jsonb_build_object(
-                'month', to_char(volume.month, 'YYYY-MM-DD'),
-                'volume', volume.volume
-              ) ORDER BY volume.month
-            ) FILTER (WHERE volume.month IS NOT NULL),
-            '[]'::jsonb
-          ) AS months
-        FROM keywords AS keyword
-        LEFT JOIN canonical_volume AS volume
-          ON volume.keyword_id = keyword.id
-        WHERE keyword.project_id = $1
-          AND keyword.detox_status = 'keep'
-        GROUP BY keyword.id, keyword.keyword, keyword.normalised_keyword
-        ORDER BY count(volume.month) DESC, keyword.normalised_keyword
-        LIMIT 20
-      `,
-      [projectId],
-    ),
+    pool.query<VolumeSummaryRow>(projectVolumeSummarySql(), [projectId]),
+    pool.query<VolumeSampleRow>(projectVolumeSampleSql(), [projectId]),
     pool.query<ClusterSummaryRow>(
       `
         WITH clusters AS (

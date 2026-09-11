@@ -38,6 +38,8 @@
     "test:gcp-backup-restore": "bash gcp/scripts/test-backup-restore.sh",
     "test:gcp-database-access": "bash gcp/scripts/test-database-access-boundaries.sh",
     "test:gcp-volume-history": "node gcp/scripts/test-calculation-volume-history.mjs",
+    "test:gcp-provider-checkpoints": "node gcp/scripts/test-provider-checkpoints.mjs",
+    "test:gcp-volume-scale": "node gcp/scripts/test-calculation-volume-scale.mjs",
     "test:gcp-url-monitor-maintenance": "node gcp/scripts/test-url-monitor-maintenance.mjs",
     "test:gcp:docker": "bash gcp/scripts/validate-docker.sh",
     "test:gcp:fresh-schema": "bash gcp/scripts/validate-fresh-schema.sh",

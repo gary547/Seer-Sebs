@@ -24,6 +24,10 @@ run_npm run typecheck:gcp
 run_npm run test:gcp
 run_npm run build:gcp
 
+if [[ ! -e dist/gcp/node_modules ]]; then
+  ln -s ../../gcp/node_modules dist/gcp/node_modules
+fi
+
 docker compose -f "$compose_file" build api postgres
 docker compose -f "$compose_file" up -d --wait postgres
 docker compose -f "$compose_file" exec -T postgres \
@@ -124,6 +128,12 @@ docker compose -f "$compose_file" exec -T postgres \
   -f /docker-entrypoint-initdb.d/033_gsc_batch_provenance.sql
 docker compose -f "$compose_file" exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
+  -f /docker-entrypoint-initdb.d/034_backlinks_checkpoint_index.sql
+docker compose -f "$compose_file" exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
+  -f /docker-entrypoint-initdb.d/035_keyword_intent_cache.sql
+docker compose -f "$compose_file" exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
   -f /docker-entrypoint-initdb.d/999_local_runtime_users.sql
 docker compose -f "$compose_file" up -d --wait
 
@@ -133,6 +143,8 @@ run_npm run test:gcp-url-monitor-maintenance
 run_npm run test:gcp-backup-restore
 run_npm run test:gcp-database-access
 run_npm run test:gcp-volume-history
+run_npm run test:gcp-provider-checkpoints
+run_npm run test:gcp-volume-scale
 
 SEER_LOCAL_VALIDATION_STATE="$validation_state" "$node_executable" gcp/scripts/validate-local.mjs
 "$node_executable" gcp/scripts/validate-synthetic.mjs

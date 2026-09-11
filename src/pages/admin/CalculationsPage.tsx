@@ -4,12 +4,13 @@ import {
   Archive,
   Calculator,
   ExternalLink,
+  History,
   TriangleAlert,
 } from "lucide-react";
 import { Link, Navigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
-import CalculationControlPanels from "@/components/admin/CalculationControlPanels";
+import CalculationControlPanels, { CalculationSummaryPanels } from "@/components/admin/CalculationControlPanels";
 import CalculationExportButton from "@/components/CalculationExportButton";
 import CalculationInspectors from "@/components/admin/CalculationInspectors";
 import AutonomousPipelinePanel from "@/components/admin/AutonomousPipelinePanel";
@@ -74,6 +75,7 @@ export default function CalculationsPage() {
     queryKey: ["admin", "calculation-control", projectId],
     queryFn: () => getProjectCalculationControl(projectId),
     enabled: Boolean(projectId),
+    retry: 1,
   });
   const summary = useQuery({
     queryKey: ["admin", "calculation-summary", projectId],
@@ -203,6 +205,11 @@ export default function CalculationsPage() {
   };
 
   const latestRun = latestPipeline.data?.run ?? null;
+  const resultSources = [
+    { label: "Forecasts", runId: summary.data?.runId },
+    { label: "CTR curves", runId: ctrCurves.data?.runId },
+  ].filter(source => source.runId);
+  const earlierResults = latestRun && resultSources.some(source => source.runId !== latestRun.id);
   const pipelineFailure = latestRun ? resolvePipelineFailure(latestRun) : null;
   const failedStage = pipelineFailure
     ? latestRun?.stages.find((stage) => stage.id === pipelineFailure.stageId) ??
@@ -303,8 +310,22 @@ export default function CalculationsPage() {
       {control.isError && (
         <Alert variant="destructive">
           <TriangleAlert className="h-4 w-4" />
-          <AlertTitle>Calculation data could not be loaded</AlertTitle>
-          <AlertDescription>{control.error instanceof Error ? control.error.message : "Unknown API error"}</AlertDescription>
+          <AlertTitle>Input diagnostics could not be loaded</AlertTitle>
+          <AlertDescription>
+            Other inspection panels remain available below.
+            <Button className="ml-3" variant="outline" size="sm" onClick={() => void control.refetch()}>Retry input diagnostics</Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {earlierResults && (
+        <Alert>
+          <History className="h-4 w-4" />
+          <AlertTitle>Displayed results are from an earlier completed run</AlertTitle>
+          <AlertDescription>
+            {resultSources.map(source => `${source.label}: ${source.runId?.slice(0, 8)}`).join(" · ")}
+            {`. Latest run ${latestRun.id.slice(0, 8)} is ${latestRun.status}; these are not its final outputs.`}
+          </AlertDescription>
         </Alert>
       )}
 
@@ -326,9 +347,26 @@ export default function CalculationsPage() {
       )}
 
       {projectId && control.isLoading && (
-        <div className="space-y-3" aria-label="Loading calculation controls">
-          {Array.from({ length: 8 }, (_, index) => <div key={index} className="h-[72px] animate-pulse rounded-xl border border-hairline bg-surface" />)}
+        <div className="rounded-xl border border-hairline bg-surface px-5 py-4 text-sm text-ink-muted" role="status">
+          Loading input checks and diagnostics. Completed result panels load independently below.
         </div>
+      )}
+
+
+      {(summary.isError || ctrCurves.isError) && (
+        <Alert variant="destructive">
+          <TriangleAlert className="h-4 w-4" />
+          <AlertTitle>{summary.isError ? "Forecast summary" : "CTR curves"} could not be loaded</AlertTitle>
+          <AlertDescription>
+            This panel is temporarily unavailable. Other inspectors can still be used.
+            <Button className="ml-3" variant="outline" size="sm" onClick={() => { void summary.refetch(); void ctrCurves.refetch(); }}>Retry result panels</Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {projectId && (
+        <CalculationSummaryPanels archived={archived} projectId={projectId} ctrCurves={ctrCurves.data}
+          summary={summary.data} running={running} onRun={() => runPipeline("full")} />
       )}
 
       {control.data && (
@@ -343,9 +381,9 @@ export default function CalculationsPage() {
             running={running}
             summary={summary.data}
           />
-          <CalculationInspectors projectId={projectId} summary={summary.data} />
         </>
       )}
+      {projectId && <CalculationInspectors projectId={projectId} summary={summary.data} />}
     </div>
   );
 }

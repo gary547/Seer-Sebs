@@ -27,10 +27,13 @@ expect_denied() {
 
 expect_allowed "$api_url" "SELECT 1 FROM clients LIMIT 1"
 expect_allowed "$worker_url" "SELECT 1 FROM monitored_urls LIMIT 1"
+expect_allowed "$worker_url" "SELECT 1 FROM keyword_intent_cache LIMIT 1"
 expect_allowed "$dispatcher_url" "SELECT 1 FROM local_task_queue LIMIT 1"
 expect_allowed "$events_url" "SELECT 1 FROM outbox_events LIMIT 1"
 
 expect_denied "$api_url" "SELECT 1 FROM migration.source_rows LIMIT 1"
+expect_denied "$api_url" "SELECT 1 FROM keyword_intent_cache LIMIT 1"
+expect_denied "$worker_url" "UPDATE keyword_intent_cache SET context_hash = context_hash WHERE false"
 expect_denied "$worker_url" "DELETE FROM clients WHERE false"
 expect_denied "$dispatcher_url" "SELECT 1 FROM clients LIMIT 1"
 expect_denied "$events_url" "SELECT 1 FROM profiles LIMIT 1"

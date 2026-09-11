@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { parseRepresentativeProjectFixture } from "../../../packages/fixtures/src/representative-project.js";
 import { LEGACY_PIPELINE_AI_MODEL } from "../../../packages/pipeline/src/ai-model.js";
-import { OpenRouterPipelineClient, OPENROUTER_MODEL, OPENROUTER_MAX_ATTEMPTS, OPENROUTER_RETRY_WAIT_MS, resolveOpenRouterConcurrency, type AiProgress } from "../src/openrouter.js";
+import { OpenRouterPipelineClient, OPENROUTER_MODEL, OPENROUTER_MAX_ATTEMPTS, OPENROUTER_RETRY_WAIT_MS, INTENT_CLASSIFICATION_VERSION, resolveOpenRouterConcurrency, type AiProgress, type AiClassificationCache } from "../src/openrouter.js";
 
 const source = parseRepresentativeProjectFixture(JSON.parse(readFileSync(new URL("../../../fixtures/representative-project.json", import.meta.url), "utf8")));
 const score = { index: 0, relevancyScore: 75, contentStatus: "green", tacticalStatus: "no_action_needed" };
@@ -31,6 +31,44 @@ function scoreResponse(init?: RequestInit) {
 }
 
 describe("OpenRouter DeepSeek V4.1 Flash pipeline client", () => {
+  it("keeps equivalent intent stable across 20, 50 and 1000-keyword batches but isolates clients and context", async () => {
+    const store = new Map<string, Map<string, unknown>>();
+    const classifications: AiClassificationCache = {
+      get: async context => new Map(store.get(context)),
+      set: async (context, values) => {
+        const saved = store.get(context) ?? new Map<string, unknown>();
+        for (const [key, value] of values) if (!saved.has(key)) saved.set(key, value);
+        store.set(context, saved);
+        return new Map([...values.keys()].map(key => [key, saved.get(key)]));
+      },
+    };
+    let changed = false;
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.messages[0].content).toContain(INTENT_CLASSIFICATION_VERSION);
+      expect(body.messages[0].content).toContain('"seo agency"');
+      expect(body.messages[0].content).toContain("commercial, not transactional");
+      expect(body.messages[0].content).toContain("Batch neighbours, input order, dataset size and volume must never change its intent");
+      const items = JSON.parse(body.messages[1].content).items as Array<{ index: number }>;
+      return response(items.map(item => ({ index: item.index, category: "SEO", intent: changed ? "transactional" : "commercial", tags: ["SEO"] })));
+    });
+    const ai = new OpenRouterPipelineClient("test-key", fetcher);
+    for (const size of [20, 50, 1000]) {
+      const inputs = Array.from({ length: size - 1 }, (_, i) => ({ keyword: `context query ${size} ${i}` }));
+      inputs.splice(Math.floor(size / 2), 0, { keyword: " SEO Agency " });
+      const result = await ai.categorise(inputs, source, { classifications });
+      expect(result.get("seo agency")).toMatchObject({ intent: "commercial", model: OPENROUTER_MODEL });
+      changed = true;
+    }
+    const calls = fetcher.mock.calls.length;
+    await ai.categorise([{ keyword: "seo agency" }], source, { classifications });
+    expect(fetcher).toHaveBeenCalledTimes(calls);
+    const changedContext = { ...source, project: { ...source.project, country: "US" } };
+    expect((await ai.categorise([{ keyword: "seo agency" }], changedContext, { classifications })).get("seo agency")?.intent).toBe("transactional");
+    const anotherClient = { ...source, client: { ...source.client, id: "00000000-0000-4000-8000-000000000099" } };
+    await ai.categorise([{ keyword: "seo agency" }], anotherClient, { classifications });
+    expect(fetcher).toHaveBeenCalledTimes(calls + 2);
+  });
   it("defaults to eight parallel batches and validates configuration", () => {
     expect(resolveOpenRouterConcurrency()).toBe(8);
     expect(resolveOpenRouterConcurrency("16")).toBe(16);

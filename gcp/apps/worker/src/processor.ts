@@ -131,17 +131,36 @@ export async function failPipelineRun(
   pool: DatabasePool,
   failure: PipelineFailure,
 ): Promise<Record<string, unknown>> {
-  const userMessage = pipelineStageFailureMessage(failure.stageId);
-  await withTransaction(pool, async (client) => {
+  const userMessage = pipelineStageFailureMessage(failure.stageId, failure.reason);
+  return withTransaction(pool, async (client) => {
+    const run = await client.query<{ status: string }>(
+      `SELECT status FROM pipeline_runs WHERE id = $1 FOR UPDATE`,
+      [failure.runId],
+    );
+    if (!run.rows[0]) {
+      throw new HttpError(404, "pipeline_run_not_found", "Pipeline run not found.");
+    }
+    if (run.rows[0].status === "succeeded") {
+      return { runId: failure.runId, status: "succeeded", idempotent: true };
+    }
+    if (run.rows[0].status === "failed") {
+      const original = await client.query<{ failed_stage: string }>(
+        `SELECT output->>'failedStage' AS failed_stage FROM pipeline_stage_runs
+         WHERE run_id = $1 AND output->>'reason' = 'pipeline_failed' LIMIT 1`,
+        [failure.runId],
+      );
+      return { runId: failure.runId, status: "failed", failedStage: original.rows[0]?.failed_stage ?? null, idempotent: true };
+    }
     await client.query(
       `
         UPDATE pipeline_stage_runs
         SET state = 'failed',
             output = COALESCE(output, '{}'::jsonb) ||
               jsonb_build_object(
-                'reason', 'pipeline_failed',
+                'reason', CASE WHEN stage_id = $2 THEN 'pipeline_failed' ELSE 'pipeline_blocked' END,
                 'failedStage', $2::text,
-                'message', $3::text
+                'message', CASE WHEN stage_id = $2 THEN $3::text
+                  ELSE 'Stopped because ' || $2::text || ' failed. Saved progress is preserved; resume after resolving that step.' END
               ),
             completed_at = COALESCE(completed_at, now())
         WHERE run_id = $1
@@ -149,7 +168,7 @@ export async function failPipelineRun(
       `,
       [failure.runId, failure.stageId, userMessage],
     );
-    const result = await client.query(
+    await client.query(
       `
         UPDATE pipeline_runs
         SET status = 'failed',
@@ -159,16 +178,8 @@ export async function failPipelineRun(
       `,
       [failure.runId],
     );
-    if ((result.rowCount ?? 0) === 0) {
-      throw new HttpError(404, "pipeline_run_not_found", "Pipeline run not found.");
-    }
+    return { failedStage: failure.stageId, runId: failure.runId, status: "failed" };
   });
-
-  return {
-    failedStage: failure.stageId,
-    runId: failure.runId,
-    status: "failed",
-  };
 }
 
 async function markRunning(
@@ -328,16 +339,28 @@ export async function executeStageTask(
   options: StageExecutionOptions = {},
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + (options.stageBudgetMilliseconds ?? STAGE_EXECUTION_BUDGET_MS);
+  const lease = await pool.connect();
+  const key = `${task.runId}:${task.stageId}`;
+  let acquired = false;
   try {
-    return await executeStageAttempt(pool, task, options, deadline);
-  } catch (error) {
-    if (!(error instanceof StageContinuation)) throw error;
-    await pool.query(
-      `UPDATE pipeline_stage_runs
-       SET output = COALESCE(output, '{}'::jsonb) || jsonb_build_object('message', $3::text)
-       WHERE run_id = $1 AND stage_id = $2 AND state = 'running'`,
-      [task.runId, task.stageId, error.message]);
-    return { runId: task.runId, stageId: task.stageId, status: "continuing" };
+    const lock = await lease.query<{ acquired: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired`, [key]);
+    acquired = lock.rows[0]?.acquired === true;
+    if (!acquired) return { runId: task.runId, stageId: task.stageId, status: "continuing" };
+    try {
+      return await executeStageAttempt(pool, task, options, deadline);
+    } catch (error) {
+      if (!(error instanceof StageContinuation)) throw error;
+      await pool.query(
+        `UPDATE pipeline_stage_runs
+         SET output = COALESCE(output, '{}'::jsonb) || jsonb_build_object('message', $3::text)
+         WHERE run_id = $1 AND stage_id = $2 AND state = 'running'`,
+        [task.runId, task.stageId, error.message]);
+      return { runId: task.runId, stageId: task.stageId, status: "continuing" };
+    }
+  } finally {
+    // Destroy the dedicated session so a pooled connection can never retain its execution lock.
+    lease.release(true);
   }
 }
 
@@ -444,6 +467,11 @@ async function executeStageAttempt(
   };
 
   await withTransaction(pool, async (client) => {
+    const run = await client.query<{ status: string }>(
+      `SELECT status FROM pipeline_runs WHERE id = $1 FOR UPDATE`, [task.runId]);
+    if (run.rows[0]?.status === "failed") {
+      throw new HttpError(409, "stage_failed", "Pipeline failure stopped this stage.");
+    }
     const result = await client.query<StageLockRow>(
       `
         SELECT state

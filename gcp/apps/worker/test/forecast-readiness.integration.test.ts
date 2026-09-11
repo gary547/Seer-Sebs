@@ -20,6 +20,7 @@ describe("forecast completeness task delivery", () => {
     else (outputs["revenue-v2"] as RevenueV2StageData).keywords[0]!.scenarios[0]!.expectedIncrementalAnnual = null;
     const definition = PIPELINE_STAGES.find(stage => stage.id === stageId)!;
     const query = vi.fn(async (sql: string) => {
+      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
       if (sql.includes("SELECT state")) return { rows: [{ state: "pending" }], rowCount: 1 };
       if (sql.includes("SELECT stage_id, state")) return { rows: definition.dependencies.map(id => ({ stage_id: id, state: "succeeded" })), rowCount: definition.dependencies.length };
       if (sql.includes("RETURNING attempts")) return { rows: [{ attempts: 1 }], rowCount: 1 };

@@ -26,8 +26,8 @@ docker run \
 
 for _ in $(seq 1 60); do
   if [[ "$(
-    docker exec "$container_name" \
-      psql -U seer_owner -d seer -Atqc "
+    docker exec --env PGPASSWORD=fresh-schema-owner "$container_name" \
+      psql --host=127.0.0.1 --no-password -U seer_owner -d seer -Atqc "
         SELECT
           to_regclass('public.schema_migrations') IS NOT NULL
           AND EXISTS (
@@ -82,6 +82,10 @@ validation_counts="$(
           AND to_regclass('public.har_forecasts_realistic_run_keyword_idx') IS NOT NULL
           AND to_regclass('public.revenue_forecasts_realistic_run_uplift_idx') IS NOT NULL,
         to_regclass('public.keyword_cluster_members_keyword_lookup_idx') IS NOT NULL
+          AND to_regclass('public.local_provider_serp_project_url_idx') IS NOT NULL
+          AND has_table_privilege('seer_worker_local', 'keyword_intent_cache', 'SELECT')
+          AND has_table_privilege('seer_worker_local', 'keyword_intent_cache', 'INSERT')
+          AND NOT has_table_privilege('seer_api_local', 'keyword_intent_cache', 'SELECT')
           AND has_column_privilege('seer_api_local', 'gsc_uploads', 'source_files', 'INSERT')
           AND has_column_privilege('seer_worker_local', 'gsc_uploads', 'source_files', 'SELECT')
           AND has_column_privilege('seer_worker_local', 'provider_work_items', 'result', 'SELECT')
@@ -100,7 +104,7 @@ if [[ "$validation_counts" != "8|0|t|t|t|t" ]]; then
   exit 1
 fi
 
-expected_migrations="001_foundation,002_core_domain,003_local_provider_contract,004_serp_authority_contract,005_calculation_contract,006_forecast_calibration_contract,007_managed_runtime_contract,008_model_parity_contract,009_outbox_publication_contract,010_identity_access_contract,011_client_project_parity,012_keyword_gsc_parity,013_keyword_management_contract,014_roadmap_contract,015_serp_import_contract,016_archive_contract,017_url_monitor_contract,018_admin_reference_contract,019_conversion_override_application,020_content_planner_contract,021_slide_export_contract,022_live_provider_contract,023_source_migration_archive,024_url_monitor_leases,025_migration_load_contract,026_portfolio_query_indexes,027_calculation_control_contract,028_autonomous_pipeline_contract,029_link_power_serp_index,030_ctr_curves_all_device,031_calculation_inspector_indexes,032_provider_migration_contract,033_gsc_batch_provenance"
+expected_migrations="001_foundation,002_core_domain,003_local_provider_contract,004_serp_authority_contract,005_calculation_contract,006_forecast_calibration_contract,007_managed_runtime_contract,008_model_parity_contract,009_outbox_publication_contract,010_identity_access_contract,011_client_project_parity,012_keyword_gsc_parity,013_keyword_management_contract,014_roadmap_contract,015_serp_import_contract,016_archive_contract,017_url_monitor_contract,018_admin_reference_contract,019_conversion_override_application,020_content_planner_contract,021_slide_export_contract,022_live_provider_contract,023_source_migration_archive,024_url_monitor_leases,025_migration_load_contract,026_portfolio_query_indexes,027_calculation_control_contract,028_autonomous_pipeline_contract,029_link_power_serp_index,030_ctr_curves_all_device,031_calculation_inspector_indexes,032_provider_migration_contract,033_gsc_batch_provenance,034_backlinks_checkpoint_index,035_keyword_intent_cache"
 applied_migrations="$(
   docker exec "$container_name" \
     psql -U seer_owner -d seer -Atqc "

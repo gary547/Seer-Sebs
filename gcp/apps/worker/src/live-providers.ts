@@ -7,8 +7,10 @@ import type { PipelineStageId } from "../../../packages/pipeline/src/definition.
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
-import { OpenRouterPipelineClient, OPENROUTER_MODEL, type AiOptions } from "./openrouter.js";
+import { INTENT_CLASSIFICATION_VERSION, OpenRouterPipelineClient, OPENROUTER_MODEL, type AiOptions } from "./openrouter.js";
+import { classificationCache } from "./classification-cache.js";
 import { PIPELINE_AI_MODEL_LABEL } from "../../../packages/pipeline/src/ai-model.js";
+import { StageContinuation, STAGE_EXECUTION_BUDGET_MS } from "./stage-continuation.js";
 
 interface ProjectProviderRow {
   country: string | null;
@@ -66,6 +68,13 @@ interface AuthorityMetrics {
   urlRating: number | null;
   source?: string;
   scope?: "domain" | "page" | "domain_fallback";
+}
+
+interface AuthorityCheckpoint {
+  checkBudget?: (milliseconds: number) => void;
+  domains?: Map<string, AuthorityMetrics>;
+  saveDomain?: (domain: string, metrics: AuthorityMetrics) => Promise<void>;
+  savePages?: (metrics: ReadonlyMap<string, AuthorityMetrics>) => Promise<void>;
 }
 
 interface SiteArchitectureResult {
@@ -242,9 +251,11 @@ class ProviderHttpClient {
       headers?: Record<string, string>;
     } = {},
     validate?: (payload: Record<string, unknown>) => void,
+    checkBudget?: (milliseconds: number) => void,
   ): Promise<Record<string, unknown>> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 5; attempt += 1) {
+      checkBudget?.(120_000);
       let retryAfterMilliseconds: number | null = null;
       try {
         const response = await this.fetchImplementation(url, {
@@ -277,9 +288,9 @@ class ProviderHttpClient {
         ) throw error;
       }
       if (attempt < 5) {
-        await this.wait(
-          retryAfterMilliseconds ?? 250 * 2 ** (attempt - 1),
-        );
+        const delay = retryAfterMilliseconds ?? 250 * 2 ** (attempt - 1);
+        checkBudget?.(delay + 120_000);
+        await this.wait(delay);
       }
     }
     throw lastError instanceof Error
@@ -744,7 +755,7 @@ export class DataForSeoAuthorityClient {
     );
   }
 
-  private async request(path: string, task: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+  private async request(path: string, task: Record<string, unknown>, checkpoint: AuthorityCheckpoint): Promise<Record<string, unknown>[]> {
     const response = await this.http.json(`https://api.dataforseo.com/v3/backlinks/${path}/live`, {
       method: "POST",
       body: JSON.stringify([{ ...task, rank_scale: "one_hundred" }]),
@@ -755,7 +766,7 @@ export class DataForSeoAuthorityClient {
       if (tasks.length !== 1) throw new DataForSeoTaskError(50000);
       const taskCode = numberOrNull(tasks[0]?.status_code);
       if (taskCode !== 20000) throw new DataForSeoTaskError(taskCode ?? 50000);
-    });
+    }, checkpoint.checkBudget);
     const results = records(records(response.tasks)[0]?.result);
     return path === "summary" ? results : records(results[0]?.items);
   }
@@ -779,19 +790,38 @@ export class DataForSeoAuthorityClient {
 
   async metrics(
     targets: readonly { mode: "domain" | "exact"; url: string }[],
+    checkpoint: AuthorityCheckpoint = {},
   ): Promise<Map<string, AuthorityMetrics>> {
     const output = new Map<string, AuthorityMetrics>();
+    const pending = new Map<string, AuthorityMetrics>();
+    let checkpointFailure: unknown;
+    const savePages = async () => {
+      if (pending.size === 0) return;
+      try {
+        await checkpoint.savePages?.(pending);
+      } catch (error) {
+        checkpointFailure = error;
+        throw error;
+      }
+      pending.clear();
+    };
     try {
-      const domains = new Map<string, AuthorityMetrics>();
+      const domains = checkpoint.domains ?? new Map<string, AuthorityMetrics>();
       const domainMetrics = async (domain: string) => {
         const cached = domains.get(domain);
         if (cached) return cached;
-        const rows = await this.request("summary", { target: domain, include_subdomains: true });
+        const rows = await this.request("summary", { target: domain, include_subdomains: true }, checkpoint);
         const row = rows.find((item) => item.target === domain);
         if (!row) throw new Error("DataForSEO omitted the requested domain.");
         const value = this.parse(row, "domain");
         if ([value.domainRating, value.backlinks, value.referringDomains].some((item) => item === null)) {
           throw new Error("DataForSEO returned incomplete domain authority.");
+        }
+        try {
+          await checkpoint.saveDomain?.(domain, value);
+        } catch (error) {
+          checkpointFailure = error;
+          throw error;
         }
         domains.set(domain, value);
         return value;
@@ -801,7 +831,7 @@ export class DataForSeoAuthorityClient {
       }
       const urls = [...new Set(targets.filter((target) => target.mode === "exact").map((target) => target.url))];
       for (const group of batches(urls, 100)) {
-        const rows = await this.request("bulk_pages_summary", { targets: group });
+        const rows = await this.request("bulk_pages_summary", { targets: group }, checkpoint);
         for (const url of group) {
           const row = rows.find((item) => item.url === url);
           const value = this.parse(row ?? {}, "page");
@@ -815,9 +845,14 @@ export class DataForSeoAuthorityClient {
             value.scope = "domain_fallback";
           }
           output.set(url, value);
+          pending.set(url, value);
         }
+        await savePages();
       }
     } catch (error) {
+      if (error === checkpointFailure) throw error;
+      await savePages();
+      if (error instanceof StageContinuation) throw error;
       throw backlinksFailure(error);
     }
     return output;
@@ -928,12 +963,15 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     }
     if (data.handlerVersion === "categorisation-v1") {
       const candidates = data.keywords.filter((keyword) => !keyword.preCurated);
-      const categories = await this.ai.categorise(candidates.map((keyword) => ({ keyword: keyword.text })), source, this.aiOptions(pool, projectId, runId, "categorisation", deadline));
+      const categories = await this.ai.categorise(candidates.map((keyword) => ({ keyword: keyword.text })), source, {
+        ...this.aiOptions(pool, projectId, runId, "categorisation", deadline),
+        classifications: classificationCache(pool, source.client.id),
+      });
       const keywords = data.keywords.map((keyword) => {
         const category = categories.get(keyword.normalisedText);
         return category ? { ...keyword, categorisation: { ...category, source: "openrouter" as const, tier: decideTier(keyword.text, category.intent) } } : keyword;
       });
-      return { ...data, keywords, summary: { ...data.summary,
+      return { ...data, keywords, classificationContract: INTENT_CLASSIFICATION_VERSION, summary: { ...data.summary,
         liveKeywordCount: keywords.filter((keyword) => keyword.categorisation.tier === "live").length,
         deferredKeywordCount: keywords.filter((keyword) => keyword.categorisation.tier === "deferred").length,
       } };
@@ -970,7 +1008,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         await this.hydrateAuthority(pool, projectId);
         return;
       case "backlinks":
-        await this.hydrateBacklinks(pool, projectId);
+        await this.hydrateBacklinks(pool, projectId, runId, deadline);
         return;
       case "site-architecture":
         await this.hydrateSiteArchitecture(pool, projectId, runId, deadline);
@@ -1649,129 +1687,141 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
   private async hydrateBacklinks(
     pool: DatabasePool,
     projectId: string,
+    runId: string,
+    deadline = this.now() + STAGE_EXECUTION_BUDGET_MS,
   ): Promise<void> {
     const result = await pool.query<{ url: string }>(
-      `
-        SELECT DISTINCT url
-        FROM local_provider_serp_results
-        WHERE project_id = $1
-        ORDER BY url
-      `,
+      `SELECT DISTINCT url FROM local_provider_serp_results WHERE project_id = $1 ORDER BY url`,
       [projectId],
     );
-    const cached = await pool.query<
-      AuthorityMetrics & { url: string; fetchedAt: Date }
-    >(
-      `
-        SELECT
-          url,
-          url_rating AS "urlRating",
-          domain_rating AS "domainRating",
-          ahrefs_rank AS "ahrefsRank",
-          referring_domains AS "referringDomains",
-          backlinks,
-          metric_source AS source,
-          authority_scope AS scope,
-          fetched_at AS "fetchedAt"
-        FROM authority_url_cache
-        WHERE url = ANY($1::text[])
-          AND metric_source = 'dataforseo'
-          AND fetched_at >= now() - interval '30 days'
-      `,
-      [result.rows.map((row) => row.url)],
+    const urls = result.rows.map(row => row.url);
+    const cached = await pool.query<{ url: string }>(
+      `SELECT url FROM authority_url_cache
+       WHERE url = ANY($1::text[]) AND metric_source = 'dataforseo'
+         AND fetched_at >= now() - interval '30 days'
+         AND url_rating IS NOT NULL AND domain_rating IS NOT NULL
+         AND backlinks IS NOT NULL AND referring_domains IS NOT NULL`,
+      [urls],
     );
-    const metrics = new Map<string, AuthorityMetrics & { fetchedAt?: Date }>(
-      cached.rows.map((row) => [row.url, row]),
+    const saved = new Set(cached.rows.map(row => row.url));
+    const domainResult = await pool.query<AuthorityMetrics & { domain: string }>(
+      `SELECT domain, domain_rating AS "domainRating", backlinks,
+         referring_domains AS "referringDomains", NULL AS "urlRating",
+         NULL AS "ahrefsRank", 'dataforseo' AS source, 'domain' AS scope
+       FROM authority_domain_cache
+       WHERE domain = ANY($1::text[]) AND metric_source = 'dataforseo'
+         AND fetched_at >= now() - interval '30 days'
+         AND domain_rating IS NOT NULL AND backlinks IS NOT NULL AND referring_domains IS NOT NULL`,
+      [[...new Set(urls.map(cleanDomain))]],
     );
-    const missingUrls = result.rows
-      .map((row) => row.url)
-      .filter((url) => !metrics.has(url));
-    if (missingUrls.length > 0) {
-      const fetched = await this.authorityProvider.metrics(
-        missingUrls.map((url) => ({ mode: "exact" as const, url })),
+    const domains = new Map(domainResult.rows.map(row => [row.domain, row]));
+    const progress = async () => {
+      const done = saved.size;
+      await pool.query(
+        `UPDATE pipeline_stage_runs
+         SET output = COALESCE(output, '{}'::jsonb) ||
+           jsonb_build_object('message', $2::text, 'providerProgress', $3::jsonb)
+         WHERE run_id = $1 AND stage_id = 'backlinks' AND state = 'running'`,
+        [runId,
+          `DataForSEO Backlinks: ${done} of ${urls.length} URLs saved; remaining work resumes automatically.`,
+          JSON.stringify({ provider: "dataforseo_backlinks", unit: "items", batch: Math.min(done + 1, urls.length),
+            batchCount: urls.length, completedBatches: done, activeBatches: 0 })],
       );
-      for (const [url, value] of fetched) metrics.set(url, value);
-    }
-    await withTransaction(pool, async (client) => {
-      for (const [url, value] of metrics) {
-        await client.query(
-          `
-            INSERT INTO authority_url_cache (
-              url,
-              domain,
-              url_rating,
-              domain_rating,
-              ahrefs_rank,
-              referring_domains,
-              backlinks,
-              metric_source,
-              authority_scope,
-              fetched_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'dataforseo', $8, COALESCE($9, now()))
-            ON CONFLICT (url)
-            DO UPDATE SET
-              domain = EXCLUDED.domain,
-              url_rating = EXCLUDED.url_rating,
-              domain_rating = EXCLUDED.domain_rating,
-              ahrefs_rank = EXCLUDED.ahrefs_rank,
-              referring_domains = EXCLUDED.referring_domains,
-              backlinks = EXCLUDED.backlinks,
-              metric_source = EXCLUDED.metric_source,
-              authority_scope = EXCLUDED.authority_scope,
-              fetched_at = EXCLUDED.fetched_at,
-              updated_at = now()
-          `,
-          [
-            url,
-            cleanDomain(url),
-            value.urlRating,
-            value.domainRating,
-            value.ahrefsRank,
-            value.referringDomains,
-            value.backlinks,
-            value.scope ?? "page",
-            value.fetchedAt ?? null,
-          ],
-        );
-        await client.query(
-          `
-            UPDATE local_provider_serp_results
-            SET
-              url_rating = $3,
-              domain_rating = $4,
-              ahrefs_rank = $5,
-              referring_domains = $6,
-              backlinks = $7,
-              metric_source = 'dataforseo',
-              authority_scope = $8
-            WHERE project_id = $1
-              AND url = $2
-          `,
-          [
-            projectId,
-            url,
-            value.urlRating,
-            value.domainRating,
-            value.ahrefsRank,
-            value.referringDomains,
-            value.backlinks,
-            value.scope ?? "page",
-          ],
-        );
-      }
-    });
+    };
+    const applyCached = async (client: Pick<DatabasePool, "query">, targets: readonly string[]) => {
+      await client.query(
+        `UPDATE local_provider_serp_results AS serp
+         SET url_rating = cache.url_rating, domain_rating = cache.domain_rating,
+             ahrefs_rank = NULL, referring_domains = cache.referring_domains,
+             backlinks = cache.backlinks, metric_source = 'dataforseo',
+             authority_scope = cache.authority_scope
+         FROM authority_url_cache AS cache
+         WHERE serp.project_id = $1 AND serp.url = cache.url AND cache.url = ANY($2::text[])
+           AND (serp.url_rating, serp.domain_rating, serp.ahrefs_rank, serp.referring_domains,
+                serp.backlinks, serp.metric_source, serp.authority_scope)
+             IS DISTINCT FROM
+               (cache.url_rating, cache.domain_rating, NULL::bigint, cache.referring_domains,
+                cache.backlinks, 'dataforseo', cache.authority_scope)`,
+        [projectId, targets],
+      );
+    };
+    await progress();
+    for (const group of batches([...saved], 500)) await applyCached(pool, group);
+    await this.authorityProvider.metrics(
+      urls.filter(url => !saved.has(url)).map(url => ({ mode: "exact" as const, url })),
+      {
+        domains,
+        checkBudget: milliseconds => {
+          if (this.now() + milliseconds + 10_000 >= deadline) throw new StageContinuation();
+        },
+        saveDomain: async (domain, value) => {
+          await pool.query(
+            `INSERT INTO authority_domain_cache
+               (domain, domain_rating, ahrefs_rank, referring_domains, backlinks, metric_source, fetched_at)
+             VALUES ($1, $2, NULL, $3, $4, 'dataforseo', now())
+             ON CONFLICT (domain) DO UPDATE SET domain_rating = EXCLUDED.domain_rating,
+               ahrefs_rank = NULL, referring_domains = EXCLUDED.referring_domains,
+               backlinks = EXCLUDED.backlinks, metric_source = 'dataforseo',
+               fetched_at = EXCLUDED.fetched_at, updated_at = now()`,
+            [domain, value.domainRating, value.referringDomains, value.backlinks],
+          );
+        },
+        savePages: async values => {
+          const rows = [...values].map(([url, value]) => ({ url, domain: cleanDomain(url),
+            url_rating: value.urlRating, domain_rating: value.domainRating,
+            referring_domains: value.referringDomains, backlinks: value.backlinks,
+            authority_scope: value.scope ?? "page" }));
+          await withTransaction(pool, async client => {
+            await client.query(
+              `INSERT INTO authority_url_cache
+                 (url, domain, url_rating, domain_rating, ahrefs_rank, referring_domains,
+                  backlinks, metric_source, authority_scope, fetched_at)
+               SELECT url, domain, url_rating, domain_rating, NULL, referring_domains,
+                      backlinks, 'dataforseo', authority_scope, now()
+               FROM jsonb_to_recordset($1::jsonb) AS metric(
+                 url text, domain text, url_rating numeric, domain_rating numeric,
+                 referring_domains bigint, backlinks bigint, authority_scope text)
+               ON CONFLICT (url) DO UPDATE SET domain = EXCLUDED.domain,
+                 url_rating = EXCLUDED.url_rating, domain_rating = EXCLUDED.domain_rating,
+                 ahrefs_rank = NULL, referring_domains = EXCLUDED.referring_domains,
+                 backlinks = EXCLUDED.backlinks, metric_source = 'dataforseo',
+                 authority_scope = EXCLUDED.authority_scope,
+                 fetched_at = EXCLUDED.fetched_at, updated_at = now()`,
+              [JSON.stringify(rows)],
+            );
+            await applyCached(client, rows.map(row => row.url));
+          });
+          for (const url of values.keys()) saved.add(url);
+          await progress();
+        },
+      },
+    );
   }
-
   private async hydrateSiteArchitecture(
     pool: DatabasePool,
     projectId: string,
     runId: string,
     deadline?: number,
   ): Promise<void> {
-    const keywords = await this.keywords(pool, projectId);
     const project = await this.project(pool, projectId);
-    const requiresScoring = keywords;
+    await pool.query(
+      `INSERT INTO provider_work_items
+         (pipeline_run_id, project_id, stage_id, item_key, provider, state, result, completed_at)
+       SELECT $1, $2, 'site-architecture', 'content-fit-inputs-v1', 'input_snapshot', 'succeeded',
+         jsonb_build_object('domain', $3::text, 'keywords', COALESCE(jsonb_agg(
+           jsonb_build_object('keyword', keyword, 'normalised_keyword', normalised_keyword,
+             'ranking_url', ranking_url) ORDER BY normalised_keyword), '[]'::jsonb)), now()
+       FROM keywords WHERE project_id = $2 AND detox_status = 'keep'
+       ON CONFLICT (pipeline_run_id, stage_id, item_key) DO NOTHING`,
+      [runId, projectId, project.domain],
+    );
+    const snapshot = await pool.query<{ result: { domain: string; keywords: Array<Pick<KeywordProviderRow, "keyword" | "normalised_keyword" | "ranking_url">> } }>(
+      `SELECT result FROM provider_work_items WHERE pipeline_run_id = $1
+       AND stage_id = 'site-architecture' AND item_key = 'content-fit-inputs-v1'
+       AND provider = 'input_snapshot' AND state = 'succeeded'`, [runId]);
+    const inputs = snapshot.rows[0]?.result;
+    if (!inputs || !Array.isArray(inputs.keywords)) throw new Error("Content-fit input snapshot is unavailable.");
+    const requiresScoring = inputs.keywords;
     if (requiresScoring.length === 0) {
       await pool.query(
         `DELETE FROM local_provider_site_architecture_inputs WHERE project_id = $1`,
@@ -1782,7 +1832,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     const scores = await this.ai.score(
       requiresScoring.map((keyword) => ({
         keyword: keyword.keyword,
-        rankingUrl: keyword.ranking_url ?? `https://${cleanDomain(project.domain)}/`,
+        rankingUrl: keyword.ranking_url ?? `https://${cleanDomain(inputs.domain)}/`,
         scope: keyword.ranking_url ? "page" : "domain_fallback",
       })),
       this.aiOptions(pool, projectId, runId, "site-architecture", deadline),

@@ -145,6 +145,7 @@ export interface CategorisedKeyword extends DetoxedKeyword {
 
 export interface CategorisationStageData {
   handlerVersion: "categorisation-v1";
+  classificationContract?: string;
   keywords: CategorisedKeyword[];
   summary: RepresentativePipelineSummary;
 }

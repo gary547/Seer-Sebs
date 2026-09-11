@@ -351,6 +351,29 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   non-retryable worker response so Cloud Workflows cannot multiply provider
   attempts. Log only the provider name and status category, and keep the admin
   failure message actionable without exposing raw transport payloads.
+- Backlinks hydration checkpoints successful URL batches and domain fallbacks before
+  requesting more provider data. Preserve genuine zeros, cache freshness and scope.
+  Migration `034_backlinks_checkpoint_index` supports bounded project/URL updates.
+  Deadline continuation must not consume failure retries or discard saved batches.
+- Worker stage executions hold a dedicated PostgreSQL session advisory lock per
+  run/stage. Duplicate deliveries continue without starting concurrent provider work.
+  The first failed stage remains the root cause; other unfinished stages are marked
+  `pipeline_blocked` in their output metadata. Later failure callbacks must not
+  replace that root cause or overwrite successful stage outputs.
+- Content-fit request inputs are frozen per run in an `input_snapshot` provider work
+  item. Exclude these snapshots from provider work counts. Parallel ranking/SERP
+  updates must not change batch keys between checkpoint deliveries. Failed-stage
+  progress uses the saved planned denominator, not the number of cache keys created.
+- Intent classification uses the versioned `intent-v2` definitions and a canonical
+  per-keyword cache scoped by client, complete project context, prompt and approved
+  model. Cache writes are immutable; concurrent batches reuse the first valid result.
+  Migration `035_keyword_intent_cache` grants access only to the worker. Do not
+  change completed historical categorisation when recovering an existing run.
+- Calculation inspectors aggregate monthly-history coverage before fetching the
+  bounded sample. Preserve imported-month precedence and deterministic duplicate
+  resolution. `test:gcp-volume-scale` covers 44,135 keywords and 1,588,860 months.
+  CTR, HAR and Revenue panels load independently of input diagnostics; identify
+  the displayed completed run explicitly when the latest run has different results.
 - Keep domain and URL authority caches shared across projects, preserve source
   and freshness provenance, and never overwrite a positive manually imported
   volume with an empty provider value. Competitive SERP fetching is performed
