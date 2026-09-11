@@ -520,6 +520,8 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   their existing format; larger outputs keep bounded metadata and a versioned
   manifest. Write chunks, normalized results, stage completion and outbox events
   in the same locked transaction. Only the worker may read/write chunk contents.
+  Keep metadata plus its manifest within 64 KiB, and load at most two chunks per
+  indexed query. Existing inline outputs remain readable without rewriting them.
 - Worker dependencies and recalculation qualification baselines must reconstruct
   chunked outputs through the shared stage-output reader. Verify contiguous
   order, hashes and item counts, with bounded indexed reads; reject missing or
