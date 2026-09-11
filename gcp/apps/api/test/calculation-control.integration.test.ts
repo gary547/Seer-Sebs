@@ -13,20 +13,24 @@ const uploadId = "00000000-0000-4000-8000-000000000005";
 let applicationRole = "admin";
 let executedSql: string[] = [];
 let calendarDates: Array<string | null> = [];
+let diagnosticDelay = 0;
+let activeDiagnostics = 0;
+let peakDiagnostics = 0;
+let failSummaryOnce = false;
 
 function result(rows: unknown[]) {
   return { rowCount: rows.length, rows };
 }
 
 function database(): DatabasePool {
-  const query = vi.fn(async (sqlValue: string) => {
+  const execute = async (sqlValue: string, values: unknown[] = []) => {
     const sql = sqlValue.replace(/\s+/g, " ").trim();
     executedSql.push(sql);
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result([]);
     if (sql.includes("SELECT approval_status FROM profiles")) return result([{ approval_status: "approved" }]);
     if (sql.includes("FROM user_roles AS user_role")) return result([{ role: applicationRole }]);
     if (sql.includes("SELECT project.id, project.archived_at, client.brand_terms")) {
-      return result([{ archived_at: null, brand_terms: ["Seer"], domain: "seer.example", id: projectId }]);
+      return result([{ archived_at: null, brand_terms: ["Seer"], domain: "seer.example", id: values[0] ?? projectId }]);
     }
     if (sql.includes("FROM pipeline_runs") && sql.includes("status = 'succeeded'")) {
       return result([{ completed_at: new Date("2026-08-12T10:00:00Z"), id: runId }]);
@@ -38,6 +42,7 @@ function database(): DatabasePool {
       return result([{ base_rank_sources: { gsc: 9 }, branded_count: "2", kept_count: "10", missing_base_rank_count: "1", total_count: "12", unbranded_count: "9", unclassified_brand_count: "1", with_base_rank_count: "9" }]);
     }
     if (sql.includes("AS history_row_count")) {
+      if (failSummaryOnce) { failSummaryOnce = false; throw new Error("Injected diagnostic failure"); }
       return result([{ earliest_month: calendarDates[2], history_row_count: "240", kept_keyword_count: "10", latest_month: calendarDates[3], maximum_months: "24", median_months: "24", minimum_months: "0", with_12_months_count: "9", with_24_months_count: "8", with_history_count: "9" }]);
     }
     if (sql.includes("sample_keywords AS MATERIALIZED")) {
@@ -70,6 +75,15 @@ function database(): DatabasePool {
     if (sql.includes("DELETE FROM gsc_uploads")) return result([{ id: uploadId }]);
     if (sql.includes("UPDATE navigator_projects")) return result([]);
     throw new Error(`Unexpected SQL in calculation control test: ${sql}`);
+  };
+  const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+    const diagnostic = /FROM gsc_uploads AS upload|WITH base_sources AS|provider_history AS MATERIALIZED|WITH clusters AS|WITH signals AS|signal.coverage_months|WITH feature_types AS|WITH feature_summary AS|WITH rows AS|WITH aggregate AS|LEFT JOIN LATERAL/.test(sql);
+    if (!diagnostic) return execute(sql, values);
+    peakDiagnostics = Math.max(peakDiagnostics, ++activeDiagnostics);
+    try {
+      if (diagnosticDelay) await new Promise(resolve => setTimeout(resolve, diagnosticDelay));
+      return await execute(sql, values);
+    } finally { activeDiagnostics -= 1; }
   });
   const client = { query, release: vi.fn() };
   return { connect: vi.fn(async () => client), query } as unknown as DatabasePool;
@@ -82,6 +96,10 @@ describe("calculation control API", () => {
   beforeEach(async () => {
     applicationRole = "admin";
     executedSql = [];
+    diagnosticDelay = 0;
+    activeDiagnostics = 0;
+    peakDiagnostics = 0;
+    failSummaryOnce = false;
     calendarDates = ["2026-04-01", "2026-06-30", "2024-01-01", "2025-12-01"];
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({ email: "admin@example.com", id: userId })),
@@ -99,6 +117,50 @@ describe("calculation control API", () => {
 
   afterEach(async () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  });
+
+  it("shares overlapping authorized reads and caps diagnostics at two without caching settled responses", async () => {
+    diagnosticDelay = 15;
+    const responses = await Promise.all(Array.from({ length: 8 }, () => fetch(`${baseUrl}/v1/projects/${projectId}/calculation-control`)));
+    expect(responses.every(response => response.status === 200)).toBe(true);
+    const bodies = await Promise.all(responses.map(response => response.json()));
+    expect(bodies.every(body => JSON.stringify(body) === JSON.stringify(bodies[0]))).toBe(true);
+    expect(executedSql.filter(sql => sql.includes("AS history_row_count"))).toHaveLength(1);
+    expect(peakDiagnostics).toBe(2);
+    expect((await fetch(`${baseUrl}/v1/projects/${projectId}/calculation-control`)).status).toBe(200);
+    expect(executedSql.filter(sql => sql.includes("AS history_row_count"))).toHaveLength(2);
+  });
+
+  it("does not share project data and keeps one diagnostic limit across concurrent projects", async () => {
+    diagnosticDelay = 15;
+    const otherId = "00000000-0000-4000-8000-000000000099";
+    const responses = await Promise.all([projectId, otherId].map(id => fetch(`${baseUrl}/v1/projects/${id}/calculation-control`)));
+    expect(responses.every(response => response.status === 200)).toBe(true);
+    const bodies = await Promise.all(responses.map(response => response.json()));
+    expect(bodies.map(body => (body as { projectId: string }).projectId)).toEqual([projectId, otherId]);
+    expect(executedSql.filter(sql => sql.includes("AS history_row_count"))).toHaveLength(2);
+    expect(peakDiagnostics).toBe(2);
+  });
+
+  it("checks authorization before joining pending project diagnostics", async () => {
+    diagnosticDelay = 20;
+    const pending = fetch(`${baseUrl}/v1/projects/${projectId}/calculation-control`);
+    await vi.waitFor(() => expect(activeDiagnostics).toBeGreaterThan(0));
+    applicationRole = "client";
+    expect((await fetch(`${baseUrl}/v1/projects/${projectId}/calculation-control`)).status).toBe(403);
+    expect((await pending).status).toBe(200);
+    expect(executedSql.filter(sql => sql.includes("AS history_row_count"))).toHaveLength(1);
+  });
+
+  it("releases failed in-flight reads so a later request can recover", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    failSummaryOnce = true;
+    try {
+      expect((await fetch(`${baseUrl}/v1/projects/${projectId}/calculation-control`)).status).toBe(500);
+      expect((await fetch(`${baseUrl}/v1/projects/${projectId}/calculation-control`)).status).toBe(200);
+      expect(executedSql.filter(sql => sql.includes("AS history_row_count"))).toHaveLength(2);
+      expect(peakDiagnostics).toBeLessThanOrEqual(2);
+    } finally { errorLog.mockRestore(); }
   });
 
   it("returns every calculation-control section with bounded detail", async () => {

@@ -1,4 +1,4 @@
-import type { PoolClient, QueryResultRow } from "pg";
+import type { PoolClient, QueryResult, QueryResultRow } from "pg";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
@@ -18,6 +18,38 @@ interface ProjectRow extends QueryResultRow {
 interface LatestRunRow extends QueryResultRow {
   completed_at: Date;
   id: string;
+}
+
+interface ControlReads {
+  active: number;
+  waiting: Array<() => void>;
+  inFlight: Map<string, Promise<Record<string, unknown>>>;
+}
+
+const controlReads = new WeakMap<DatabasePool, ControlReads>();
+
+function readsFor(pool: DatabasePool): ControlReads {
+  let state = controlReads.get(pool);
+  if (!state) {
+    state = { active: 0, waiting: [], inFlight: new Map() };
+    controlReads.set(pool, state);
+  }
+  return state;
+}
+
+async function queryControl<Row extends QueryResultRow>(
+  pool: DatabasePool, text: string, values: unknown[],
+): Promise<QueryResult<Row>> {
+  const state = readsFor(pool);
+  if (state.active < 2) state.active += 1;
+  else await new Promise<void>(resolve => state.waiting.push(resolve));
+  try {
+    return await pool.query<Row>(text, values);
+  } finally {
+    const next = state.waiting.shift();
+    if (next) next();
+    else state.active -= 1;
+  }
 }
 
 interface GscUploadRow extends QueryResultRow {
@@ -224,7 +256,25 @@ export async function getProjectCalculationControl(
     [projectId],
   );
   const latestRun = latestRunResult.rows[0] ?? null;
+  const state = readsFor(pool);
+  const key = JSON.stringify([project, latestRun?.id]);
+  const existing = state.inFlight.get(key);
+  if (existing) return existing;
+  const pending = loadProjectCalculationControl(pool, project, latestRun);
+  state.inFlight.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    state.inFlight.delete(key);
+  }
+}
+
+async function loadProjectCalculationControl(
+  pool: DatabasePool, project: ProjectRow, latestRun: LatestRunRow | null,
+): Promise<Record<string, unknown>> {
+  const projectId = project.id;
   const runId = latestRun?.id ?? null;
+  const query = <Row extends QueryResultRow>(text: string, values: unknown[]) => queryControl<Row>(pool, text, values);
 
   const [
     uploads,
@@ -240,7 +290,7 @@ export async function getProjectCalculationControl(
     comparisonSummary,
     recentRuns,
   ] = await Promise.all([
-    pool.query<GscUploadRow>(
+    query<GscUploadRow>(
       `
         SELECT
           upload.id,
@@ -269,7 +319,7 @@ export async function getProjectCalculationControl(
       `,
       [projectId],
     ),
-    pool.query<KeywordOverviewRow>(
+    query<KeywordOverviewRow>(
       `
         WITH base_sources AS (
           SELECT
@@ -303,9 +353,9 @@ export async function getProjectCalculationControl(
       `,
       [projectId],
     ),
-    pool.query<VolumeSummaryRow>(projectVolumeSummarySql(), [projectId]),
-    pool.query<VolumeSampleRow>(projectVolumeSampleSql(), [projectId]),
-    pool.query<ClusterSummaryRow>(
+    query<VolumeSummaryRow>(projectVolumeSummarySql(), [projectId]),
+    query<VolumeSampleRow>(projectVolumeSampleSql(), [projectId]),
+    query<ClusterSummaryRow>(
       `
         WITH clusters AS (
           SELECT
@@ -352,7 +402,7 @@ export async function getProjectCalculationControl(
       `,
       [projectId, runId],
     ),
-    pool.query<DemandSummaryRow>(
+    query<DemandSummaryRow>(
       `
         WITH signals AS (
           SELECT
@@ -421,7 +471,7 @@ export async function getProjectCalculationControl(
       `,
       [projectId, runId],
     ),
-    pool.query<DemandSampleRow>(
+    query<DemandSampleRow>(
       `
         SELECT
           keyword.id AS keyword_id,
@@ -449,7 +499,7 @@ export async function getProjectCalculationControl(
       `,
       [projectId, runId],
     ),
-    pool.query<SerpSummaryRow>(
+    query<SerpSummaryRow>(
       `
         WITH feature_types AS (
           SELECT
@@ -490,7 +540,7 @@ export async function getProjectCalculationControl(
       `,
       [projectId, runId],
     ),
-    pool.query<SerpSampleRow>(
+    query<SerpSampleRow>(
       `
         WITH feature_summary AS (
           SELECT
@@ -525,7 +575,7 @@ export async function getProjectCalculationControl(
       `,
       [projectId, runId],
     ),
-    pool.query<ContentFitSummaryRow>(
+    query<ContentFitSummaryRow>(
       `
         WITH rows AS (
           SELECT
@@ -575,7 +625,7 @@ export async function getProjectCalculationControl(
       `,
       [projectId, runId],
     ),
-    pool.query<ComparisonSummaryRow>(
+    query<ComparisonSummaryRow>(
       `
         WITH aggregate AS (
           SELECT
@@ -658,7 +708,7 @@ export async function getProjectCalculationControl(
       `,
       [projectId, runId],
     ),
-    pool.query<RecentRunRow>(
+    query<RecentRunRow>(
       `
         SELECT
           run.id,
