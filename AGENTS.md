@@ -374,6 +374,11 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   resolution. `test:gcp-volume-scale` covers 44,135 keywords and 1,588,860 months.
   CTR, HAR and Revenue panels load independently of input diagnostics; identify
   the displayed completed run explicitly when the latest run has different results.
+- Local Docker validation links compiled backend code to the installed GCP
+  dependencies after building. Frontend builds replace `dist`, so the gate must
+  recreate that link when absent. Fresh-schema readiness uses TCP rather than the
+  temporary initialization server's Unix socket. Run isolated validation volumes
+  with `COMPOSE_PROJECT_NAME` when preserving an accumulated local dataset.
 - Keep domain and URL authority caches shared across projects, preserve source
   and freshness provenance, and never overwrite a positive manually imported
   volume with an empty provider value. Competitive SERP fetching is performed
