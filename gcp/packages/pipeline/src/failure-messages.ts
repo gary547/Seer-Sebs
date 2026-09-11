@@ -19,6 +19,9 @@ const TECHNICAL_FAILURE_PATTERN =
   /HTTP server responded|internal_error|x-cloud-trace|traceparent|application\/json|\b5\d\d\b|\{\s*"(?:body|code|headers|message)"/i;
 
 export function pipelineStageFailureMessage(stageId: PipelineStageId, reason = ""): string {
+  if (reason.includes("pipeline_output_storage_failed")) {
+    return "Calculation output could not be saved or verified safely. Automatic retries stopped; previously completed stages are preserved. Contact support before resuming.";
+  }
   if (stageId === "backlinks") {
     if (reason.includes("dataforseo_backlinks_unavailable")) {
       return "DataForSEO Backlinks remained temporarily unavailable after automatic retries. Saved batches are preserved; resume to continue the remaining work.";

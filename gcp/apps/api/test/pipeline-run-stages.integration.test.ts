@@ -11,6 +11,10 @@ const userId = "00000000-0000-4000-8000-000000000001";
 const runId = "00000000-0000-4000-8000-000000000004";
 const startedAt = new Date("2026-08-18T11:00:00.000Z");
 const completedAt = new Date("2026-08-18T12:00:00.000Z");
+const chunkedHarOutput = {
+  modelVersion: "har_v2.1.1", scenarioCount: 125883,
+  stageOutputStorage: { version: 1, arrays: [{ field: "keywords", items: 41961, chunks: 40, sha256: "a".repeat(64) }] },
+};
 
 function result(rows: unknown[], rowCount = rows.length) {
   return { rowCount, rows };
@@ -47,7 +51,7 @@ function database(): DatabasePool {
         requested.map((stageId) => ({
           attempts: 1,
           completed_at: completedAt,
-          output: { stageId, rows: 12 },
+          output: stageId === "har-v2" ? chunkedHarOutput : { stageId, rows: 12 },
           stage_id: stageId,
           started_at: startedAt,
           state: "succeeded",
@@ -173,6 +177,15 @@ describe("pipeline run stage batches", () => {
         },
       ],
     });
+  });
+
+  it("returns bounded large-stage metadata without loading private output chunks", async () => {
+    const response = await fetch(`${baseUrl}/v1/pipeline-runs/${runId}/stages?ids=har-v2`);
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(Buffer.byteLength(text)).toBeLessThan(2048);
+    expect(JSON.parse(text).stages[0].output).toEqual(chunkedHarOutput);
+    expect(JSON.parse(text).stages[0].output.keywords).toBeUndefined();
   });
 
   it("rejects oversized or unknown batches", async () => {

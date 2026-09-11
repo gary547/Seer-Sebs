@@ -1,3 +1,7 @@
+import assert from "node:assert/strict";
+import { createDatabasePool } from "../../dist/gcp/packages/runtime/src/database.js";
+import { loadStageOutput } from "../../dist/gcp/packages/runtime/src/stage-output.js";
+
 const PIPELINE_OUTPUT_BATCH_SIZE = 1;
 
 export async function attachPipelineRunOutputs({
@@ -22,11 +26,17 @@ export async function attachPipelineRunOutputs({
     }
   }
 
-  return {
-    ...run,
-    stages: (run.stages ?? []).map((stage) => ({
-      ...stage,
-      output: outputs.has(stage.id) ? outputs.get(stage.id) : stage.output,
-    })),
-  };
+  const stages = (run.stages ?? []).map((stage) => ({
+    ...stage,
+    output: outputs.has(stage.id) ? outputs.get(stage.id) : stage.output,
+  }));
+  if (stages.some(stage => stage.output?.stageOutputStorage)) {
+    assert(["127.0.0.1", "localhost", "[::1]"].includes(new URL(apiBaseUrl).hostname),
+      "Private stage-output reconstruction is restricted to local integration tests.");
+    const pool = createDatabasePool("postgresql://seer_worker_local:local-worker-only@127.0.0.1:25432/seer");
+    try {
+      for (const stage of stages) stage.output = await loadStageOutput(pool, run.id, stage.id, stage.output);
+    } finally { await pool.end(); }
+  }
+  return { ...run, stages };
 }

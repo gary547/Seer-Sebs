@@ -514,6 +514,27 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   timeout transaction-local at the final stage-output write and while reading
   the exact succeeded dependencies. Commit rows, stage success and the outbox
   event atomically; never change pooled-session timeouts globally.
+- Stage output arrays must not be stored as one unbounded JSONB value. Migration
+  `036_pipeline_stage_output_chunks` stores ordered, checksummed JSON text pages
+  capped at 8 MiB under a run/stage/field/index primary key. Small outputs retain
+  their existing format; larger outputs keep bounded metadata and a versioned
+  manifest. Write chunks, normalized results, stage completion and outbox events
+  in the same locked transaction. Only the worker may read/write chunk contents.
+- Worker dependencies and recalculation qualification baselines must reconstruct
+  chunked outputs through the shared stage-output reader. Verify contiguous
+  order, hashes and item counts, with bounded indexed reads; reject missing or
+  corrupted chunks instead of calculating from partial results. API stage
+  inspection returns the compact metadata; detailed forecasts remain available
+  through the existing authorized inspectors and native exports.
+  Local synthetic/project acceptance reconstructs private chunks through the
+  worker database role; that test helper must reject non-local API targets.
+- PostgreSQL output-size failures and invalid persisted chunks are deterministic.
+  Record the stage failure immediately with a safe operator message and return
+  non-retryable HTTP 422 `pipeline_output_storage_failed`, preserving completed
+  stages. Do not hide these errors behind repeated generic transient retries.
+  `test:gcp-stage-output` reproduces the real JSONB limit beyond 256 MiB and
+  verifies chunk persistence, lossless reads, rollback, isolation and calculation
+  parity across all 24 stages, including chunked HAR-to-Revenue dependencies.
 - Add integration tests for backend routes, jobs, database contracts, and
   external-service adapters.
 - Do not commit secrets or generated migration evidence.

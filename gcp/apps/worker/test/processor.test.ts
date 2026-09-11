@@ -42,6 +42,33 @@ describe("local worker failure injection", () => {
 });
 
 describe("pipeline failure recording", () => {
+  it("does not retry deterministic PostgreSQL output limits", () => {
+    expect(pipelineStageExecutionError({ code: "54000", message: "private database detail" }))
+      .toMatchObject({ statusCode: 422, code: "pipeline_output_storage_failed" });
+    const transient = { code: "40001", message: "serialization failure" };
+    expect(pipelineStageExecutionError(transient)).toBe(transient);
+  });
+
+  it("records a deterministic storage failure immediately while preserving succeeded stages", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
+      if (sql.includes("SELECT state")) return { rows: [{ state: "running" }], rowCount: 1 };
+      if (sql.includes("SELECT stage_id, state")) return { rows: [{ stage_id: "intake", state: "running" }], rowCount: 1 };
+      if (sql.includes("RETURNING attempts")) return { rows: [{ attempts: 1 }], rowCount: 1 };
+      if (sql.includes("SELECT input")) return { rows: [{ input: {} }], rowCount: 1 };
+      if (sql.includes("SELECT status")) return { rows: [{ status: "running" }], rowCount: 1 };
+      if (sql.includes("SET state = 'succeeded'")) throw Object.assign(new Error("private error"), { code: "54000" });
+      return { rows: [], rowCount: 1 };
+    });
+    const pool = { query, connect: async () => ({ query, release: vi.fn() }) } as unknown as DatabasePool;
+    await expect(executeStageTask(pool, { runId: "run", stageId: "intake", taskId: "task" }))
+      .rejects.toMatchObject({ statusCode: 422, code: "pipeline_output_storage_failed" });
+    const statements = query.mock.calls.map(([sql]) => sql);
+    expect(statements).toContain("ROLLBACK");
+    expect(statements.some(sql => sql.includes("UPDATE pipeline_runs") && sql.includes("'failed'"))).toBe(true);
+    expect(statements.some(sql => sql.includes("state <> 'succeeded'"))).toBe(true);
+    expect(JSON.stringify(query.mock.calls)).not.toContain("private error");
+  });
   it("defers duplicate deliveries without incrementing attempts or calling providers", async () => {
     const query = vi.fn(async () => ({ rows: [{ acquired: false }] }));
     const release = vi.fn();

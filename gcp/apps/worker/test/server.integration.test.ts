@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createWorkerServer } from "../src/server.js";
+import { pipelineStageExecutionError } from "../src/processor.js";
 
 const processTask = vi.fn(async (): Promise<Record<string, unknown>> => ({
   status: "succeeded",
@@ -41,6 +42,19 @@ afterEach(async () => {
 });
 
 describe("seer-worker integration", () => {
+  it("returns a non-retryable response for deterministic output limits without leaking database errors", async () => {
+    processTask.mockRejectedValueOnce(pipelineStageExecutionError({ code: "54000", message: "private database trace" }));
+    const response = await fetch(`${baseUrl}/internal/tasks`, {
+      method: "POST",
+      headers: { authorization: "Bearer integration-token", "content-type": "application/json" },
+      body: JSON.stringify({ runId: "00000000-0000-4000-8000-000000000001", stageId: "har-v2", taskId: "1" }),
+    });
+    expect(response.status).toBe(422);
+    const body = await response.text();
+    expect(JSON.parse(body).error.code).toBe("pipeline_output_storage_failed");
+    expect(body).not.toContain("private database trace");
+    expect(processTask).toHaveBeenCalledTimes(1);
+  });
   it("acknowledges checkpoint continuation without exposing stage payloads", async () => {
     processTask.mockResolvedValueOnce({ status: "continuing", output: { privateBatch: "not for HTTP" } });
     const response = await fetch(`${baseUrl}/internal/tasks`, {

@@ -1,5 +1,6 @@
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
+import { loadStageOutput } from "../../../packages/runtime/src/stage-output.js";
 import type { DataDrivenStageData } from "../../../packages/pipeline/src/stage-handlers.js";
 
 export async function restoreKeywordDecisions(pool: DatabasePool, projectId: string, data: DataDrivenStageData): Promise<DataDrivenStageData> {
@@ -10,7 +11,8 @@ export async function restoreKeywordDecisions(pool: DatabasePool, projectId: str
      JOIN (SELECT id FROM pipeline_runs WHERE input->>'projectId' = $1 AND status = 'succeeded'
        ORDER BY completed_at DESC, id DESC LIMIT 1) AS baseline ON baseline.id = stage.run_id
      WHERE stage.stage_id = $2 AND stage.state = 'succeeded'`, [projectId, stageId]);
-  const previous = result.rows[0]?.output;
+  const row = result.rows[0];
+  const previous = row ? await loadStageOutput(pool, row.run_id, stageId, row.output) as DataDrivenStageData : undefined;
   if (!previous || previous.handlerVersion !== data.handlerVersion || !('keywords' in previous) || !Array.isArray(previous.keywords)) {
     throw new HttpError(422, "recalculation_baseline_missing", "No completed keyword qualification is available. Run the full pipeline before recalculating.");
   }

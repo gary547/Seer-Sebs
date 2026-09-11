@@ -5,6 +5,7 @@ import type { PoolClient } from "pg";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError, requireString } from "../../../packages/runtime/src/http.js";
+import { loadStageOutput, storeStageOutput } from "../../../packages/runtime/src/stage-output.js";
 import {
   parseRepresentativeProjectFixture,
   summariseRepresentativeFixture,
@@ -78,6 +79,10 @@ export interface StageExecutionOptions {
 }
 
 export function pipelineStageExecutionError(error: unknown): unknown {
+  if (error && typeof error === "object" && "code" in error && error.code === "54000") {
+    return new HttpError(422, "pipeline_output_storage_failed",
+      "Calculation output exceeded a storage limit. Automatic retries stopped; previously completed stages are preserved.");
+  }
   if (error instanceof PipelineReadinessError) {
     return new HttpError(422, "pipeline_inputs_incomplete", error.message);
   }
@@ -310,9 +315,9 @@ async function loadDependencyOutputs(
   dependencies: readonly PipelineStageId[],
 ): Promise<Partial<Record<PipelineStageId, unknown>>> {
   if (dependencies.length === 0) return {};
-  const result = await withTransaction(pool, async (client) => {
+  const outputs = await withTransaction(pool, async (client) => {
     await client.query("SET LOCAL statement_timeout = '600s'");
-    return client.query<DependencyOutputRow>(
+    const result = await client.query<DependencyOutputRow>(
       `
         SELECT stage_id, output
         FROM pipeline_stage_runs
@@ -322,10 +327,10 @@ async function loadDependencyOutputs(
       `,
       [runId, dependencies],
     );
+    const entries: Array<[PipelineStageId, unknown]> = [];
+    for (const row of result.rows) entries.push([row.stage_id, await loadStageOutput(client, runId, row.stage_id, row.output)]);
+    return Object.fromEntries(entries) as Partial<Record<PipelineStageId, unknown>>;
   });
-  const outputs = Object.fromEntries(
-    result.rows.map((row) => [row.stage_id, row.output]),
-  ) as Partial<Record<PipelineStageId, unknown>>;
   const missing = dependencies.find((stageId) => outputs[stageId] === undefined);
   if (missing) {
     throw new Error(`Dependency output ${missing} is missing for run ${runId}.`);
@@ -350,7 +355,13 @@ export async function executeStageTask(
     try {
       return await executeStageAttempt(pool, task, options, deadline);
     } catch (error) {
-      if (!(error instanceof StageContinuation)) throw error;
+      if (!(error instanceof StageContinuation)) {
+        const failure = pipelineStageExecutionError(error);
+        if (failure instanceof HttpError && failure.code === "pipeline_output_storage_failed") {
+          await failPipelineRun(pool, { runId: task.runId, stageId: task.stageId, reason: failure.code });
+        }
+        throw failure;
+      }
       await pool.query(
         `UPDATE pipeline_stage_runs
          SET output = COALESCE(output, '{}'::jsonb) || jsonb_build_object('message', $3::text)
@@ -490,10 +501,12 @@ async function executeStageAttempt(
       throw new HttpError(409, "stage_failed", "Pipeline failure stopped this stage.");
     }
 
+    await client.query("SET LOCAL statement_timeout = '600s'");
     if (projectId && stageData) {
       await persistProjectStageData(client, projectId, task.runId, stageData);
     }
 
+    const storedOutput = await storeStageOutput(client, task.runId, task.stageId, output);
     await client.query("SET LOCAL statement_timeout = '600s'");
     await client.query(
       `
@@ -504,7 +517,7 @@ async function executeStageAttempt(
         WHERE run_id = $1
           AND stage_id = $2
       `,
-      [task.runId, task.stageId, JSON.stringify(output)],
+      [task.runId, task.stageId, JSON.stringify(storedOutput)],
     );
     await client.query(
       `
