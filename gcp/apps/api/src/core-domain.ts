@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { PoolClient } from "pg";
+import type { PoolClient, QueryResultRow } from "pg";
 
 import { normaliseKeyword } from "../../../packages/fixtures/src/representative-project.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
@@ -12,6 +12,8 @@ import {
   assertClientAccess,
   assertProjectAccessByRole,
 } from "./authorization.js";
+
+import { queryCalculationDiagnostic } from "./calculation-reads.js";
 
 type RuleType =
   | "blacklist"
@@ -2830,8 +2832,10 @@ export async function getProjectCalculationInspector(
     };
   }
 
+  const query = <Row extends QueryResultRow>(text: string, values: unknown[]) => queryCalculationDiagnostic<Row>(pool, text, values);
+
   const [sourceRows, count] = await Promise.all([
-    pool.query<CalculationInspectorSourceRow>(
+    query<CalculationInspectorSourceRow>(
       `
         WITH keyword_page AS (
           SELECT
@@ -2955,7 +2959,7 @@ export async function getProjectCalculationInspector(
         filters.includes("clamped"),
       ],
     ),
-    pool.query<CountRow>(
+    query<CountRow>(
       `
         SELECT count(*)::text AS count
         FROM har_forecasts AS har
@@ -3155,8 +3159,10 @@ export async function getProjectLinkPowerInspector(
   }
 
   const normalisedSearch = normaliseKeyword(search);
+  const query = <Row extends QueryResultRow>(text: string, values: unknown[]) => queryCalculationDiagnostic<Row>(pool, text, values);
+
   const [summary, items, domains, count, clientAuthority] = await Promise.all([
-    pool.query<LinkPowerSummaryRow>(
+    query<LinkPowerSummaryRow>(
       `
         SELECT
           count(*)::text AS scored_count,
@@ -3186,7 +3192,7 @@ export async function getProjectLinkPowerInspector(
       `,
       [projectId, run.id],
     ),
-    pool.query<LinkPowerDetailRow>(
+    query<LinkPowerDetailRow>(
       `
         SELECT
           keyword.id AS keyword_id,
@@ -3218,7 +3224,7 @@ export async function getProjectLinkPowerInspector(
       `,
       [projectId, run.id, normalisedSearch, limit, offset],
     ),
-    pool.query<LinkPowerDomainRow>(
+    query<LinkPowerDomainRow>(
       `
         SELECT
           result.domain,
@@ -3236,7 +3242,7 @@ export async function getProjectLinkPowerInspector(
       `,
       [projectId, run.id],
     ),
-    pool.query<CountRow>(
+    query<CountRow>(
       `
         SELECT count(*)::text AS count
         FROM link_power_scores AS score
@@ -3252,7 +3258,7 @@ export async function getProjectLinkPowerInspector(
       `,
       [projectId, run.id, normalisedSearch],
     ),
-    pool.query<ClientAuthorityRow>(
+    query<ClientAuthorityRow>(
       `
         SELECT
           domain,

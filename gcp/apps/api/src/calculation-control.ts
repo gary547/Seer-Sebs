@@ -1,4 +1,4 @@
-import type { PoolClient, QueryResult, QueryResultRow } from "pg";
+import type { PoolClient, QueryResultRow } from "pg";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
@@ -7,6 +7,7 @@ import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth
 import { projectVolumeSampleSql, projectVolumeSummarySql } from "../../../packages/runtime/src/project-volume-history.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertAdministrator } from "./authorization.js";
+import { queryCalculationDiagnostic } from "./calculation-reads.js";
 
 interface ProjectRow extends QueryResultRow {
   archived_at: Date | null;
@@ -21,8 +22,6 @@ interface LatestRunRow extends QueryResultRow {
 }
 
 interface ControlReads {
-  active: number;
-  waiting: Array<() => void>;
   inFlight: Map<string, Promise<Record<string, unknown>>>;
 }
 
@@ -31,25 +30,10 @@ const controlReads = new WeakMap<DatabasePool, ControlReads>();
 function readsFor(pool: DatabasePool): ControlReads {
   let state = controlReads.get(pool);
   if (!state) {
-    state = { active: 0, waiting: [], inFlight: new Map() };
+    state = { inFlight: new Map() };
     controlReads.set(pool, state);
   }
   return state;
-}
-
-async function queryControl<Row extends QueryResultRow>(
-  pool: DatabasePool, text: string, values: unknown[],
-): Promise<QueryResult<Row>> {
-  const state = readsFor(pool);
-  if (state.active < 2) state.active += 1;
-  else await new Promise<void>(resolve => state.waiting.push(resolve));
-  try {
-    return await pool.query<Row>(text, values);
-  } finally {
-    const next = state.waiting.shift();
-    if (next) next();
-    else state.active -= 1;
-  }
 }
 
 interface GscUploadRow extends QueryResultRow {
@@ -274,7 +258,7 @@ async function loadProjectCalculationControl(
 ): Promise<Record<string, unknown>> {
   const projectId = project.id;
   const runId = latestRun?.id ?? null;
-  const query = <Row extends QueryResultRow>(text: string, values: unknown[]) => queryControl<Row>(pool, text, values);
+  const query = <Row extends QueryResultRow>(text: string, values: unknown[]) => queryCalculationDiagnostic<Row>(pool, text, values);
 
   const [
     uploads,

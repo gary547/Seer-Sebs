@@ -379,9 +379,11 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   resolution. `test:gcp-volume-scale` covers 44,135 keywords and 1,588,860 months.
   CTR, HAR and Revenue panels load independently of input diagnostics; identify
   the displayed completed run explicitly when the latest run has different results.
-- Calculation-control diagnostics run at most two SQL queries concurrently per
-  API database pool. Authorized requests for the same project metadata and latest
-  successful run share only pending work; settled responses are never cached.
+- Calculation-control, LPS and HAR inspector diagnostics share one budget of at
+  most two concurrent SQL queries per API database pool. Each panel must use the
+  shared diagnostic reader so simultaneous page loads do not multiply database
+  work. Authorized calculation-control requests for the same project metadata and
+  latest successful run share only pending work; settled responses are never cached.
   Always authorize before joining shared work and clear failed in-flight entries.
 - Local Docker validation links compiled backend code to the installed GCP
   dependencies after building. Frontend builds replace `dist`, so the gate must

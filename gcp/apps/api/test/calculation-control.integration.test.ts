@@ -27,6 +27,7 @@ function database(): DatabasePool {
     const sql = sqlValue.replace(/\s+/g, " ").trim();
     executedSql.push(sql);
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result([]);
+    if (sql.includes("SELECT client_id FROM navigator_projects")) return result([{ client_id: clientId }]);
     if (sql.includes("SELECT approval_status FROM profiles")) return result([{ approval_status: "approved" }]);
     if (sql.includes("FROM user_roles AS user_role")) return result([{ role: applicationRole }]);
     if (sql.includes("SELECT project.id, project.archived_at, client.brand_terms")) {
@@ -35,6 +36,11 @@ function database(): DatabasePool {
     if (sql.includes("FROM pipeline_runs") && sql.includes("status = 'succeeded'")) {
       return result([{ completed_at: new Date("2026-08-12T10:00:00Z"), id: runId }]);
     }
+    if (sql.includes("FROM link_power_scores AS score")) {
+      return result(sql.includes("SELECT count(*)::text AS count") ? [{ count: "0" }] : []);
+    }
+    if (sql.includes("WITH keyword_page AS") || sql.includes("FROM client_domain_metrics")) return result([]);
+    if (sql.includes("SELECT count(*)::text AS count") && sql.includes("FROM har_forecasts AS har")) return result([{ count: "0" }]);
     if (sql.includes("FROM gsc_uploads AS upload")) {
       return result([{ created_at: new Date("2026-08-11T10:00:00Z"), date_range_end: calendarDates[1], date_range_start: calendarDates[0], device: "mobile", id: uploadId, original_filename: "gsc.xlsx", page_count: "8", query_count: "240", row_count: 240, source_name: "gsc_workbook_v1" }]);
     }
@@ -77,7 +83,7 @@ function database(): DatabasePool {
     throw new Error(`Unexpected SQL in calculation control test: ${sql}`);
   };
   const query = vi.fn(async (sql: string, values: unknown[] = []) => {
-    const diagnostic = /FROM gsc_uploads AS upload|WITH base_sources AS|provider_history AS MATERIALIZED|WITH clusters AS|WITH signals AS|signal.coverage_months|WITH feature_types AS|WITH feature_summary AS|WITH rows AS|WITH aggregate AS|LEFT JOIN LATERAL/.test(sql);
+    const diagnostic = /FROM gsc_uploads AS upload|WITH base_sources AS|provider_history AS MATERIALIZED|WITH clusters AS|WITH signals AS|signal.coverage_months|WITH feature_types AS|WITH feature_summary AS|WITH rows AS|WITH aggregate AS|LEFT JOIN LATERAL|FROM link_power_scores AS score|WITH keyword_page AS|FROM har_forecasts AS har|FROM client_domain_metrics/.test(sql);
     if (!diagnostic) return execute(sql, values);
     peakDiagnostics = Math.max(peakDiagnostics, ++activeDiagnostics);
     try {
@@ -129,6 +135,32 @@ describe("calculation control API", () => {
     expect(peakDiagnostics).toBe(2);
     expect((await fetch(`${baseUrl}/v1/projects/${projectId}/calculation-control`)).status).toBe(200);
     expect(executedSql.filter(sql => sql.includes("AS history_row_count"))).toHaveLength(2);
+  });
+
+  it("shares the diagnostic budget with concurrent LPS and HAR inspectors", async () => {
+    diagnosticDelay = 15;
+    const paths = ["calculation-control", "link-power-inspector", "calculation-inspector"];
+    const responses = await Promise.all(paths.map(path => fetch(`${baseUrl}/v1/projects/${projectId}/${path}`)));
+    expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
+    const bodies = await Promise.all(responses.map(response => response.json()));
+    expect(bodies.slice(1).map(body => (body as { runId: string }).runId)).toEqual([runId, runId]);
+    expect(peakDiagnostics).toBe(2);
+    expect(activeDiagnostics).toBe(0);
+  });
+
+  it("releases the shared budget after a failure while sibling inspectors finish", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    diagnosticDelay = 15;
+    failSummaryOnce = true;
+    const paths = ["calculation-control", "link-power-inspector", "calculation-inspector"];
+    try {
+      const failed = await Promise.all(paths.map(path => fetch(`${baseUrl}/v1/projects/${projectId}/${path}`)));
+      expect(failed.map(response => response.status)).toEqual([500, 200, 200]);
+      const recovered = await Promise.all(paths.map(path => fetch(`${baseUrl}/v1/projects/${projectId}/${path}`)));
+      expect(recovered.every(response => response.status === 200)).toBe(true);
+      expect(peakDiagnostics).toBe(2);
+      expect(activeDiagnostics).toBe(0);
+    } finally { errorLog.mockRestore(); }
   });
 
   it("does not share project data and keeps one diagnostic limit across concurrent projects", async () => {
