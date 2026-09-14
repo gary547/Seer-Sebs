@@ -267,6 +267,8 @@ steps:
           --quiet
         )
         if [[ "${service}" == "seer-worker" ]]; then
+          service_flags+=(--container=worker --memory=8Gi)
+          service_flags+=("--update-env-vars=NODE_OPTIONS=--enable-source-maps --max-old-space-size=6144")
           service_flags+=(--update-secrets=OPENROUTER_API_KEY=seer-openrouter-api-key:latest)
           service_flags+=(--remove-secrets=AHREFS_API_KEY,ANTHROPIC_API_KEY)
         fi

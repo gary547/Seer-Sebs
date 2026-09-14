@@ -48,6 +48,7 @@ locals {
       service_account = google_service_account.runtime["worker"].email
       environment = {
         DATABASE_STATEMENT_TIMEOUT_MS = "300000"
+        NODE_OPTIONS                  = "--enable-source-maps --max-old-space-size=6144"
         SEER_ENVIRONMENT              = var.environment
         DATABASE_URL                  = "postgresql://${urlencode(trimsuffix(google_service_account.runtime["worker"].email, ".gserviceaccount.com"))}@127.0.0.1:5432/seer"
       }
@@ -117,7 +118,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
         cpu_idle = true
         limits = {
           cpu    = "2"
-          memory = each.key == "worker" ? "4Gi" : "1Gi"
+          memory = each.key == "worker" ? "8Gi" : "1Gi"
         }
       }
 

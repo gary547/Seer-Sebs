@@ -48,6 +48,10 @@ describe("provider migration release script", () => {
     const services = calls.filter(args => args.slice(0, 3).join(" ") === "run services update");
     expect(services).toHaveLength(3);
     const worker = services.find(args => args[3] === "seer-worker")!;
+    expect(worker).toContain("--container=worker");
+    expect(worker).toContain("--memory=8Gi");
+    expect(worker).toContain("--update-env-vars=NODE_OPTIONS=--enable-source-maps --max-old-space-size=6144");
+    expect(services.filter(args => args[3] !== "seer-worker").every(args => !args.some(arg => arg.startsWith("--memory=") || arg.includes("NODE_OPTIONS=")))).toBe(true);
     expect(worker).toContain("--update-secrets=OPENROUTER_API_KEY=seer-openrouter-api-key:latest");
     expect(worker).toContain("--remove-secrets=AHREFS_API_KEY,ANTHROPIC_API_KEY");
     expect(services.filter(args => args[3] !== "seer-worker").every(args => !args.some(arg => arg.includes("secrets=")))).toBe(true);

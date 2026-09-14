@@ -219,6 +219,11 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   revenue, and HAR forecast tables. Migration `026_portfolio_query_indexes`
   supplies the latest-successful-run lookup index, and the 18,000-keyword
   scale gate requires `/v1/portfolio` to complete in under five seconds.
+- Worker containers require 8 GiB of memory and
+  `NODE_OPTIONS=--enable-source-maps --max-old-space-size=6144` for large parallel
+  calculation stages. Keep OpenTofu and Cloud Build release settings aligned.
+  Transient recovery uses the existing automatic Workflow retries and preserves
+  completed stages.
 - Worker task HTTP responses are bounded acknowledgements containing only the
   run, stage, status, and optional idempotency flag. Stage outputs are persisted
   in PostgreSQL and must never be echoed through Workflows or dispatcher HTTP
