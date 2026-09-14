@@ -387,6 +387,17 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   and freshness provenance, and never overwrite a positive manually imported
   volume with an empty provider value. Competitive SERP fetching is performed
   per canonical cluster and inherited rows must retain their source keyword.
+- Backlinks must resolve provider metrics through each SERP's `sourceKeywordId`,
+  matching the canonical source's exact URL and absolute rank. Never substitute
+  a member's own provider entry for the inherited snapshot. Count usable LPS rows
+  across all supported providers, including DataForSEO; a legacy Ahrefs rank
+  alone is not an LPS component.
+- Both HAR readiness and HAR execution verify usable authority for every
+  retained keyword and expected SERP row, including URL, rank, domain and client
+  ownership. Missing or invalid authority fails with `serp_link_power` through
+  the existing non-retryable `pipeline_inputs_incomplete` response. Preserve
+  measured zeros, supported partial-component normalization and declared domain
+  fallbacks; healthy client-domain authority cannot hide missing competitor data.
 - Readiness stages must fail clearly before HAR or Revenue when their hard
   inputs are absent. Every fallback or substitution must remain visible in the
   run output and derived-record provenance; missing content fit is `NULL`, not
