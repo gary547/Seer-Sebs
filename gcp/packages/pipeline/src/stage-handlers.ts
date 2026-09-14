@@ -1557,23 +1557,15 @@ function executeBacklinks(
       keyword.results,
     ]),
   );
+  const keywordsById = new Map(authority.keywords.map((keyword) => [keyword.id, keyword]));
   const keywords = authority.keywords.map((keyword) => ({
     ...keyword,
     results: keyword.results.map((result) => {
       const metrics = providerMetric(
-        provider.get(keyword.normalisedText) ?? [],
+        provider.get(keywordsById.get(keyword.sourceKeywordId)?.normalisedText ?? "") ?? [],
         result,
       );
-      const hasMetrics = Boolean(
-        metrics &&
-          [
-            metrics.urlRating,
-            metrics.domainRating,
-            metrics.ahrefsRank,
-            metrics.referringDomains,
-            metrics.backlinks,
-          ].some((value) => value !== null),
-      );
+      const hasMetrics = metrics !== undefined && hasLpsMetrics(metrics);
       return {
         ...result,
         ahrefsRank: metrics?.ahrefsRank ?? null,
@@ -1685,9 +1677,40 @@ function executeLinkPowerScore(
     keywords,
     resultCount: results.length,
     scoredResultCount: results.filter(
-      (result) => result.metricSource === "local-provider",
+      (result) => hasScoredLps(result),
     ).length,
   };
+}
+
+function hasLpsMetrics(row: Pick<BacklinkResult, "urlRating" | "domainRating" | "referringDomains" | "backlinks">): boolean {
+  const values = [row.urlRating, row.domainRating, row.referringDomains, row.backlinks];
+  return values.some((value) => value !== null) && values.every(
+    (value) => value === null || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+  );
+}
+
+function hasScoredLps(row: LinkPowerScoreStageData["keywords"][number]["results"][number]): boolean {
+  return row.metricSource !== "missing-provider" && hasLpsMetrics(row) &&
+    Number.isFinite(row.score) && row.score >= 0 && row.score <= 100;
+}
+
+function hasKeywordLpsCoverage(
+  keywords: Array<{ id: string }>,
+  linkPowerScore: LinkPowerScoreStageData,
+  serp: SerpCollectionStageData,
+): boolean {
+  const lpsById = new Map(linkPowerScore.keywords.map((keyword) => [keyword.id, keyword]));
+  const serpById = new Map(serp.keywords.map((keyword) => [keyword.id, keyword]));
+  return keywords.every(({ id }) => {
+    const snapshot = serpById.get(id);
+    const scored = lpsById.get(id);
+    return snapshot !== undefined && snapshot.status === "matched" && snapshot.results.length > 0 &&
+      scored !== undefined && scored.results.length === snapshot.results.length &&
+      scored.results.every(hasScoredLps) && snapshot.results.every((result) =>
+        scored.results.some((row) => row.url === result.url && row.rankAbsolute === result.rankAbsolute &&
+          row.domain === result.domain && row.isClientDomain === result.isClientDomain),
+      );
+  });
 }
 
 function executeDemandSignals(
@@ -1913,6 +1936,9 @@ function executeHarV2(
   brand: BrandClassificationStageData,
   serp: SerpCollectionStageData,
 ): HarV2StageData {
+  if (!hasKeywordLpsCoverage(enrichment.keywords, linkPowerScore, serp)) {
+    throw new PipelineReadinessError("HAR", ["serp_link_power"]);
+  }
   const rankingById = new Map(
     ranking.keywords.map((keyword) => [keyword.id, keyword]),
   );
@@ -2353,13 +2379,8 @@ function executeHarReadiness(
   })) {
     missing.push("fresh_serp_results");
   }
-  if (
-    linkPowerScore.scoredResultCount === 0 &&
-    fixture.authority.domainRating === 0 &&
-    fixture.authority.referringDomains === 0 &&
-    fixture.authority.backlinks === 0
-  ) {
-    missing.push("link_power_or_client_authority");
+  if (!hasKeywordLpsCoverage(ranking.keywords, linkPowerScore, serp)) {
+    missing.push("serp_link_power");
   }
   if (siteArchitecture.keywords.length !== ranking.keywords.length) {
     missing.push("content_fit_attempt");

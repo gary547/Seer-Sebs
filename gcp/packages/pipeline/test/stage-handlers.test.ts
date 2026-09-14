@@ -86,6 +86,84 @@ function executeRepresentativeStages(fixture = parseRepresentativeProjectFixture
 }
 
 describe("data-driven pipeline handlers", () => {
+  it.each(["absent", "conflicting"])("inherits canonical authority through HAR and Revenue when member metrics are %s", (memberMetrics) => {
+    const { fixture, outputs, clustering } = executeRepresentativeStages();
+    const canonical = clustering.keywords.find((row) => row.normalisedText === "buy 55 inch oled tv")!;
+    const member = clustering.keywords.find((row) => row.normalisedText === "best 4k television")!;
+    Object.assign(member, { canonicalKeywordId: canonical.id, clusterKey: canonical.clusterKey, isCanonical: false });
+    const provider = fixture.providerInputs.serpKeywords.find((row) => row.text === canonical.normalisedText)!;
+    for (const row of provider.results) {
+      row.metricSource = "dataforseo";
+      row.authorityScope = "page";
+    }
+    const client = provider.results.find((row) => row.domain === fixture.client.domain)!;
+    Object.assign(client, { urlRating: 0, domainRating: 67, referringDomains: 0, backlinks: 0 });
+    fixture.providerInputs.serpKeywords = fixture.providerInputs.serpKeywords.filter((row) => row.text !== member.normalisedText);
+    if (memberMetrics === "conflicting") {
+      fixture.providerInputs.serpKeywords.push({ ...provider, text: member.normalisedText,
+        results: provider.results.map((row) => ({ ...row, urlRating: 100, domainRating: 100 })) });
+    }
+    for (const stageId of ["serp-collection", "authority", "backlinks", "link-power-score", "har-readiness",
+      "har-v2", "revenue-readiness", "revenue-v2", "calibration", "rollup-output"] as const) {
+      outputs[stageId] = executeDataDrivenStage(stageId, fixture, outputs);
+    }
+    const serp = outputs["serp-collection"] as SerpCollectionStageData;
+    expect(serp.keywords.find((row) => row.id === member.id)?.sourceKeywordId).toBe(canonical.id);
+    const lps = outputs["link-power-score"] as LinkPowerScoreStageData;
+    const canonicalScores = lps.keywords.find((row) => row.id === canonical.id)!.results;
+    const memberScores = lps.keywords.find((row) => row.id === member.id)!.results;
+    expect(memberScores).toEqual(canonicalScores);
+    expect(memberScores.find((row) => row.isClientDomain)).toMatchObject({ score: 20.1,
+      urlRating: 0, domainRating: 67, referringDomains: 0, backlinks: 0, metricSource: "dataforseo", authorityScope: "page" });
+    expect(lps.scoredResultCount).toBe(lps.resultCount);
+    const har = outputs["har-v2"] as HarV2StageData;
+    for (const scenario of har.keywords.find((row) => row.id === member.id)!.scenarios) {
+      expect(scenario.linkPowerScore).toBe(20.1);
+      expect(scenario.explanation.inputs).toMatchObject({ client_lps_source: "serp_row", client_ur: 0 });
+    }
+    const revenue = outputs["revenue-v2"] as RevenueV2StageData;
+    expect(revenue.keywords.find((row) => row.id === member.id)!.scenarios).toHaveLength(3);
+    expect(outputs["rollup-output"]).toBeDefined();
+  });
+
+  it.each(["missing-keyword", "missing-row", "missing-client-metrics", "missing-competitor-metrics",
+    "wrong-url", "wrong-rank", "non-finite-score", "invalid-metric", "missing-provenance"])(
+    "rejects %s authority at readiness and HAR even with healthy aggregate counts", (mode) => {
+      const { fixture, outputs, linkPowerScore } = executeRepresentativeStages();
+      const broken = structuredClone(linkPowerScore);
+      const keyword = broken.keywords.find((row) => row.normalisedText === "buy 55 inch oled tv")!;
+      const row = keyword.results.find((result) => mode === "missing-client-metrics" ? result.isClientDomain : !result.isClientDomain)!;
+      if (mode === "missing-keyword") broken.keywords = broken.keywords.filter((item) => item.id !== keyword.id);
+      else if (mode === "missing-row") keyword.results.pop();
+      else if (mode === "wrong-url") row.url = "https://unrelated.test/page";
+      else if (mode === "wrong-rank") row.rankAbsolute = 100;
+      else if (mode === "non-finite-score") row.score = NaN;
+      else if (mode === "invalid-metric") row.backlinks = -1;
+      else if (mode === "missing-provenance") row.metricSource = "missing-provider";
+      else Object.assign(row, { urlRating: null, domainRating: null, referringDomains: null, backlinks: null,
+        ahrefsRank: 100, score: 0 });
+      for (const stage of ["har-readiness", "har-v2"] as const) {
+        expect(() => executeDataDrivenStage(stage, fixture, { ...outputs, "link-power-score": broken }))
+          .toThrow("serp_link_power");
+      }
+    },
+  );
+
+  it("keeps measured zeros and declared partial domain fallback metrics usable", () => {
+    const fixture = parseRepresentativeProjectFixture(rawFixture);
+    for (const keyword of fixture.providerInputs.serpKeywords) {
+      keyword.results.forEach((row, index) => Object.assign(row, { metricSource: "dataforseo",
+        authorityScope: index === 0 ? "page" : "domain_fallback", urlRating: index === 0 ? 0 : null,
+        domainRating: 0, referringDomains: 0, backlinks: 0 }));
+    }
+    const { linkPowerScore, har } = executeRepresentativeStages(fixture);
+    expect(linkPowerScore.scoredResultCount).toBe(linkPowerScore.resultCount);
+    expect(linkPowerScore.keywords.flatMap((row) => row.results).every((row) => row.score === 0)).toBe(true);
+    expect(linkPowerScore.keywords.flatMap((row) => row.results).filter((row) => row.authorityScope === "domain_fallback")
+      .every((row) => row.confidence === "low")).toBe(true);
+    expect(har.scenarioCount).toBe(36);
+  });
+
   it("uses period-normalised GSC impressions only for absent volume and retains the evidence", () => {
     const fixture = parseRepresentativeProjectFixture(rawFixture);
     const provider = fixture.providerInputs.keywords.find(row => row.text === "55 inch smart tv")!;

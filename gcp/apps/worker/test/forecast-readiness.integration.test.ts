@@ -3,20 +3,30 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { parseRepresentativeProjectFixture } from "../../../packages/fixtures/src/representative-project.js";
 import { PIPELINE_STAGES, type PipelineStageId } from "../../../packages/pipeline/src/definition.js";
-import { executeDataDrivenStage, type RevenueV2StageData, type SerpCollectionStageData } from "../../../packages/pipeline/src/stage-handlers.js";
+import { executeDataDrivenStage, type LinkPowerScoreStageData, type RevenueV2StageData, type SerpCollectionStageData } from "../../../packages/pipeline/src/stage-handlers.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { executeStageTask } from "../src/processor.js";
 import { createWorkerServer } from "../src/server.js";
 
 describe("forecast completeness task delivery", () => {
-  it.each(["har-readiness", "rollup-output"] as const)("rejects incomplete %s inputs without marking success", async (stageId) => {
+  it.each([
+    { stageId: "har-readiness", failure: "serp" },
+    { stageId: "har-readiness", failure: "authority" },
+    { stageId: "har-v2", failure: "authority" },
+    { stageId: "rollup-output", failure: "revenue" },
+  ] as const)("rejects incomplete $failure inputs at $stageId without marking success", async ({ stageId, failure }) => {
     const fixture = parseRepresentativeProjectFixture(JSON.parse(readFileSync(new URL("../../../fixtures/representative-project.json", import.meta.url), "utf8")));
     const outputs: Partial<Record<PipelineStageId, unknown>> = {};
     for (const stage of PIPELINE_STAGES) {
       outputs[stage.id] = executeDataDrivenStage(stage.id, fixture,
         Object.fromEntries(stage.dependencies.map(id => [id, outputs[id]])));
     }
-    if (stageId === "har-readiness") (outputs["serp-collection"] as SerpCollectionStageData).keywords.shift();
+    if (failure === "serp") (outputs["serp-collection"] as SerpCollectionStageData).keywords.shift();
+    else if (failure === "authority") {
+      const row = (outputs["link-power-score"] as LinkPowerScoreStageData).keywords[0]!.results[0]!;
+      Object.assign(row, { urlRating: null, domainRating: null, referringDomains: null, backlinks: null,
+        metricSource: "missing-provider", score: 0 });
+    }
     else (outputs["revenue-v2"] as RevenueV2StageData).keywords[0]!.scenarios[0]!.expectedIncrementalAnnual = null;
     const definition = PIPELINE_STAGES.find(stage => stage.id === stageId)!;
     const query = vi.fn(async (sql: string) => {
