@@ -15,6 +15,7 @@ let currency: string | null = "GBP";
 let harPosition: number | null = 3;
 let harExplanation: Record<string, unknown>;
 let expectedRevenue = "125.25";
+let peakMonths: number[];
 let executed: Array<{ sql: string; values: unknown[] }>;
 
 describe("complete calculation export API", () => {
@@ -22,7 +23,7 @@ describe("complete calculation export API", () => {
   let url: string;
   beforeEach(async () => {
     dirty = false; active = false; complete = true; allowed = true; latestRun = true; currency = "GBP"; executed = [];
-    harPosition = 3; harExplanation = { authorityProvider: "dataforseo" }; expectedRevenue = "125.25";
+    harPosition = 3; harExplanation = { authorityProvider: "dataforseo" }; expectedRevenue = "125.25"; peakMonths = [11, 12, 1];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       sql = sql.replace(/\s+/g, " ").trim();
       executed.push({ sql, values });
@@ -36,7 +37,7 @@ describe("complete calculation export API", () => {
         keyword_id: keywordId, keyword: 'keyword, with "quotes"', scenario, category: "Pharmacy", search_intent: "commercial",
         har_model_version: "har-v2", revenue_model_version: complete ? "revenue-v2" : null,
         link_power_score: "0", content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash", expected_incremental_annual: expectedRevenue,
-        har_position: harPosition, har_explanation: harExplanation, warnings: [],
+        har_position: harPosition, har_explanation: harExplanation, warnings: [], peak_months: peakMonths,
       }));
       else throw new Error(`Unexpected query: ${sql}`);
       return { rows, rowCount: rows.length };
@@ -60,6 +61,21 @@ describe("complete calculation export API", () => {
     expect(page.columns).toContain("har_explanation");
     expect(executed.find(({ sql }) => sql.includes("WITH export_keywords"))?.values).toEqual([projectId, runId, null, 1, null]);
   });
+  it("appends peak months after every existing column without moving them", async () => {
+    const response = await fetch(`${url}?limit=1`);
+    const page = await response.json() as { rows: Array<Record<string, unknown>>; columns: string[] };
+    expect(page.columns.slice(-2)).toEqual(["peak_month", "peak_months"]);
+    expect(page.columns.at(-3)).toBe("expected_incremental_high_annual");
+    expect(page.columns).toContain("seasonality_strength");
+    expect(page.rows[0]).toMatchObject({ peak_month: 11, peak_months: "11,12,1" });
+    expect(executed.find(({ sql }) => sql.includes("WITH export_keywords"))?.sql).toContain("demand.peak_months");
+  });
+  it("reports a keyword with no seasonal peak as unavailable rather than a month", async () => {
+    peakMonths = [];
+    const response = await fetch(`${url}?limit=1`);
+    const page = await response.json() as { rows: Array<Record<string, unknown>> };
+    expect(page.rows[0]).toMatchObject({ peak_month: "not_available", peak_months: "not_available" });
+  });
   it.each(["conservative", "realistic", "stretch"])("exports only the selected %s scenario and preserves the run cursor", async (scenario) => {
     const response = await fetch(`${url}?scenario=${scenario}&limit=1&runId=${runId}&after=${keywordId}`);
     expect(response.status).toBe(200);
@@ -80,7 +96,7 @@ describe("complete calculation export API", () => {
     const response = await fetch(url);
     expect(response.status).toBe(200);
     const page = await response.json() as { rows: Array<Record<string, unknown>>; columns: string[] };
-    expect(page.columns).toHaveLength(68);
+    expect(page.columns).toHaveLength(70);
     expect(page.rows).toHaveLength(3);
     for (const row of page.rows) {
       expect(row).toMatchObject({ har_outcome: "no_attainable_target", har_position: "no_attainable_target", expected_incremental_annual: 0 });
@@ -102,7 +118,7 @@ describe("complete calculation export API", () => {
     const response = await fetch(url);
     expect(response.status).toBe(200);
     const page = await response.json() as { rows: Array<Record<string, unknown>>; columns: string[] };
-    expect(page.columns).toHaveLength(68);
+    expect(page.columns).toHaveLength(70);
     expect(page.rows.every(row => row.currency === (value === "GBP" ? "GBP" : "not_available"))).toBe(true);
     expect(page.rows.every(row => page.columns.every(column => row[column] !== null && row[column] !== undefined && row[column] !== ""))).toBe(true);
   });

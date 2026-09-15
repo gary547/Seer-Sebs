@@ -10,8 +10,9 @@ export default function CalculationExportButton({ projectId, disabled = false }:
   const download = async (scenario?: ExportScenario) => {
     setDownloading(true);
     try {
-      await downloadCalculationResults(projectId, scenario);
-      toast.success(scenario ? `${scenario[0].toUpperCase()}${scenario.slice(1)} results downloaded` : "Complete results downloaded — all three scenarios included");
+      const { parts, rows } = await downloadCalculationResults(projectId, scenario);
+      const results = scenario ? `${scenario[0].toUpperCase()}${scenario.slice(1)} results downloaded` : "Complete results downloaded — all three scenarios included";
+      toast.success(parts > 1 ? `${results} — ${rows.toLocaleString()} rows split across ${parts} CSV parts` : results);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Results could not be downloaded.");
     } finally { setDownloading(false); }

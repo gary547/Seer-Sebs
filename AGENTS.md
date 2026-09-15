@@ -509,6 +509,21 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   (`conservative`, `realistic`, or `stretch`). Keep that filter and run ID on
   every pagination request; omitting it preserves the combined three-scenario
   export. No separate spreadsheet calculations or replacement export format.
+- The export column set is the client-agreed layout. New columns are appended
+  after every existing column so no established column changes position, and
+  columns are never removed or reordered. `peak_month` carries the highest
+  observed demand month as 1-12 and `peak_months` the ranked list from the
+  persisted `keyword_demand_signals.peak_months`; a keyword with no month at
+  least 1.3 times its own average exports `not_available` for both, and neither
+  column re-runs the pipeline or recomputes demand.
+- Large downloads are split into numbered CSV parts bounded by both rows and
+  bytes, so each part imports into Google Drive and Sheets. A part is a pure
+  split: identical columns in identical order, the header repeated, rows in
+  export order, and no manifest or extra column inside the file. Parts break
+  only on pagination-page boundaries, so every scenario row of a keyword stays
+  in one part. An export fitting a single part keeps its original unsuffixed
+  filename. The 10-million-cell spreadsheet ceiling applies to a whole
+  spreadsheet, tabs included; splitting files does not raise it.
 - Migration `032_provider_migration_contract` adds persisted provider batch
   results, OpenRouter categorisation provenance and page/domain input scopes.
   Apply it before deploying the new worker or export API; it also supplies

@@ -20,7 +20,14 @@ const NUMBER_FIELDS = [
   "ctr_now", "ctr_target", "current_revenue_annual", "target_absolute_revenue_annual",
   "target_incremental_revenue_annual", "expected_incremental_annual", "expected_incremental_low_annual", "expected_incremental_high_annual",
 ] as const;
+const PEAK_FIELDS = ["peak_month", "peak_months"] as const;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function exportedPeakMonths(value: unknown): number[] {
+  return (Array.isArray(value) ? value : [])
+    .map(Number)
+    .filter((month) => Number.isInteger(month) && month >= 1 && month <= 12);
+}
 
 export async function getCalculationExportPage(pool: DatabasePool, user: AuthenticatedUser, projectId: string, params: URLSearchParams): Promise<Record<string, unknown>> {
   await assertProjectAccessByRole(pool, user.id, projectId);
@@ -60,7 +67,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
        architecture.metric_source AS content_fit_source, architecture.input_scope AS content_fit_scope,
        architecture.content_status, architecture.tactical_status, architecture.relevancy_score AS content_fit_percent,
        demand.coverage_months, demand.trend_direction, demand.trend_pct, demand.trend_slope,
-       demand.trend_confidence, demand.volatility_score, demand.seasonality_strength, demand.demand_warning_reason,
+       demand.trend_confidence, demand.volatility_score, demand.seasonality_strength, demand.peak_months, demand.demand_warning_reason,
        har.model_version AS har_model_version, har.base_rank, har.har_position, har.har_confidence,
        har.rank_attainment_probability, har.authority_score, har.link_power_score, har.link_gap_score,
        COALESCE(har.explanation_json #>> '{no_beat_reason,reason}', 'not_applicable') AS har_no_beat_reason,
@@ -89,7 +96,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   if (page.rows.some((row) => !row.har_model_version || !row.revenue_model_version || row.expected_incremental_annual == null)) {
     throw new HttpError(409, "export_incomplete", "The completed run does not contain forecasts for every eligible keyword. Re-run the pipeline before exporting final results.");
   }
-  const columns = ["project_id", "run_id", "completed_at", "currency", ...TEXT_FIELDS, ...NUMBER_FIELDS];
+  const columns = ["project_id", "run_id", "completed_at", "currency", ...TEXT_FIELDS, ...NUMBER_FIELDS, ...PEAK_FIELDS];
   for (const row of page.rows) {
     row.har_outcome = row.har_position != null ? "attainable_target"
       : verifiedHarNoTargetReason(row.har_explanation) !== null ? "no_attainable_target" : "insufficient_inputs";
@@ -100,6 +107,8 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
     ...Object.fromEntries(NUMBER_FIELDS.map((key) => [key, row[key] === null || row[key] === undefined
       ? ((key === "har_position" || key === "rank_attainment_probability") && row.har_outcome === "no_attainable_target" ? "no_attainable_target" : "not_available")
       : Number(row[key])])),
+    peak_month: exportedPeakMonths(row.peak_months)[0] ?? "not_available",
+    peak_months: exportedPeakMonths(row.peak_months).join(",") || "not_available",
   }));
   return { columns, rows, runId: run.id, keywordCount: keys.size, completedAt: run.completed_at.toISOString(),
     nextAfter: keys.size === limit ? [...keys].at(-1) : null,
