@@ -35,6 +35,16 @@ export interface ConversionOverrideRecord {
   updated_by_email?: string | null;
 }
 
+export interface ProjectConversionCategory {
+  category: string;
+  keywordCount: number;
+}
+
+export interface ProjectConversionOverrides {
+  categories: ProjectConversionCategory[];
+  overrides: ConversionOverrideRecord[];
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -80,10 +90,10 @@ export function updateSerpFeature(
 
 export function listConversionOverrides(
   projectId: string,
-): Promise<ConversionOverrideRecord[]> {
-  return request<{ overrides: ConversionOverrideRecord[] }>(
+): Promise<ProjectConversionOverrides> {
+  return request<ProjectConversionOverrides>(
     `/v1/projects/${projectId}/conversion-overrides`,
-  ).then((result) => result.overrides);
+  );
 }
 
 export function upsertConversionOverride(input: {

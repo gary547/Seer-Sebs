@@ -39,10 +39,11 @@ export default function ConversionOverridesPage() {
     queryFn: () => getProjectSummary(projectId as string),
   });
 
-  const { data: rows, isLoading } = useConversionOverrides(projectId);
+  const { data, isLoading, isError } = useConversionOverrides(projectId);
   const del = useDeleteConversionOverride(projectId ?? "");
 
-  const sortedRows = useMemo(() => rows ?? [], [rows]);
+  const sortedRows = useMemo(() => data?.overrides ?? [], [data]);
+  const categories = data?.categories ?? [];
 
   const backHref = project?.client_id
     ? `/clients/${project.client_id}/projects/${projectId}/overview`
@@ -93,6 +94,10 @@ export default function ConversionOverridesPage() {
             URL and category overrides because those assumptions can materially change
             forecasts.
           </p>
+          <p className="mt-2 text-muted-foreground">
+            Category counts include kept keywords in this project. A URL override can take
+            precedence for an individual keyword.
+          </p>
           {!canManageUsers && (
             <p className="mt-2 text-muted-foreground">
               You have read-only access. Ask an admin to add or edit overrides.
@@ -112,9 +117,14 @@ export default function ConversionOverridesPage() {
                 <Skeleton key={i} className="h-10 w-full" />
               ))}
             </div>
+          ) : isError ? (
+            <p className="text-sm text-destructive">
+              Conversion overrides and project categories could not be loaded.
+            </p>
           ) : (
             <ConversionOverridesTable
               rows={sortedRows}
+              categories={categories}
               canWrite={canManageUsers}
               onEdit={(r) => {
                 setEditing(r);
@@ -132,6 +142,9 @@ export default function ConversionOverridesPage() {
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           editing={editing}
+          categories={categories}
+          categoriesReady={Boolean(data) && !isError}
+          categoriesFailed={isError}
         />
       )}
 

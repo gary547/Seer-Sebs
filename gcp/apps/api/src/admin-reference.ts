@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
@@ -201,8 +202,9 @@ export async function listConversionOverrides(
   projectId: string,
 ): Promise<Record<string, unknown>> {
   await assertProjectAccessByRole(pool, user.id, projectId);
-  const result = await pool.query(
-    `
+  const [overrides, categories] = await Promise.all([
+    pool.query(
+      `
       SELECT
         override.*,
         creator.email AS created_by_email,
@@ -213,9 +215,63 @@ export async function listConversionOverrides(
       WHERE override.project_id = $1
       ORDER BY override.scope_type, override.updated_at DESC, override.id
     `,
+      [projectId],
+    ),
+    projectConversionCategories(pool, projectId),
+  ]);
+  return { categories, overrides: overrides.rows };
+}
+
+interface ProjectConversionCategory {
+  category: string;
+  keywordCount: number;
+}
+
+function normaliseConversionCategory(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+async function projectConversionCategories(
+  database: DatabasePool | PoolClient,
+  projectId: string,
+): Promise<ProjectConversionCategory[]> {
+  const result = await database.query<{
+    category: string;
+    keyword_count: number;
+  }>(
+    `
+      SELECT category, count(*)::integer AS keyword_count
+      FROM keywords
+      WHERE project_id = $1
+        AND detox_status = 'keep'
+        AND category IS NOT NULL
+        AND btrim(category) <> ''
+      GROUP BY category
+      ORDER BY category
+    `,
     [projectId],
   );
-  return { overrides: result.rows };
+  const grouped = new Map<string, ProjectConversionCategory>();
+  const representativeCounts = new Map<string, number>();
+  for (const row of result.rows) {
+    const category = row.category.trim().replace(/\s+/g, " ");
+    const key = normaliseConversionCategory(category);
+    const count = Number(row.keyword_count);
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, { category, keywordCount: count });
+      representativeCounts.set(key, count);
+      continue;
+    }
+    current.keywordCount += count;
+    if (count > (representativeCounts.get(key) ?? 0)) {
+      current.category = category;
+      representativeCounts.set(key, count);
+    }
+  }
+  return [...grouped.values()].sort((left, right) =>
+    left.category.localeCompare(right.category),
+  );
 }
 
 function overrideInput(body: unknown): {
@@ -293,6 +349,43 @@ export async function upsertConversionOverride(
     inputRecord.id === undefined ? randomUUID() : uuid(inputRecord.id, "id");
   try {
     return await withTransaction(pool, async (client) => {
+      let scopeValue = input.scopeValue;
+      if (input.scopeType === "category") {
+        const categories = await projectConversionCategories(client, input.projectId);
+        const selected = categories.find(
+          (category) =>
+            normaliseConversionCategory(category.category) ===
+            normaliseConversionCategory(input.scopeValue ?? ""),
+        );
+        if (!selected) {
+          throw new HttpError(
+            400,
+            "unknown_category",
+            "Choose a category with kept keywords in this project.",
+          );
+        }
+        scopeValue = selected.category;
+        const existing = await client.query<{ scope_value: string }>(
+          `
+            SELECT scope_value
+            FROM project_conversion_overrides
+            WHERE project_id = $1
+              AND scope_type = 'category'
+              AND id <> $2
+          `,
+          [input.projectId, id],
+        );
+        if (existing.rows.some((row) =>
+          normaliseConversionCategory(row.scope_value) ===
+          normaliseConversionCategory(scopeValue ?? "")
+        )) {
+          throw new HttpError(
+            409,
+            "conversion_override_conflict",
+            "An override already exists for this category.",
+          );
+        }
+      }
       const result = await client.query(
         `
           INSERT INTO project_conversion_overrides (
@@ -327,7 +420,7 @@ export async function upsertConversionOverride(
           id,
           input.projectId,
           input.scopeType,
-          input.scopeValue,
+          scopeValue,
           input.conversionRate,
           input.averageOrderValue,
           input.confidence,

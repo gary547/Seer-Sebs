@@ -1,6 +1,7 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Check, ChevronsUpDown } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -22,6 +23,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -45,12 +55,16 @@ import {
   useUpsertConversionOverride,
   type ConversionOverrideWithActor,
 } from "@/hooks/useConversionOverrides";
+import type { ProjectConversionCategory } from "@/integrations/gcp/admin-reference";
 
 type Props = {
   projectId: string;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   editing?: ConversionOverrideWithActor | null;
+  categories: ProjectConversionCategory[];
+  categoriesReady: boolean;
+  categoriesFailed: boolean;
 };
 
 export default function ConversionOverrideFormDialog({
@@ -58,8 +72,12 @@ export default function ConversionOverrideFormDialog({
   open,
   onOpenChange,
   editing,
+  categories,
+  categoriesReady,
+  categoriesFailed,
 }: Props) {
   const upsert = useUpsertConversionOverride(projectId);
+  const [categoryOpen, setCategoryOpen] = useState(false);
 
   const defaults = useMemo<ConversionOverrideFormValues>(
     () => ({
@@ -80,11 +98,20 @@ export default function ConversionOverrideFormDialog({
   });
 
   useEffect(() => {
-    if (open) form.reset(defaults);
+    if (open) {
+      form.reset(defaults);
+      setCategoryOpen(false);
+    }
   }, [open, defaults, form]);
 
   const scopeType = form.watch("scope_type");
+  const scopeValue = form.watch("scope_value");
   const noteRequired = NOTE_REQUIRED_SCOPES.includes(scopeType);
+  const selectedCategory = categories.find(
+    (category) =>
+      category.category.trim().toLowerCase().replace(/\s+/g, " ") ===
+      scopeValue.trim().toLowerCase().replace(/\s+/g, " "),
+  );
 
   const onSubmit = form.handleSubmit(async (values) => {
     try {
@@ -112,24 +139,31 @@ export default function ConversionOverrideFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-lg gap-3 overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editing ? "Edit override" : "New conversion override"}</DialogTitle>
           <DialogDescription>
-            Overrides apply to Revenue v2 forecasts only. They have no effect until v2
-            visibility is enabled. v1 forecasts are unchanged.
+            Set the values used by revenue forecasts. Changes take effect after the next
+            forecast recalculation.
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={onSubmit} className="space-y-4">
+          <form onSubmit={onSubmit} className="space-y-3">
             <FormField
               control={form.control}
               name="scope_type"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Scope</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
+                  <Select
+                    value={field.value}
+                    onValueChange={(value) => {
+                      field.onChange(value);
+                      form.setValue("scope_value", "");
+                      form.clearErrors("scope_value");
+                    }}
+                  >
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue />
@@ -161,7 +195,70 @@ export default function ConversionOverrideFormDialog({
                           ? "Category"
                           : "Intent"}
                     </FormLabel>
-                    {scopeType === "intent" ? (
+                    {scopeType === "category" ? (
+                      <>
+                        <Popover open={categoryOpen} onOpenChange={setCategoryOpen}>
+                          <PopoverTrigger asChild>
+                            <FormControl>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                role="combobox"
+                                aria-expanded={categoryOpen}
+                                className="w-full justify-between font-normal"
+                                disabled={!categoriesReady || categories.length === 0}
+                              >
+                                <span className="truncate text-left">
+                                  {selectedCategory?.category || field.value || "Select a project category"}
+                                </span>
+                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                              </Button>
+                            </FormControl>
+                          </PopoverTrigger>
+                          <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+                            <Command>
+                              <CommandInput placeholder="Search categories…" />
+                              <CommandList>
+                                <CommandEmpty>No matching categories.</CommandEmpty>
+                                <CommandGroup>
+                                  {categories.map((category) => (
+                                    <CommandItem
+                                      key={category.category}
+                                      value={category.category}
+                                      onSelect={() => {
+                                        field.onChange(category.category);
+                                        form.clearErrors("scope_value");
+                                        setCategoryOpen(false);
+                                      }}
+                                      className="gap-2"
+                                    >
+                                      <Check className={`h-4 w-4 shrink-0 ${selectedCategory?.category === category.category ? "text-primary" : "opacity-0"}`} />
+                                      <span className="min-w-0 flex-1 truncate">{category.category}</span>
+                                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                                        {category.keywordCount.toLocaleString()}
+                                      </span>
+                                    </CommandItem>
+                                  ))}
+                                </CommandGroup>
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                        <FormDescription>
+                          {categoriesFailed
+                            ? "Project categories could not be loaded. Close and try again."
+                            : !categoriesReady
+                              ? "Loading project categories…"
+                              : categories.length === 0
+                                ? "No kept keywords have a category yet. Categorise keywords first."
+                                : selectedCategory
+                                  ? `${selectedCategory.keywordCount.toLocaleString()} kept keywords match this category. URL overrides may take precedence.`
+                                  : field.value
+                                    ? "This category no longer matches kept keywords. Choose a current category."
+                                    : "Choose a category already assigned to kept keywords."}
+                        </FormDescription>
+                      </>
+                    ) : scopeType === "intent" ? (
                       <Select value={field.value} onValueChange={field.onChange}>
                         <FormControl>
                           <SelectTrigger>
@@ -180,11 +277,7 @@ export default function ConversionOverrideFormDialog({
                       <FormControl>
                         <Input
                           {...field}
-                          placeholder={
-                            scopeType === "url"
-                              ? "https://example.com/page"
-                              : "e.g. Refurbished > Laptops"
-                          }
+                          placeholder="https://example.com/page"
                         />
                       </FormControl>
                     )}
@@ -274,7 +367,7 @@ export default function ConversionOverrideFormDialog({
                     )}
                   </FormLabel>
                   <FormControl>
-                    <Textarea rows={3} placeholder="Rationale for this override" {...field} />
+                    <Textarea rows={2} placeholder="Rationale for this override" {...field} />
                   </FormControl>
                   {noteRequired && (
                     <FormDescription>
@@ -296,7 +389,10 @@ export default function ConversionOverrideFormDialog({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={upsert.isPending}>
+              <Button
+                type="submit"
+                disabled={upsert.isPending || (scopeType === "category" && !selectedCategory)}
+              >
                 {upsert.isPending ? "Saving…" : editing ? "Save changes" : "Create override"}
               </Button>
             </DialogFooter>

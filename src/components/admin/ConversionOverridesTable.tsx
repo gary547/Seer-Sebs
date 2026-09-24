@@ -11,9 +11,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ConversionOverrideWithActor } from "@/hooks/useConversionOverrides";
+import type { ProjectConversionCategory } from "@/integrations/gcp/admin-reference";
 
 type Props = {
   rows: ConversionOverrideWithActor[];
+  categories: ProjectConversionCategory[];
   canWrite: boolean;
   onEdit: (row: ConversionOverrideWithActor) => void;
   onDelete: (row: ConversionOverrideWithActor) => void;
@@ -35,7 +37,13 @@ function fmtDate(iso: string): string {
   }
 }
 
-export default function ConversionOverridesTable({ rows, canWrite, onEdit, onDelete }: Props) {
+export default function ConversionOverridesTable({ rows, categories, canWrite, onEdit, onDelete }: Props) {
+  const categoryCounts = new Map(
+    categories.map((category) => [
+      category.category.trim().toLowerCase().replace(/\s+/g, " "),
+      category.keywordCount,
+    ]),
+  );
   if (rows.length === 0) {
     return (
       <div className="rounded-md border border-dashed py-10 text-center text-sm text-muted-foreground">
@@ -50,6 +58,7 @@ export default function ConversionOverridesTable({ rows, canWrite, onEdit, onDel
           <TableRow>
             <TableHead className="w-[110px]">Scope</TableHead>
             <TableHead>Value</TableHead>
+            <TableHead className="w-[130px] text-right">Matching keywords</TableHead>
             <TableHead className="w-[100px]">CVR</TableHead>
             <TableHead className="w-[120px]">AOV</TableHead>
             <TableHead className="w-[110px]">Confidence</TableHead>
@@ -72,6 +81,11 @@ export default function ConversionOverridesTable({ rows, canWrite, onEdit, onDel
                 ) : (
                   r.scope_value ?? "—"
                 )}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums">
+                {r.scope_type === "category"
+                  ? (categoryCounts.get(r.scope_value?.trim().toLowerCase().replace(/\s+/g, " ") ?? "") ?? 0).toLocaleString()
+                  : "—"}
               </TableCell>
               <TableCell>{fmtPct(r.conversion_rate)}</TableCell>
               <TableCell>{fmtNum(r.average_order_value)}</TableCell>

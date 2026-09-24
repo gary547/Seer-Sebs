@@ -580,7 +580,7 @@ async function validateEndToEnd() {
       `${apiBaseUrl}/v1/projects/${project.id}/calculation-export?${params}`,
       authenticated(identity.token),
     );
-    if (page.runId !== firstRun.id || page.columns.length !== 68 || page.rows.length > 15) {
+    if (page.runId !== firstRun.id || page.columns.length !== 70 || page.rows.length > 15) {
       throw new Error("Complete export changed its run, columns or page boundary.");
     }
     for (const row of page.rows) {
