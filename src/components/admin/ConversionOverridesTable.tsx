@@ -53,11 +53,11 @@ export default function ConversionOverridesTable({ rows, categories, canWrite, o
   }
   return (
     <div className="rounded-md border overflow-hidden">
-      <Table>
+      <Table className="min-w-[1080px]">
         <TableHeader>
           <TableRow>
             <TableHead className="w-[110px]">Scope</TableHead>
-            <TableHead>Value</TableHead>
+            <TableHead className="min-w-[150px]">Value</TableHead>
             <TableHead className="w-[130px] text-right">Matching keywords</TableHead>
             <TableHead className="w-[100px]">CVR</TableHead>
             <TableHead className="w-[120px]">AOV</TableHead>
@@ -75,11 +75,13 @@ export default function ConversionOverridesTable({ rows, categories, canWrite, o
                   {r.scope_type}
                 </Badge>
               </TableCell>
-              <TableCell className="font-mono text-xs break-all">
+              <TableCell className="min-w-[150px] max-w-[220px] font-mono text-xs">
                 {r.scope_type === "project" ? (
                   <span className="text-muted-foreground">Project-wide</span>
                 ) : (
-                  r.scope_value ?? "—"
+                  <span className="block truncate" title={r.scope_value ?? undefined}>
+                    {r.scope_value ?? "—"}
+                  </span>
                 )}
               </TableCell>
               <TableCell className="text-right font-mono text-xs tabular-nums">

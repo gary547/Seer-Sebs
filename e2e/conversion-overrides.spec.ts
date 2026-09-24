@@ -4,6 +4,7 @@ const projectId = "00000000-0000-4000-8000-000000000003";
 const overrideId = "00000000-0000-4000-8000-000000000004";
 
 test("selects a project category and saves its forecast assumptions", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
   await page.addInitScript(() => {
     localStorage.setItem("seer-gcp-local-session", JSON.stringify({
       expiresAt: "2099-01-01T00:00:00.000Z",
@@ -35,6 +36,21 @@ test("selects a project category and saves its forecast assumptions", async ({ p
       rejectionReason: null,
       role: "admin",
       themePreference: "light",
+    });
+    if (path === "/v1/clients") return json({
+      clients: [{
+        archived_at: null,
+        id: "00000000-0000-4000-8000-000000000002",
+        name: "No Brainer",
+      }],
+    });
+    if (path === "/v1/projects") return json({
+      projects: [{
+        archived_at: null,
+        client_id: "00000000-0000-4000-8000-000000000002",
+        id: projectId,
+        project_name: "AO",
+      }],
     });
     if (path === `/v1/projects/${projectId}/summary`) return json({
       client_id: "00000000-0000-4000-8000-000000000002",
@@ -90,4 +106,5 @@ test("selects a project category and saves its forecast assumptions", async ({ p
     note: "Client supplied category assumptions",
   });
   await expect(page.getByRole("row", { name: /Refrigeration/ })).toContainText("5");
+  await page.screenshot({ path: "test-results/conversion-overrides-saved.png" });
 });
