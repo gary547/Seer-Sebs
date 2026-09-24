@@ -484,6 +484,16 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   categorisation decisions, including their OpenRouter provenance, without
   calling providers. Reject missing or changed qualification baselines; never
   replace approved AI decisions with a fresh rules-only detox during recalculation.
+- `GET /v1/projects/:projectId/conversion-overrides` returns both overrides and
+  selectable categories from kept keywords, with each category’s keyword count.
+  Normalize category case and whitespace when grouping and validating. Category
+  override writes must reject categories without kept keywords and duplicate
+  normalized category scopes; save the current representative category name.
+  The admin picker uses these categories and shows the affected keyword count.
+- Category conversion assumptions affect Revenue v2 after a `recalculate` run;
+  URL overrides retain precedence over category overrides. The project-data
+  Docker fixture verifies category-only forecast changes, persisted override
+  provenance, and retention of both overrides and forecast rows after restart.
 - A verified HAR `authority_below_threshold` outcome has no attainable target,
   not a fabricated rank. Revenue preserves current revenue and records zero
   uplift for that outcome. Missing competitor data or financial inputs must
