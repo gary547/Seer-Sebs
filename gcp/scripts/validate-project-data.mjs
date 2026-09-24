@@ -140,8 +140,49 @@ async function validatePersistence() {
     authenticated(state.token),
   );
   assertProjectState(project, fixture);
+  const overrides = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${state.projectId}/conversion-overrides`,
+    authenticated(state.token),
+  );
+  const categoryOverride = overrides.overrides.find(
+    (override) => override.id === state.categoryOverrideId,
+  );
+  const projectOverride = overrides.overrides.find(
+    (override) => override.id === state.projectOverrideId,
+  );
+  const categoryKeywordIds = new Set(project.keywords
+    .filter((keyword) => keyword.categorisation?.category === state.category)
+    .map((keyword) => keyword.id));
+  const forecastRows = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${state.projectId}/forecast-rows?scenario=realistic&limit=100`,
+    authenticated(state.token),
+  );
+  if (
+    !categoryOverride ||
+    categoryOverride.scope_value !== state.category ||
+    Number(categoryOverride.conversion_rate) !== 0.04 ||
+    Number(categoryOverride.average_order_value) !== 250 ||
+    !projectOverride ||
+    Number(projectOverride.conversion_rate) !== 0.025 ||
+    Number(projectOverride.average_order_value) !== 125 ||
+    categoryKeywordIds.size !== state.categoryKeywordCount ||
+    forecastRows.runId !== state.categoryRunId ||
+    forecastRows.total !== 12 ||
+    forecastRows.items.some((item) => {
+      const category = categoryKeywordIds.has(item.keywordId);
+      return item.conversionRateUsed !== (category ? 0.04 : 0.025) ||
+        item.averageOrderValueUsed !== (category ? 250 : 125) ||
+        item.conversionRateOverrideId !== (category ? categoryOverride.id : projectOverride.id) ||
+        item.averageOrderValueOverrideId !== (category ? categoryOverride.id : projectOverride.id);
+    })
+  ) {
+    throw new Error("Category override or its forecast effect did not persist after restart.");
+  }
   console.log(
     JSON.stringify({
+      categoryOverridePersisted: true,
+      categoryRunId: state.categoryRunId,
+      matchingKeywordCount: categoryKeywordIds.size,
       keywordCount: project.keywordCount,
       mode: "project-data-persistence",
       projectPersisted: true,
@@ -1438,11 +1479,164 @@ async function validateEndToEnd() {
     throw new Error("Client hard delete did not cascade to URL monitoring data.");
   }
 
+  const categoryList = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${project.id}/conversion-overrides`,
+    authenticated(identity.token),
+  );
+  const category = categoryList.categories.find(
+    (candidate) => candidate.category === "Electronics",
+  );
+  const projectWithCategories = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${project.id}`,
+    authenticated(identity.token),
+  );
+  const categoryKeywordIds = new Set(projectWithCategories.keywords
+    .filter((keyword) => keyword.categorisation?.category === category?.category)
+    .map((keyword) => keyword.id));
+  if (
+    !category ||
+    categoryKeywordIds.size !== category.keywordCount ||
+    categoryKeywordIds.size < 1 ||
+    categoryKeywordIds.size >= 12
+  ) {
+    throw new Error("The category recalculation fixture has no isolated keyword group.");
+  }
+  const fallbackOverride = await jsonRequest(
+    `${apiBaseUrl}/v1/conversion-overrides`,
+    authenticated(archiveAdmin.token, {
+      body: JSON.stringify({
+        average_order_value: 125,
+        confidence: "high",
+        conversion_rate: 0.025,
+        project_id: project.id,
+        scope_type: "project",
+        scope_value: null,
+      }),
+      method: "POST",
+    }),
+  );
+  const categoryOverride = await jsonRequest(
+    `${apiBaseUrl}/v1/conversion-overrides`,
+    authenticated(archiveAdmin.token, {
+      body: JSON.stringify({
+        average_order_value: 250,
+        confidence: "high",
+        conversion_rate: 0.04,
+        note: "Local category recalculation verification",
+        project_id: project.id,
+        scope_type: "category",
+        scope_value: category.category,
+      }),
+      method: "POST",
+    }),
+  );
+  const savedOverrides = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${project.id}/conversion-overrides`,
+    authenticated(identity.token),
+  );
+  if (
+    !savedOverrides.overrides.some((override) =>
+      override.id === categoryOverride.id &&
+      override.scope_value === category.category &&
+      Number(override.conversion_rate) === 0.04 &&
+      Number(override.average_order_value) === 250,
+    )
+  ) {
+    throw new Error("The category override was not saved to PostgreSQL.");
+  }
+  const categoryCreatedRun = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${project.id}/pipeline-runs`,
+    authenticated(identity.token, {
+      body: JSON.stringify({ mode: "recalculate" }),
+      method: "POST",
+    }),
+  );
+  const categoryRun = await waitForRun(identity.token, categoryCreatedRun.id);
+  const baselineKeywords = new Map(stage(secondRun, "revenue-v2").keywords.map(
+    (keyword) => [keyword.id, keyword],
+  ));
+  let changedKeywordCount = 0;
+  let unchangedKeywordCount = 0;
+  let changedExample = null;
+  for (const keyword of stage(categoryRun, "revenue-v2").keywords) {
+    const baseline = baselineKeywords.get(keyword.id);
+    const inCategory = categoryKeywordIds.has(keyword.id);
+    if (!baseline || keyword.scenarios.length !== baseline.scenarios.length) {
+      throw new Error("Category recalculation changed the keyword population.");
+    }
+    for (const scenario of keyword.scenarios) {
+      const before = baseline.scenarios.find((candidate) => candidate.scenario === scenario.scenario);
+      if (
+        !before ||
+        scenario.conversionRateUsed !== (inCategory ? 0.04 : 0.025) ||
+        scenario.averageOrderValueUsed !== (inCategory ? 250 : 125) ||
+        scenario.conversionRateOverrideId !== (inCategory ? categoryOverride.id : fallbackOverride.id) ||
+        scenario.averageOrderValueOverrideId !== (inCategory ? categoryOverride.id : fallbackOverride.id)
+      ) {
+        throw new Error("Category recalculation used the wrong conversion assumptions.");
+      }
+      if (scenario.scenario !== "realistic") continue;
+      const beforeRevenue = before.expectedIncrementalAnnual ?? 0;
+      const afterRevenue = scenario.expectedIncrementalAnnual ?? 0;
+      if (inCategory) {
+        if (Math.abs(afterRevenue - beforeRevenue) > 0.01) {
+          changedKeywordCount += 1;
+          changedExample ??= {
+            afterRevenue,
+            beforeRevenue,
+            keyword: keyword.normalisedText,
+          };
+        }
+      } else {
+        if (Math.abs(afterRevenue - beforeRevenue) > 0.01) {
+          throw new Error("A keyword outside the category changed its forecast.");
+        }
+        unchangedKeywordCount += 1;
+      }
+    }
+  }
+  if (changedKeywordCount < 1 || unchangedKeywordCount < 1) {
+    throw new Error("Category recalculation did not produce a selective revenue change.");
+  }
+  const categoryForecastRows = await jsonRequest(
+    `${apiBaseUrl}/v1/projects/${project.id}/forecast-rows?scenario=realistic&limit=100`,
+    authenticated(identity.token),
+  );
+  if (
+    categoryForecastRows.runId !== categoryRun.id ||
+    categoryForecastRows.total !== 12 ||
+    categoryForecastRows.items.some((item) => {
+      const inCategory = categoryKeywordIds.has(item.keywordId);
+      return item.conversionRateUsed !== (inCategory ? 0.04 : 0.025) ||
+        item.averageOrderValueUsed !== (inCategory ? 250 : 125) ||
+        item.conversionRateOverrideId !== (inCategory ? categoryOverride.id : fallbackOverride.id) ||
+        item.averageOrderValueOverrideId !== (inCategory ? categoryOverride.id : fallbackOverride.id);
+    })
+  ) {
+    throw new Error("Persisted category forecasts do not match the completed run.");
+  }
+  console.log(JSON.stringify({
+    baselineRunId: secondRun.id,
+    category: category.category,
+    categoryRunId: categoryRun.id,
+    changedExample,
+    changedKeywordCount,
+    matchingKeywordCount: categoryKeywordIds.size,
+    mode: "category-override-recalculation",
+    persistedForecastRows: categoryForecastRows.total,
+    unchangedKeywordCount,
+  }));
+
   await writeFile(
     statePath,
     JSON.stringify(
       {
+        category: category.category,
+        categoryKeywordCount: categoryKeywordIds.size,
+        categoryOverrideId: categoryOverride.id,
+        categoryRunId: categoryRun.id,
         projectId: project.id,
+        projectOverrideId: fallbackOverride.id,
         token: identity.token,
       },
       null,
