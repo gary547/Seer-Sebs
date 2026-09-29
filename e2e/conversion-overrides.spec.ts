@@ -86,9 +86,14 @@ test("selects a project category and saves its forecast assumptions", async ({ p
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("combobox", { name: "Scope" }).click();
   await page.getByRole("option", { name: "category" }).click();
-  await dialog.getByRole("combobox", { name: "Category" }).click();
-  await page.getByPlaceholder("Search categories…").fill("refrig");
-  await page.getByRole("option", { name: /Refrigeration/ }).click();
+  await expect(dialog.getByText("2 individual categories · 9 kept keywords")).toBeVisible();
+  await expect(dialog.getByRole("option").first()).toContainText("Refrigeration");
+  await dialog.getByRole("button", { name: "A–Z" }).click();
+  await expect(dialog.getByRole("option").first()).toContainText("Ovens");
+  await dialog.getByRole("button", { name: "Most keywords" }).click();
+  await dialog.getByRole("combobox", { name: "Search project categories" }).fill("refrig");
+  await expect(dialog.getByRole("option")).toHaveCount(1);
+  await dialog.getByRole("option", { name: /Refrigeration/ }).click();
   await expect(dialog.getByText("5 kept keywords match this category.", { exact: false })).toBeVisible();
   await dialog.getByRole("spinbutton", { name: "Conversion rate (%)" }).fill("2.5");
   await dialog.getByRole("spinbutton", { name: "Average order value" }).fill("400");

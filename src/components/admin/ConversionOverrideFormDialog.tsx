@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Check, ChevronsUpDown } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -23,15 +22,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -56,6 +46,7 @@ import {
   type ConversionOverrideWithActor,
 } from "@/hooks/useConversionOverrides";
 import type { ProjectConversionCategory } from "@/integrations/gcp/admin-reference";
+import ConversionCategoryPicker from "@/components/admin/ConversionCategoryPicker";
 
 type Props = {
   projectId: string;
@@ -77,7 +68,6 @@ export default function ConversionOverrideFormDialog({
   categoriesFailed,
 }: Props) {
   const upsert = useUpsertConversionOverride(projectId);
-  const [categoryOpen, setCategoryOpen] = useState(false);
 
   const defaults = useMemo<ConversionOverrideFormValues>(
     () => ({
@@ -86,7 +76,7 @@ export default function ConversionOverrideFormDialog({
       conversion_rate_pct: decimalToPct(editing?.conversion_rate ?? null),
       average_order_value:
         editing?.average_order_value != null ? String(editing.average_order_value) : "",
-      confidence: (editing?.confidence as any) ?? "medium",
+      confidence: (editing?.confidence as ConversionOverrideFormValues["confidence"] | undefined) ?? "medium",
       note: editing?.note ?? "",
     }),
     [editing],
@@ -100,7 +90,6 @@ export default function ConversionOverrideFormDialog({
   useEffect(() => {
     if (open) {
       form.reset(defaults);
-      setCategoryOpen(false);
     }
   }, [open, defaults, form]);
 
@@ -127,8 +116,10 @@ export default function ConversionOverrideFormDialog({
       });
       toast.success(editing ? "Override updated" : "Override created");
       onOpenChange(false);
-    } catch (e: any) {
-      const msg = String(e?.message ?? e);
+    } catch (e) {
+      const msg = String(
+        typeof e === "object" && e !== null && "message" in e ? e.message : e,
+      );
       if (msg.includes("duplicate") || msg.includes("23505")) {
         toast.error("An override already exists for this scope and value");
       } else {
@@ -139,7 +130,7 @@ export default function ConversionOverrideFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-lg gap-3 overflow-y-auto">
+      <DialogContent className={`max-h-[calc(100dvh-2rem)] gap-3 overflow-y-auto ${scopeType === "category" ? "sm:max-w-2xl" : "sm:max-w-lg"}`}>
         <DialogHeader>
           <DialogTitle>{editing ? "Edit override" : "New conversion override"}</DialogTitle>
           <DialogDescription>
@@ -197,53 +188,16 @@ export default function ConversionOverrideFormDialog({
                     </FormLabel>
                     {scopeType === "category" ? (
                       <>
-                        <Popover open={categoryOpen} onOpenChange={setCategoryOpen}>
-                          <PopoverTrigger asChild>
-                            <FormControl>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                role="combobox"
-                                aria-expanded={categoryOpen}
-                                className="w-full justify-between font-normal"
-                                disabled={!categoriesReady || categories.length === 0}
-                              >
-                                <span className="truncate text-left">
-                                  {selectedCategory?.category || field.value || "Select a project category"}
-                                </span>
-                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                              </Button>
-                            </FormControl>
-                          </PopoverTrigger>
-                          <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
-                            <Command>
-                              <CommandInput placeholder="Search categories…" />
-                              <CommandList>
-                                <CommandEmpty>No matching categories.</CommandEmpty>
-                                <CommandGroup>
-                                  {categories.map((category) => (
-                                    <CommandItem
-                                      key={category.category}
-                                      value={category.category}
-                                      onSelect={() => {
-                                        field.onChange(category.category);
-                                        form.clearErrors("scope_value");
-                                        setCategoryOpen(false);
-                                      }}
-                                      className="gap-2"
-                                    >
-                                      <Check className={`h-4 w-4 shrink-0 ${selectedCategory?.category === category.category ? "text-primary" : "opacity-0"}`} />
-                                      <span className="min-w-0 flex-1 truncate">{category.category}</span>
-                                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                                        {category.keywordCount.toLocaleString()}
-                                      </span>
-                                    </CommandItem>
-                                  ))}
-                                </CommandGroup>
-                              </CommandList>
-                            </Command>
-                          </PopoverContent>
-                        </Popover>
+                        {categoriesReady && categories.length > 0 && (
+                          <ConversionCategoryPicker
+                            categories={categories}
+                            value={field.value}
+                            onChange={(category) => {
+                              field.onChange(category);
+                              form.clearErrors("scope_value");
+                            }}
+                          />
+                        )}
                         <FormDescription>
                           {categoriesFailed
                             ? "Project categories could not be loaded. Close and try again."
