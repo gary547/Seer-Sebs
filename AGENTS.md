@@ -490,6 +490,9 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   override writes must reject categories without kept keywords and duplicate
   normalized category scopes; save the current representative category name.
   The admin picker uses these categories and shows the affected keyword count.
+  Keep category search and sorting by keyword count or name visible in the
+  override form; category rows are independent and counts include matching kept
+  keywords before URL overrides take precedence.
 - Category conversion assumptions affect Revenue v2 after a `recalculate` run;
   URL overrides retain precedence over category overrides. The project-data
   Docker fixture verifies category-only forecast changes, persisted override
