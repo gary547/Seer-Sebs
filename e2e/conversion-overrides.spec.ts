@@ -17,6 +17,10 @@ test("selects a project category and saves its forecast assumptions", async ({ p
   });
 
   let saved: Record<string, unknown> | null = null;
+  let categories = [
+    { category: "Ovens", keywordCount: 4 },
+    { category: "Refrigeration", keywordCount: 5 },
+  ];
   await page.route("**/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown) => route.fulfill({
@@ -59,10 +63,7 @@ test("selects a project category and saves its forecast assumptions", async ({ p
       project_name: "AO",
     });
     if (path === `/v1/projects/${projectId}/conversion-overrides`) return json({
-      categories: [
-        { category: "Ovens", keywordCount: 4 },
-        { category: "Refrigeration", keywordCount: 5 },
-      ],
+      categories,
       overrides: saved ? [{
         ...saved,
         id: overrideId,
@@ -112,4 +113,14 @@ test("selects a project category and saves its forecast assumptions", async ({ p
   });
   await expect(page.getByRole("row", { name: /Refrigeration/ })).toContainText("5");
   await page.screenshot({ path: "test-results/conversion-overrides-saved.png" });
+
+  categories = [{ category: "AV", keywordCount: 18_210 }];
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "New override" }).click();
+  await page.getByRole("dialog").getByRole("combobox", { name: "Scope" }).click();
+  await page.getByRole("option", { name: "category" }).click();
+  await expect(page.getByText("AO categories")).toBeVisible();
+  await expect(page.getByText(/All 18,210 kept keywords currently share “AV”/)).toBeVisible();
+  await expect(page.getByText(/This is the only category available in this project/)).toBeVisible();
+  await page.screenshot({ path: "test-results/conversion-overrides-single-category.png" });
 });

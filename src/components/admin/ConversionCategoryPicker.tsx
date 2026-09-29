@@ -13,6 +13,7 @@ import type { ProjectConversionCategory } from "@/integrations/gcp/admin-referen
 
 type Props = {
   categories: ProjectConversionCategory[];
+  projectName?: string;
   value: string;
   onChange: (category: string) => void;
 };
@@ -23,7 +24,7 @@ function normalise(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-export default function ConversionCategoryPicker({ categories, value, onChange }: Props) {
+export default function ConversionCategoryPicker({ categories, projectName, value, onChange }: Props) {
   const [query, setQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("count");
   const selected = categories.find((category) => normalise(category.category) === normalise(value));
@@ -52,9 +53,9 @@ export default function ConversionCategoryPicker({ categories, value, onChange }
     <div className="overflow-hidden rounded-lg border border-hairline bg-surface">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-hairline bg-surface-sunk px-3 py-2.5">
         <div>
-          <p className="text-sm font-semibold">Project categories</p>
+          <p className="text-sm font-semibold">{projectName ? `${projectName} categories` : "Project categories"}</p>
           <p className="text-xs text-muted-foreground">
-            {categories.length.toLocaleString()} individual categories · {keywordCount.toLocaleString()} kept keywords
+            {categories.length.toLocaleString()} individual {categories.length === 1 ? "category" : "categories"} · {keywordCount.toLocaleString()} kept keywords
           </p>
         </div>
         {selected && (
@@ -131,6 +132,12 @@ export default function ConversionCategoryPicker({ categories, value, onChange }
           </CommandGroup>
         </CommandList>
       </Command>
+      {categories.length === 1 && (
+        <p className="border-t border-hairline bg-surface-sunk px-3 py-2.5 text-xs leading-5 text-ink-muted">
+          All {keywordCount.toLocaleString()} kept keywords currently share “{categories[0].category}”.
+          This is the only category available in this project; its override covers all of them before URL overrides.
+        </p>
+      )}
       <p className="border-t border-hairline px-3 py-2 text-xs text-muted-foreground">
         Each row is a separate category. The count shows matching kept keywords, before URL overrides.
       </p>

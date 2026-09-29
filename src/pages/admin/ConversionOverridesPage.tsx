@@ -139,6 +139,7 @@ export default function ConversionOverridesPage() {
       {projectId && (
         <ConversionOverrideFormDialog
           projectId={projectId}
+          projectName={project?.project_name}
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           editing={editing}

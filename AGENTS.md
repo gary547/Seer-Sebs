@@ -492,7 +492,10 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   The admin picker uses these categories and shows the affected keyword count.
   Keep category search and sorting by keyword count or name visible in the
   override form; category rows are independent and counts include matching kept
-  keywords before URL overrides take precedence.
+  keywords before URL overrides take precedence. When a project has only one
+  category, identify the project in the picker and say explicitly that its sole
+  category covers all kept keywords; do not imply that additional categories
+  are available without changing the underlying keyword data.
 - Category conversion assumptions affect Revenue v2 after a `recalculate` run;
   URL overrides retain precedence over category overrides. The project-data
   Docker fixture verifies category-only forecast changes, persisted override

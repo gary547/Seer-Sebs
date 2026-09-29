@@ -50,6 +50,7 @@ import ConversionCategoryPicker from "@/components/admin/ConversionCategoryPicke
 
 type Props = {
   projectId: string;
+  projectName?: string;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   editing?: ConversionOverrideWithActor | null;
@@ -60,6 +61,7 @@ type Props = {
 
 export default function ConversionOverrideFormDialog({
   projectId,
+  projectName,
   open,
   onOpenChange,
   editing,
@@ -191,6 +193,7 @@ export default function ConversionOverrideFormDialog({
                         {categoriesReady && categories.length > 0 && (
                           <ConversionCategoryPicker
                             categories={categories}
+                            projectName={projectName}
                             value={field.value}
                             onChange={(category) => {
                               field.onChange(category);
