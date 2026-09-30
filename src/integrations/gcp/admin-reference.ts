@@ -112,6 +112,20 @@ export function upsertConversionOverride(input: {
   });
 }
 
+export function upsertCategoryConversionOverrides(input: {
+  average_order_value: number | null;
+  confidence: "high" | "low" | "medium";
+  conversion_rate: number | null;
+  note: string | null;
+  project_id: string;
+  scope_values: string[];
+}): Promise<{ created: number; updated: number }> {
+  return request("/v1/conversion-overrides/categories", {
+    body: JSON.stringify(input),
+    method: "POST",
+  });
+}
+
 export function deleteConversionOverride(id: string): Promise<void> {
   return request(`/v1/conversion-overrides/${id}`, { method: "DELETE" });
 }

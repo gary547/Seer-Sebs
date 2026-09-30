@@ -455,6 +455,105 @@ export async function upsertConversionOverride(
   }
 }
 
+export async function upsertCategoryConversionOverrides(
+  pool: DatabasePool,
+  user: AuthenticatedUser,
+  body: unknown,
+): Promise<{ created: number; updated: number }> {
+  await assertAdministrator(pool, user.id);
+  const request = record(body);
+  const rawValues = request.scope_values;
+  if (!Array.isArray(rawValues) || rawValues.length === 0 || rawValues.length > 5_000) {
+    throw new HttpError(400, "invalid_request", "Select between 1 and 5,000 categories.");
+  }
+  const requested = rawValues.map((value) => requireString(value, "scopeValue", 2_048));
+  const keys = requested.map(normaliseConversionCategory);
+  if (new Set(keys).size !== keys.length) {
+    throw new HttpError(400, "invalid_request", "Selected categories must be unique.");
+  }
+  const input = overrideInput({ ...request, scope_type: "category", scope_value: requested[0] });
+  if (input.conversionRate === null && input.averageOrderValue === null) {
+    throw new HttpError(400, "invalid_request", "Provide a conversion rate or average order value.");
+  }
+  await assertProjectAccessByRole(pool, user.id, input.projectId, true);
+
+  try {
+    return await withTransaction(pool, async (client) => {
+      const categories = await projectConversionCategories(client, input.projectId);
+      const available = new Map(categories.map((category) => [
+        normaliseConversionCategory(category.category), category.category,
+      ]));
+      const selected = keys.map((key) => {
+        const category = available.get(key);
+        if (!category) {
+          throw new HttpError(400, "unknown_category", "Choose categories with kept keywords in this project.");
+        }
+        return category;
+      });
+      const existing = await client.query<{ id: string; scope_value: string }>(
+        `SELECT id, scope_value FROM project_conversion_overrides
+         WHERE project_id = $1 AND scope_type = 'category' FOR UPDATE`,
+        [input.projectId],
+      );
+      const existingByCategory = new Map<string, string>();
+      for (const row of existing.rows) {
+        const key = normaliseConversionCategory(row.scope_value);
+        if (existingByCategory.has(key)) {
+          throw new HttpError(409, "conversion_override_conflict", "Duplicate category overrides already exist.");
+        }
+        existingByCategory.set(key, row.id);
+      }
+
+      for (let offset = 0; offset < selected.length; offset += 500) {
+        const values: unknown[] = [];
+        const placeholders = selected.slice(offset, offset + 500).map((category, index) => {
+          const start = index * 8;
+          values.push(
+            existingByCategory.get(keys[offset + index]!) ?? randomUUID(),
+            input.projectId,
+            category,
+            input.conversionRate,
+            input.averageOrderValue,
+            input.confidence,
+            input.note,
+            user.id,
+          );
+          return `($${start + 1}, $${start + 2}, 'category', $${start + 3}, $${start + 4}, $${start + 5}, $${start + 6}, $${start + 7}, 'manual', $${start + 8}, $${start + 8})`;
+        });
+        await client.query(
+          `INSERT INTO project_conversion_overrides (
+            id, project_id, scope_type, scope_value, conversion_rate,
+            average_order_value, confidence, note, source, created_by, updated_by
+          ) VALUES ${placeholders.join(", ")}
+          ON CONFLICT (id) DO UPDATE SET
+            scope_value = EXCLUDED.scope_value,
+            conversion_rate = EXCLUDED.conversion_rate,
+            average_order_value = EXCLUDED.average_order_value,
+            confidence = EXCLUDED.confidence,
+            note = EXCLUDED.note,
+            source = 'manual',
+            updated_by = EXCLUDED.updated_by,
+            updated_at = now()`,
+          values,
+        );
+      }
+      await client.query(
+        `UPDATE navigator_projects
+         SET inputs_dirty = true, last_dirty_at = now(), updated_at = now()
+         WHERE id = $1`,
+        [input.projectId],
+      );
+      const updated = keys.filter((key) => existingByCategory.has(key)).length;
+      return { created: keys.length - updated, updated };
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "23505") {
+      throw new HttpError(409, "conversion_override_conflict", "An override already exists for a selected category.");
+    }
+    throw error;
+  }
+}
+
 export async function deleteConversionOverride(
   pool: DatabasePool,
   user: AuthenticatedUser,

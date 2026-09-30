@@ -40,6 +40,9 @@ describe("project conversion categories", () => {
       if (sql.includes("SELECT scope_value FROM project_conversion_overrides")) {
         return result(existingCategoryOverride ? [{ scope_value: existingCategoryOverride }] : []);
       }
+      if (sql.includes("SELECT id, scope_value FROM project_conversion_overrides")) {
+        return result(existingCategoryOverride ? [{ id: overrideId, scope_value: existingCategoryOverride }] : []);
+      }
       if (sql.includes("FROM keywords") && sql.includes("GROUP BY category")) {
         return result(values[0] === projectId ? [
           { category: "Refrigeration", keyword_count: 3 },
@@ -128,5 +131,50 @@ describe("project conversion categories", () => {
     await expect(rejected.json()).resolves.toMatchObject({ error: { code: "unknown_category" } });
     expect(insertedValues).toHaveLength(1);
     expect(dirtiedProjects).toHaveLength(1);
+  });
+
+  it("saves multiple canonical categories in one transaction and updates existing overrides", async () => {
+    existingCategoryOverride = " refrigeration  ";
+    const response = await fetch(`${baseUrl}/v1/conversion-overrides/categories`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        project_id: projectId,
+        scope_values: [" ovens ", "REFRIGERATION"],
+        conversion_rate: 0.025,
+        average_order_value: 400,
+        confidence: "high",
+        note: "Client supplied",
+      }),
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ created: 1, updated: 1 });
+    expect(insertedValues).toHaveLength(1);
+    expect(insertedValues[0]).toHaveLength(16);
+    expect(insertedValues[0]?.[2]).toBe("Ovens");
+    expect(insertedValues[0]?.[8]).toBe(overrideId);
+    expect(insertedValues[0]?.[10]).toBe("Refrigeration");
+    expect(dirtiedProjects).toEqual([[projectId]]);
+  });
+
+  it("rejects unknown or repeated categories without saving any override", async () => {
+    const send = (scopeValues: string[]) => fetch(`${baseUrl}/v1/conversion-overrides/categories`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        project_id: projectId,
+        scope_values: scopeValues,
+        conversion_rate: 0.025,
+        confidence: "medium",
+        note: "Client supplied",
+      }),
+    });
+    const unknown = await send(["Ovens", "Laundry"]);
+    expect(unknown.status).toBe(400);
+    await expect(unknown.json()).resolves.toMatchObject({ error: { code: "unknown_category" } });
+    const repeated = await send(["Ovens", " ovens "]);
+    expect(repeated.status).toBe(400);
+    expect(insertedValues).toHaveLength(0);
+    expect(dirtiedProjects).toHaveLength(0);
   });
 });

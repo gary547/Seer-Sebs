@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteConversionOverride,
   listConversionOverrides,
+  upsertCategoryConversionOverrides,
   upsertConversionOverride,
   type ConversionOverrideRecord,
 } from "@/integrations/gcp/admin-reference";
@@ -44,6 +45,14 @@ export function useUpsertConversionOverride(projectId: string) {
           payload.scope_type === "project" ? null : payload.scope_value,
       });
     },
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY(projectId) }),
+  });
+}
+
+export function useUpsertCategoryConversionOverrides(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: upsertCategoryConversionOverrides,
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY(projectId) }),
   });
 }

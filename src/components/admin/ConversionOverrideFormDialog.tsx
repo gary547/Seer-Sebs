@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -42,6 +42,7 @@ import {
   type ScopeType,
 } from "@/lib/validation/conversionOverride";
 import {
+  useUpsertCategoryConversionOverrides,
   useUpsertConversionOverride,
   type ConversionOverrideWithActor,
 } from "@/hooks/useConversionOverrides";
@@ -70,6 +71,8 @@ export default function ConversionOverrideFormDialog({
   categoriesFailed,
 }: Props) {
   const upsert = useUpsertConversionOverride(projectId);
+  const upsertCategories = useUpsertCategoryConversionOverrides(projectId);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
   const defaults = useMemo<ConversionOverrideFormValues>(
     () => ({
@@ -92,20 +95,37 @@ export default function ConversionOverrideFormDialog({
   useEffect(() => {
     if (open) {
       form.reset(defaults);
+      setSelectedCategories(editing?.scope_type === "category" && editing.scope_value
+        ? [editing.scope_value]
+        : []);
     }
-  }, [open, defaults, form]);
+  }, [open, defaults, editing, form]);
 
   const scopeType = form.watch("scope_type");
-  const scopeValue = form.watch("scope_value");
   const noteRequired = NOTE_REQUIRED_SCOPES.includes(scopeType);
-  const selectedCategory = categories.find(
-    (category) =>
+  const selectedKeywordCount = categories
+    .filter((category) => selectedCategories.some((selected) =>
       category.category.trim().toLowerCase().replace(/\s+/g, " ") ===
-      scopeValue.trim().toLowerCase().replace(/\s+/g, " "),
-  );
+      selected.trim().toLowerCase().replace(/\s+/g, " "),
+    ))
+    .reduce((total, category) => total + category.keywordCount, 0);
+  const pending = upsert.isPending || upsertCategories.isPending;
 
   const onSubmit = form.handleSubmit(async (values) => {
     try {
+      if (values.scope_type === "category" && !editing) {
+        const result = await upsertCategories.mutateAsync({
+          project_id: projectId,
+          scope_values: selectedCategories,
+          conversion_rate: pctToDecimal(values.conversion_rate_pct),
+          average_order_value: parseNumberOrNull(values.average_order_value),
+          confidence: values.confidence,
+          note: values.note || null,
+        });
+        toast.success(`${result.created + result.updated} category ${result.created + result.updated === 1 ? "override" : "overrides"} saved`);
+        onOpenChange(false);
+        return;
+      }
       await upsert.mutateAsync({
         id: editing?.id,
         project_id: projectId,
@@ -154,6 +174,7 @@ export default function ConversionOverrideFormDialog({
                     onValueChange={(value) => {
                       field.onChange(value);
                       form.setValue("scope_value", "");
+                      setSelectedCategories([]);
                       form.clearErrors("scope_value");
                     }}
                   >
@@ -184,8 +205,8 @@ export default function ConversionOverrideFormDialog({
                     <FormLabel>
                       {scopeType === "url"
                         ? "URL"
-                        : scopeType === "category"
-                          ? "Category"
+                          : scopeType === "category"
+                          ? editing ? "Category" : "Categories"
                           : "Intent"}
                     </FormLabel>
                     {scopeType === "category" ? (
@@ -194,9 +215,11 @@ export default function ConversionOverrideFormDialog({
                           <ConversionCategoryPicker
                             categories={categories}
                             projectName={projectName}
-                            value={field.value}
-                            onChange={(category) => {
-                              field.onChange(category);
+                            value={selectedCategories}
+                            singleSelect={Boolean(editing)}
+                            onChange={(selection) => {
+                              setSelectedCategories(selection);
+                              field.onChange(selection[0] ?? "");
                               form.clearErrors("scope_value");
                             }}
                           />
@@ -208,11 +231,9 @@ export default function ConversionOverrideFormDialog({
                               ? "Loading project categories…"
                               : categories.length === 0
                                 ? "No kept keywords have a category yet. Categorise keywords first."
-                                : selectedCategory
-                                  ? `${selectedCategory.keywordCount.toLocaleString()} kept keywords match this category. URL overrides may take precedence.`
-                                  : field.value
-                                    ? "This category no longer matches kept keywords. Choose a current category."
-                                    : "Choose a category already assigned to kept keywords."}
+                                : selectedCategories.length > 0
+                                  ? `${selectedCategories.length.toLocaleString()} ${selectedCategories.length === 1 ? "category" : "categories"} selected · ${selectedKeywordCount.toLocaleString()} matching kept keywords. Existing overrides for these categories will be updated; URL overrides may take precedence.`
+                                  : "Choose one or more categories already assigned to kept keywords."}
                         </FormDescription>
                       </>
                     ) : scopeType === "intent" ? (
@@ -342,15 +363,15 @@ export default function ConversionOverrideFormDialog({
                 type="button"
                 variant="ghost"
                 onClick={() => onOpenChange(false)}
-                disabled={upsert.isPending}
+                disabled={pending}
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
-                disabled={upsert.isPending || (scopeType === "category" && !selectedCategory)}
+                disabled={pending || (scopeType === "category" && selectedKeywordCount === 0)}
               >
-                {upsert.isPending ? "Saving…" : editing ? "Save changes" : "Create override"}
+                {pending ? "Saving…" : editing ? "Save changes" : scopeType === "category" ? "Save category overrides" : "Create override"}
               </Button>
             </DialogFooter>
           </form>

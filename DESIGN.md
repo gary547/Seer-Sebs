@@ -25,4 +25,5 @@ SEER uses an editorial briefing style built from No Brainer's navy, teal, coral 
 - Put one clear primary action in the page header. Forms open in a Dialog and show validation next to the affected field.
 - For financial assumptions, show the selected scope and the population it matches before save. Distinguish a category's matching keyword count from the final number receiving its values when higher-priority URL overrides exist.
 - When an admin chooses among many project categories, keep search and count sorting visible in the form. Show each category's exact-match keyword count and state that rows are independent; do not imply a parent-child relationship from similar names.
+- Category creation supports multiple selections across searches. "Select all in view" affects only the current search results; keep the selected count, keyword population and a short list of selected names visible before saving.
 - Keep light and dark mode legible, use keyboard-accessible controls, and state when a saved change requires a forecast recalculation.

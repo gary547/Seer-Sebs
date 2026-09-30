@@ -496,6 +496,10 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   category, identify the project in the picker and say explicitly that its sole
   category covers all kept keywords; do not imply that additional categories
   are available without changing the underlying keyword data.
+- `POST /v1/conversion-overrides/categories` applies shared CVR/AOV assumptions
+  to 1–5,000 exact project categories in a single transaction, updating existing
+  category overrides when selected. The picker preserves selections across
+  searches; "Select all in view" selects only currently filtered results.
 - Category conversion assumptions affect Revenue v2 after a `recalculate` run;
   URL overrides retain precedence over category overrides. The project-data
   Docker fixture verifies category-only forecast changes, persisted override

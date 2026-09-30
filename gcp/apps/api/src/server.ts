@@ -18,6 +18,7 @@ import {
   getReferenceData,
   listConversionOverrides,
   updateSerpFeature,
+  upsertCategoryConversionOverrides,
   upsertConversionOverride,
 } from "./admin-reference.js";
 import {
@@ -676,6 +677,7 @@ async function handleRequest(
     url.pathname === "/v1/reference-data" ||
     url.pathname === "/v1/reference-data/serp-features" ||
     url.pathname === "/v1/conversion-overrides" ||
+    url.pathname === "/v1/conversion-overrides/categories" ||
     assetId !== null ||
     runStagesId !== null ||
     runCancelId !== null ||
@@ -1295,6 +1297,18 @@ async function handleRequest(
         user,
         await readJson(request),
       ),
+    );
+    return;
+  }
+
+  if (url.pathname === "/v1/conversion-overrides/categories") {
+    if (method !== "POST") {
+      methodNotAllowed(response, ["POST"]);
+    }
+    sendJson(
+      response,
+      200,
+      await upsertCategoryConversionOverrides(runtime.pool, user, await readJson(request, 2 * 1_024 * 1_024)),
     );
     return;
   }
