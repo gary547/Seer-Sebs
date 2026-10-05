@@ -281,6 +281,15 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   recent runs capped at 20, comparison rows capped at 50, and detail samples
   capped at 20. The route is administrator-only and may inspect archived
   projects; archived UI state must remain read-only.
+- `GET /v1/projects/:projectId/link-power-domains` supplies the administrator-only,
+  project-authorised domain benchmark for a completed pipeline run. Aggregate
+  every scored domain before sorting by numeric mean LPS or appearance count,
+  with domain names as stable tie-breakers; bound pages to 200 rows. Use the shared
+  diagnostic query budget. The admin table displays 10 rows per page and its CSV
+  export fetches every domain with the same run and ordering, preserving numeric
+  zeros and protecting text cells against spreadsheet formula injection. Reject
+  failed, empty, changed-run or changed-total export pages without downloading a
+  partial file. Domain inspection and export never start provider work.
 - The calculation-control contract includes bounded keyword diagnostics for
   Demand and SERP visibility. Keep confidence and warning distributions,
   category rollups, feature ownership, and per-keyword multipliers visible in
