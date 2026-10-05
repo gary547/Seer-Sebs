@@ -99,6 +99,9 @@ function database(): DatabasePool {
           },
         ]);
       }
+      if (sql.includes("WITH domain_benchmark AS MATERIALIZED")) {
+        return result([{ appearance_count: "2", best_rank: 7, domain: "pilltime.co.uk", is_client_domain: true, mean_score: "70.1", total: "12" }]);
+      }
       if (
         sql.includes("FROM link_power_scores AS score") &&
         sql.includes("keyword.id AS keyword_id")
@@ -161,8 +164,10 @@ function database(): DatabasePool {
 describe("calculation inspector API", () => {
   let server: ReturnType<typeof createApiServer>;
   let baseUrl: string;
+  let pool: DatabasePool;
 
   beforeEach(async () => {
+    pool = database();
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({
         email: "admin@example.com",
@@ -174,7 +179,7 @@ describe("calculation inspector API", () => {
         get: vi.fn(async () => Buffer.alloc(0)),
         put: vi.fn(async () => undefined),
       },
-      pool: database(),
+      pool,
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -271,6 +276,50 @@ describe("calculation inspector API", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: { code: "invalid_request" },
     });
+  });
+
+  it.each(["meanScore", "appearances"])("sorts the entire domain benchmark by %s before pagination", async (sort) => {
+    for (const direction of ["asc", "desc"]) {
+      const response = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains?sort=${sort}&direction=${direction}&limit=10&offset=10&runId=${runId}`);
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        domains: [{ appearances: 2, bestRank: 7, domain: "pilltime.co.uk", isClientDomain: true, meanScore: 70.1 }],
+        total: 12, limit: 10, offset: 10, runId, sort, direction,
+      });
+      const calls = vi.mocked(pool.query).mock.calls;
+      const domainQuery = [...calls].reverse().find(([sql]) => String(sql).includes("WITH domain_benchmark"));
+      const column = sort === "meanScore" ? "mean_score" : "appearance_count";
+      expect(String(domainQuery?.[0]).replace(/\s+/g, " ")).toContain(`ORDER BY ${column} ${direction.toUpperCase()}, domain ASC LIMIT $3 OFFSET $4`);
+      expect(domainQuery?.[1]).toEqual([projectId, runId, 10, 10]);
+      expect([...calls].reverse().find(([sql]) => String(sql).includes("FROM pipeline_runs"))?.[1]).toEqual([projectId, runId]);
+    }
+  });
+
+  it.each(["limit=201", "offset=-1", "offset=Infinity", "sort=bestRank", "sort=constructor", "direction=desc;DELETE", "runId=invalid"])("rejects invalid domain benchmark parameters: %s", async (params) => {
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains?${params}`);
+    expect(response.status).toBe(400);
+    expect(vi.mocked(pool.query).mock.calls.some(([sql]) => String(sql).includes("FROM pipeline_runs"))).toBe(false);
+  });
+
+  it("requires an administrator for domain results and CSV pages", async () => {
+    vi.mocked(pool.query).mockImplementation(async (sql) => result(String(sql).includes("FROM profiles") ? [{ approval_status: "approved" }] : [{ role: "user" }]) as never);
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains?limit=200`);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "administrator_required" } });
+    expect(vi.mocked(pool.query).mock.calls.some(([sql]) => String(sql).includes("WITH domain_benchmark"))).toBe(false);
+  });
+
+  it("rejects missing projects and runs outside the authorised project", async () => {
+    const original = database();
+    vi.mocked(pool.query).mockImplementation(async (sql, values) => {
+      if (String(sql).includes("FROM pipeline_runs")) return result([]) as never;
+      return original.query(sql, values) as never;
+    });
+    const missingRun = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains?runId=${runId}`);
+    expect(missingRun.status).toBe(404);
+    expect(vi.mocked(pool.query).mock.calls.some(([sql]) => String(sql).includes("WITH domain_benchmark"))).toBe(false);
+    vi.mocked(pool.query).mockImplementation(async (sql) => result(String(sql).includes("FROM user_roles") ? [{ role: "admin" }] : String(sql).includes("FROM profiles") ? [{ approval_status: "approved" }] : []) as never);
+    expect((await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains`)).status).toBe(404);
   });
 
   it("accepts supported diagnostic filters and rejects unknown filters", async () => {

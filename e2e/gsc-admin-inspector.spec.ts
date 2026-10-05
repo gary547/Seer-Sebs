@@ -270,6 +270,12 @@ test.describe("GSC upload and calculation inspection", () => {
           total: 1,
         });
       }
+      if (path === `/v1/projects/${projectId}/link-power-domains`) {
+        return json({ completedAt, runId, total: 2, domains: [
+          { appearances: 385, bestRank: 1, domain: "boots.com", isClientDomain: false, meanScore: 78.1 },
+          { appearances: 420, bestRank: 1, domain: "pilltime.co.uk", isClientDomain: true, meanScore: 66.4 },
+        ] });
+      }
       if (path === `/v1/projects/${projectId}/link-power-inspector`) {
         return json({
           completedAt,

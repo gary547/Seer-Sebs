@@ -618,6 +618,40 @@ async function validateEndToEnd() {
     throw new Error("Detailed forecast API did not expose canonical rows.");
   }
   const exportedForecasts = new Map();
+  const domainAdmin = await register(`domain-benchmark-${timestamp}@example.dev`, "admin");
+  for (const sort of ["meanScore", "appearances"]) {
+    for (const direction of ["asc", "desc"]) {
+      const url = `${apiBaseUrl}/v1/projects/${project.id}/link-power-domains?runId=${firstRun.id}&sort=${sort}&direction=${direction}`;
+      const all = await jsonRequest(`${url}&limit=200`, authenticated(domainAdmin.token));
+      if (all.runId !== firstRun.id || all.total !== all.domains.length ||
+          all.domains.reduce((count, domain) => count + domain.appearances, 0) !== 20 ||
+          !all.domains.some(domain => domain.isClientDomain)) {
+        throw new Error("Domain benchmark aggregates do not reconcile to the completed LPS run.");
+      }
+      for (let index = 1; index < all.domains.length; index++) {
+        const before = all.domains[index - 1];
+        const after = all.domains[index];
+        if ((direction === "asc" ? before[sort] > after[sort] : before[sort] < after[sort])) {
+          throw new Error(`Domain benchmark ${sort} ${direction} is not numerically sorted.`);
+        }
+      }
+      const paged = [];
+      for (let offset = 0; offset < all.total; offset += 2) {
+        const page = await jsonRequest(`${url}&limit=2&offset=${offset}`, authenticated(domainAdmin.token));
+        if (page.runId !== firstRun.id || page.total !== all.total || page.domains.length > 2) {
+          throw new Error("Domain benchmark pagination changed its run, total or bound.");
+        }
+        paged.push(...page.domains);
+      }
+      if (JSON.stringify(paged) !== JSON.stringify(all.domains)) {
+        throw new Error("Paginated domain results do not match the complete benchmark.");
+      }
+      const end = await jsonRequest(`${url}&limit=2&offset=${all.total}`, authenticated(domainAdmin.token));
+      if (end.domains.length || end.total !== all.total) {
+        throw new Error("An empty domain page lost the full benchmark count.");
+      }
+    }
+  }
   let exportCursor = null;
   do {
     const params = new URLSearchParams({ runId: firstRun.id, limit: "5" });

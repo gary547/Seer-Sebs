@@ -60,6 +60,7 @@ import {
   getProjectCalculationControl,
 } from "./calculation-control.js";
 import { getCalculationExportPage } from "./calculation-export.js";
+import { getProjectLinkPowerDomains } from "./link-power-domains.js";
 import {
   assertApprovedUser,
   getCurrentProfile,
@@ -513,6 +514,7 @@ async function handleRequest(
     "/v1/projects/",
     "/link-power-inspector",
   );
+  const linkPowerDomainsProjectId = uuidSubresourcePath(url.pathname, "/v1/projects/", "/link-power-domains");
   const calculationControlProjectId = uuidSubresourcePath(
     url.pathname,
     "/v1/projects/",
@@ -708,6 +710,7 @@ async function handleRequest(
     calculationInspectorProjectId !== null ||
     calculationExportProjectId !== null ||
     linkPowerInspectorProjectId !== null ||
+    linkPowerDomainsProjectId !== null ||
     calculationControlProjectId !== null ||
     projectGscUpload !== null ||
     forecastRowsProjectId !== null ||
@@ -1930,6 +1933,12 @@ async function handleRequest(
         projectGscUpload.uploadId,
       ),
     );
+    return;
+  }
+
+  if (linkPowerDomainsProjectId) {
+    if (method !== "GET") methodNotAllowed(response, ["GET"]);
+    sendJson(response, 200, await getProjectLinkPowerDomains(runtime.pool, user, linkPowerDomainsProjectId, url.searchParams));
     return;
   }
 

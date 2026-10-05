@@ -19,6 +19,7 @@ import {
   humanise,
 } from "@/components/admin/calculationDiagnostics";
 import CollapsibleSection from "@/components/navigator/CollapsibleSection";
+import LinkPowerDomainBenchmark from "@/components/admin/LinkPowerDomainBenchmark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -560,14 +561,7 @@ export default function CalculationInspectors({ projectId, summary }: Props) {
             </div>
           )}
 
-          {(linkPower.data?.domains.length ?? 0) > 0 && (
-            <div className="overflow-auto rounded-lg border border-hairline">
-              <Table>
-                <TableHeader><TableRow><TableHead>Top domain benchmark</TableHead><TableHead className="text-right">Mean LPS</TableHead><TableHead className="text-right">Best rank</TableHead><TableHead className="text-right">Appearances</TableHead></TableRow></TableHeader>
-                <TableBody>{linkPower.data?.domains.map((domain) => <TableRow key={domain.domain}><TableCell className="font-medium">{domain.domain} {domain.isClientDomain && <Badge className="ml-2" variant="secondary">Client</Badge>}</TableCell><TableCell className="text-right font-mono">{number(domain.meanScore)}</TableCell><TableCell className="text-right font-mono">{number(domain.bestRank, 0)}</TableCell><TableCell className="text-right font-mono">{number(domain.appearances, 0)}</TableCell></TableRow>)}</TableBody>
-              </Table>
-            </div>
-          )}
+          {linkPower.data?.runId && <LinkPowerDomainBenchmark key={`${projectId}:${linkPower.data.runId}`} projectId={projectId} runId={linkPower.data.runId} />}
 
           {(linkPower.data?.items.length ?? 0) === 0 ? (
             <EmptyInspector model="Link Power Score" />

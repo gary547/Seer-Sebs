@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 const projectId = "00000000-0000-4000-8000-000000000003";
 const runId = "00000000-0000-4000-8000-000000000004";
@@ -27,6 +28,15 @@ const sectionTitles = [
 ] as const;
 
 test("renders and opens every restored calculation panel", async ({ page }) => {
+  const domains = Array.from({ length: 205 }, (_, index) => ({
+    domain: `competitor-${String(index).padStart(3, "0")}.example`,
+    meanScore: index / 3,
+    bestRank: index % 10 + 1,
+    appearances: 205 - index,
+    isClientDomain: false,
+  }));
+  domains.push({ domain: "seer.example", meanScore: 42, bestRank: 4, appearances: 42, isClientDomain: true });
+  const domainRequests: URL[] = [];
   await page.addInitScript(() => {
     localStorage.setItem(
       "seer-gcp-local-session",
@@ -51,6 +61,15 @@ test("renders and opens every restored calculation panel", async ({ page }) => {
     });
 
     if (path === "/v1/me") return json({ approvalStatus: "approved", createdAt: completedAt, email: "e2e-admin@example.dev", emailVerified: true, fullName: "E2E Admin", id: "00000000-0000-4000-8000-000000000001", notifyUrlMonitor: false, rejectionReason: null, role: "admin", themePreference: "light" });
+    if (path === `/v1/projects/${projectId}/link-power-domains`) {
+      domainRequests.push(url);
+      const sort = url.searchParams.get("sort") === "appearances" ? "appearances" : "meanScore";
+      const order = url.searchParams.get("direction") === "asc" ? 1 : -1;
+      const offset = Number(url.searchParams.get("offset"));
+      const limit = Number(url.searchParams.get("limit"));
+      const sorted = [...domains].sort((a, b) => order * (a[sort] - b[sort]) || a.domain.localeCompare(b.domain));
+      return json({ completedAt, domains: sorted.slice(offset, offset + limit), total: domains.length, runId });
+    }
     if (path === "/v1/projects") return json({ projects: [{ archived_at: null, client_archived_at: null, client_name: "No Brainer", id: projectId, project_name: "Seer" }] });
     if (path === `/v1/projects/${projectId}/calculations`) return json({ calibration: { byIntent: { informational: { ratio: 1.04 } }, byRankBand: { "1-3": { ratio: 0.98 } }, matched: 180, modelVersion: "calibration_v2", overallRatio: 1.02, promotionEligible: true, status: "green" }, completedAt, har: [{ averageConfidence: 0.82, averageHarPosition: 6, forecastCount: 10, modelVersion: "har_v2", scenario: "realistic" }], opportunities: [], projectId, revenue: [{ expectedIncremental: 120000, forecastCount: 10, scenario: "realistic", targetIncremental: 160000 }], runId, siteActions: [] });
     if (path === `/v1/projects/${projectId}/ctr-curves`) return json({ completedAt, curves: [{ device: "mobile", isBranded: false, points: [{ confidence: "high", ctr: 0.32, impressions: 10000, rank: 1, source: "gsc" }], searchIntent: "commercial" }], projectId, runId });
@@ -92,6 +111,49 @@ test("renders and opens every restored calculation panel", async ({ page }) => {
   await expect(page.getByText("seer.example", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("create_content", { exact: true })).toBeVisible();
   await expect(page.getByText("Client authority benchmark", { exact: true })).toBeVisible();
+  const benchmark = page.getByRole("table", { name: "Top domain benchmark" });
+  await expect(benchmark.getByRole("row").nth(1)).toContainText("competitor-204.example");
+  await benchmark.getByRole("button", { name: /Sort by Mean LPS/ }).click();
+  await expect(benchmark.getByRole("row").nth(1)).toContainText("competitor-000.example");
+  await expect(benchmark.getByRole("columnheader", { name: /Mean LPS/ })).toHaveAttribute("aria-sort", "ascending");
+  await benchmark.getByRole("button", { name: /Sort by Appearances/ }).click();
+  await expect(benchmark.getByRole("row").nth(1)).toContainText("competitor-000.example");
+  await expect(benchmark.getByRole("columnheader", { name: /Appearances/ })).toHaveAttribute("aria-sort", "descending");
+  await page.getByRole("button", { name: "Next domains" }).click();
+  await expect(benchmark.getByRole("row").nth(1)).toContainText("competitor-010.example");
+  await benchmark.getByRole("button", { name: /Sort by Appearances/ }).click();
+  await expect(benchmark.getByRole("row").nth(1)).toContainText("competitor-204.example");
+  await expect(page.getByText("1–10 of 206 domains", { exact: true })).toBeVisible();
+  const downloadEvent = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export domains (CSV)" }).click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toContain(runId);
+  const csv = await readFile((await download.path())!, "utf8");
+  const lines = csv.replace(/^\uFEFF/, "").split("\r\n");
+  expect(lines).toHaveLength(207);
+  expect(lines[0]).toBe('"Domain","Mean LPS","Best rank","Appearances","Client domain"');
+  expect(lines[1]).toContain('"competitor-204.example"');
+  expect(lines.at(-1)).toBe('"competitor-000.example","0","1","205","No"');
+  expect(csv).toContain('"seer.example","42","4","42","Yes"');
+  expect(domainRequests.filter(url => url.searchParams.get("limit") === "200").map(url => url.searchParams.get("offset"))).toEqual(["0", "200"]);
+  expect(domainRequests.every(url => url.searchParams.get("runId") === runId)).toBe(true);
+  await benchmark.scrollIntoViewIfNeeded();
+  const benchmarkPanel = benchmark.locator("xpath=../../..");
+  const screenshotStyle = "header, [data-sonner-toaster] { visibility: hidden; }";
+  await benchmarkPanel.screenshot({ path: "test-results/link-power-domain-benchmark.png", style: screenshotStyle });
+  await benchmark.getByRole("button", { name: /Sort by Appearances/ }).focus();
+  await page.keyboard.press("Enter");
+  await expect(benchmark.getByRole("row").nth(1)).toContainText("competitor-000.example");
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await benchmarkPanel.screenshot({ path: "test-results/link-power-domain-benchmark-dark.png", style: screenshotStyle });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await benchmarkPanel.screenshot({ path: "test-results/link-power-domain-benchmark-mobile.png", style: screenshotStyle });
+  await benchmark.evaluate(table => { table.parentElement!.scrollLeft = table.scrollWidth; });
+  await expect(benchmark.getByRole("button", { name: /Sort by Appearances/ })).toBeVisible();
+  await benchmarkPanel.screenshot({ path: "test-results/link-power-domain-benchmark-mobile-scores.png", style: screenshotStyle });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => document.documentElement.classList.remove("dark"));
   const deltaFilter = page.getByRole("button", { name: "HAR Δ > 2" });
   await expect(deltaFilter).toBeVisible();
   await Promise.all([
