@@ -266,7 +266,11 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   and device scopes; count identical cross-file observations once and reject
   conflicting aggregates. Preserve source filenames, row counts and checksums in
   `gsc_uploads.source_files` (migration `033_gsc_batch_provenance`). Bound imports
-  at 100,000 observations and persist in batches of at most 1,000 rows.
+  at 250,000 observations and 50 MiB of source files in total, and persist in
+  batches of at most 1,000 rows. Report the observed count or size and the limit
+  on rejection. The API uses h2c on port 8080 to support requests beyond Cloud
+  Run's HTTP/1 limit; retain HTTP health/readiness probes on port 8081 and keep
+  the OpenTofu and Cloud Build settings aligned.
 - Standard GSC exports may use the aggregate `all` device. Preserve it through
   import, fixtures, pipeline output, and `ctr_curves`; the database device
   constraint must accept `all`, `desktop`, `mobile`, and `tablet`. Prefer an

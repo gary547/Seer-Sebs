@@ -4,10 +4,10 @@ import {
   verify as verifySignature,
   type JsonWebKey,
 } from "node:crypto";
-import type { IncomingMessage } from "node:http";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { bearerToken, HttpError } from "../../../packages/runtime/src/http.js";
+import type { HttpRequest } from "../../../packages/runtime/src/http.js";
 import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth.js";
 
 interface IdentityHeader {
@@ -165,7 +165,7 @@ export class IdentityPlatformVerifier {
 
 export async function authenticateIdentityPlatformRequest(
   pool: DatabasePool,
-  request: IncomingMessage,
+  request: HttpRequest,
   verifier: IdentityPlatformVerifier,
 ): Promise<AuthenticatedUser> {
   const token = bearerToken(request);

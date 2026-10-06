@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import type { Http2Server, ServerHttp2Session } from "node:http2";
 import process from "node:process";
 
 export function resolvePort(value: string | undefined, fallback = 8080): number {
@@ -13,10 +14,19 @@ export function resolvePort(value: string | undefined, fallback = 8080): number 
 
 export function installShutdownHandlers(
   serviceName: string,
-  servers: readonly Server[],
+  servers: readonly (Server | Http2Server)[],
   closeResources: () => Promise<void>,
 ): void {
   let shuttingDown = false;
+  const sessions = new Set<ServerHttp2Session>();
+  for (const server of servers) {
+    if ("updateSettings" in server) {
+      server.on("session", (session: ServerHttp2Session) => {
+        sessions.add(session);
+        session.once("close", () => sessions.delete(session));
+      });
+    }
+  }
 
   async function shutDown(signal: NodeJS.Signals): Promise<void> {
     if (shuttingDown) {
@@ -36,6 +46,7 @@ export function installShutdownHandlers(
 
           resolve();
         });
+        for (const session of sessions) session.close();
       });
     }
 

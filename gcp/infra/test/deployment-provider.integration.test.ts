@@ -51,7 +51,14 @@ describe("provider migration release script", () => {
     expect(worker).toContain("--container=worker");
     expect(worker).toContain("--memory=8Gi");
     expect(worker).toContain("--update-env-vars=NODE_OPTIONS=--enable-source-maps --max-old-space-size=6144");
-    expect(services.filter(args => args[3] !== "seer-worker").every(args => !args.some(arg => arg.startsWith("--memory=") || arg.includes("NODE_OPTIONS=")))).toBe(true);
+    const api = services.find(args => args[3] === "seer-api")!;
+    expect(api).toContain("--use-http2");
+    expect(api).toContain("--container=api");
+    expect(api).toContain("--memory=2Gi");
+    expect(api).toContain("--update-env-vars=SEER_HTTP2_ENABLED=true");
+    expect(api).toContain("--startup-probe=httpGet.path=/readyz,httpGet.port=8081,initialDelaySeconds=1,timeoutSeconds=5,periodSeconds=5,failureThreshold=24");
+    expect(api).toContain("--liveness-probe=httpGet.path=/healthz,httpGet.port=8081,timeoutSeconds=5,periodSeconds=10,failureThreshold=3");
+    expect(services.filter(args => args[3] === "seer-events").every(args => !args.some(arg => arg.startsWith("--memory=") || arg.includes("NODE_OPTIONS=")))).toBe(true);
     expect(worker).toContain("--update-secrets=OPENROUTER_API_KEY=seer-openrouter-api-key:latest");
     expect(worker).toContain("--remove-secrets=AHREFS_API_KEY,ANTHROPIC_API_KEY");
     expect(services.filter(args => args[3] !== "seer-worker").every(args => !args.some(arg => arg.includes("secrets=")))).toBe(true);

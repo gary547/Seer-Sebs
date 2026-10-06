@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { importGscWorkbook, type GscWorkbookImportInput } from "@/integrations/gcp/project-data";
+import { MAXIMUM_GSC_FILES, MAXIMUM_GSC_OBSERVATIONS, MAXIMUM_GSC_UPLOAD_BYTES } from "@/integrations/gcp/gsc-import-limits";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,6 +47,12 @@ function mapErrorCode(code: string | undefined, fallback: string): string {
       return "You don't have access to this project.";
     case "invalid_workbook":
       return "Could not read the file — please upload a standard Search Console .xlsx export.";
+    case "gsc_batch_too_large":
+    case "gsc_upload_too_large":
+    case "workbook_too_large":
+      return fallback;
+    case "payload_too_large":
+      return "The GSC upload is too large. Choose files totalling at most 50 MB; no files were imported.";
     default:
       return fallback || "Upload failed";
   }
@@ -110,14 +117,15 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
     setSummary(null);
     setError(null);
     setFiles([]);
-    if (selected.length > 10 || selected.some((file) => !/\.(csv|xlsx)$/i.test(file.name))) {
+    if (selected.length > MAXIMUM_GSC_FILES || selected.some((file) => !/\.(csv|xlsx)$/i.test(file.name))) {
       setMode("error");
       setError("Choose up to 10 CSV or XLSX exports from the same Search Console property.");
       return;
     }
-    if (selected.reduce((sum, file) => sum + file.size, 0) > 20 * 1024 * 1024) {
+    const totalBytes = selected.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > MAXIMUM_GSC_UPLOAD_BYTES) {
       setMode("error");
-      setError("The selected files exceed the 20 MB upload limit. Use smaller exports.");
+      setError(`The selected files total ${(totalBytes / 1024 / 1024).toFixed(2)} MB (${totalBytes.toLocaleString("en-GB")} bytes). The maximum is 50 MB per upload. Choose smaller exports.`);
       return;
     }
     setMode("reading");
@@ -196,7 +204,8 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
           : undefined;
       const fallback =
         error instanceof Error ? error.message : "Upload failed";
-      const msg = mapErrorCode(code, fallback);
+      const status = error && typeof error === "object" && "status" in error ? error.status : undefined;
+      const msg = mapErrorCode(status === 413 && (!code || code === "request_failed") ? "payload_too_large" : code, fallback);
       setError(msg);
       setMode("error");
       setProgressMsg("");
@@ -232,7 +241,7 @@ export default function GscUploadPanel({ projectId, disabled, disabledHint, onUp
         />
       </div>
       <p className="text-xs text-muted-foreground">
-        Select all exports for this dataset together (up to 10 files, 20 MB). Use the same Search Console property and export period.
+        Select all exports for this dataset together (up to {MAXIMUM_GSC_FILES} files, 50 MB in total and {MAXIMUM_GSC_OBSERVATIONS.toLocaleString("en-GB")} query and page observations). Use the same Search Console property and export period.
         Identical overlapping rows are counted once. This batch replaces the previous GSC input; it does not append to earlier uploads.
       </p>
       {files.length > 0 && (

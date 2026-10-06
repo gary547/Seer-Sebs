@@ -5,13 +5,13 @@ import {
   scryptSync,
   timingSafeEqual,
 } from "node:crypto";
-import type { IncomingMessage } from "node:http";
 
 import type { PoolClient } from "pg";
 
 import type { DatabasePool } from "./database.js";
 import { withTransaction } from "./database.js";
 import { bearerToken, HttpError, requireString } from "./http.js";
+import type { HttpRequest } from "./http.js";
 
 const SESSION_DURATION_MILLISECONDS = 8 * 60 * 60 * 1_000;
 const PASSWORD_HASH_BYTES = 64;
@@ -207,7 +207,7 @@ export async function loginLocalUser(
 
 export async function authenticateLocalRequest(
   pool: DatabasePool,
-  request: IncomingMessage,
+  request: HttpRequest,
 ): Promise<AuthenticatedUser> {
   const token = bearerToken(request);
 

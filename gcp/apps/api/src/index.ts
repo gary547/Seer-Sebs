@@ -10,7 +10,7 @@ import {
 } from "./identity-platform.js";
 import { IdentityPlatformAdminClient } from "./identity-provisioning.js";
 import { ObjectStoreClient } from "./object-store-client.js";
-import { API_SERVICE_NAME, createApiServer } from "./server.js";
+import { API_SERVICE_NAME, createApiHealthServer, createApiServer, createHttp2ApiServer, type ApiServerConfig } from "./server.js";
 import { WorkflowsOrchestrator } from "./workflows-orchestrator.js";
 import { AnthropicClient } from "./anthropic-client.js";
 import {
@@ -101,7 +101,7 @@ const slidesClient =
         )
       : undefined;
 const port = resolvePort(process.env.PORT);
-const server = createApiServer({
+const serverConfig: ApiServerConfig = {
   allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
   authenticateRequest: verifier
     ? (database, request) =>
@@ -121,12 +121,16 @@ const server = createApiServer({
   textGenerationClient: anthropicApiKey
     ? new AnthropicClient(anthropicApiKey)
     : undefined,
-});
+};
+const http2Enabled = process.env.SEER_HTTP2_ENABLED === "true";
+const server = http2Enabled ? createHttp2ApiServer(serverConfig) : createApiServer(serverConfig);
+const healthServer = http2Enabled ? createApiHealthServer(serverConfig) : null;
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`${API_SERVICE_NAME} listening on port ${port}`);
 });
+healthServer?.listen(8081, "0.0.0.0");
 
-installShutdownHandlers(API_SERVICE_NAME, [server], async () => {
+installShutdownHandlers(API_SERVICE_NAME, healthServer ? [server, healthServer] : [server], async () => {
   await pool.end();
 });

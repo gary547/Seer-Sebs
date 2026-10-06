@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type Server } from "node:http";
+import { createServer as createHttp2Server, type Http2Server } from "node:http2";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { assertDatabaseReady } from "../../../packages/runtime/src/database.js";
@@ -9,6 +10,8 @@ import {
   registerLocalUser,
 } from "../../../packages/runtime/src/local-auth.js";
 import { HttpError, readJson, sendError, sendJson } from "../../../packages/runtime/src/http.js";
+import type { HttpRequest, HttpResponse } from "../../../packages/runtime/src/http.js";
+import { MAXIMUM_GSC_REQUEST_BYTES } from "../../../packages/contracts/src/gsc-import-limits.js";
 import { createAsset, getAsset } from "./assets.js";
 import {
   consolidateCategories,
@@ -143,6 +146,20 @@ import {
 } from "./url-monitor.js";
 
 export const API_SERVICE_NAME = "seer-api";
+const activeGscUploads = new WeakMap<DatabasePool, number>();
+
+async function withGscUpload<T>(pool: DatabasePool, operation: () => Promise<T>): Promise<T> {
+  const active = activeGscUploads.get(pool) ?? 0;
+  if (active >= 2) {
+    throw new HttpError(429, "gsc_upload_busy", "Other GSC uploads are being processed. Wait for an upload to finish, then retry; no files were imported.");
+  }
+  activeGscUploads.set(pool, active + 1);
+  try {
+    return await operation();
+  } finally {
+    activeGscUploads.set(pool, (activeGscUploads.get(pool) ?? 1) - 1);
+  }
+}
 
 export interface ApiServerConfig {
   allowedOrigins?: readonly string[];
@@ -179,8 +196,8 @@ function configuredOrigins(config: ApiServerConfig): Set<string> {
 }
 
 function applyCors(
-  request: IncomingMessage,
-  response: ServerResponse,
+  request: HttpRequest,
+  response: HttpResponse,
   config: ApiServerConfig,
 ): boolean {
   const origin = request.headers.origin;
@@ -203,7 +220,7 @@ function applyCors(
 }
 
 function methodNotAllowed(
-  response: ServerResponse,
+  response: HttpResponse,
   allowedMethods: readonly string[],
 ): never {
   response.setHeader("allow", allowedMethods.join(", "));
@@ -215,7 +232,7 @@ function methodNotAllowed(
 }
 
 function internalAuthorized(
-  request: IncomingMessage,
+  request: HttpRequest,
   expectedToken: string | undefined,
 ): boolean {
   const header = request.headers["x-seer-internal-token"];
@@ -302,8 +319,8 @@ function projectGscUploadPath(
 }
 
 async function handleRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
+  request: HttpRequest,
+  response: HttpResponse,
   config: ApiServerConfig,
 ): Promise<void> {
   if (applyCors(request, response, config)) return;
@@ -1645,12 +1662,9 @@ async function handleRequest(
     sendJson(
       response,
       201,
-      await importProjectGscRows(
-        runtime.pool,
-        user,
-        gscProjectId,
-        await readJson(request, 20 * 1_024 * 1_024),
-      ),
+      await withGscUpload(runtime.pool, async () => importProjectGscRows(
+        runtime.pool, user, gscProjectId, await readGscJson(request),
+      )),
     );
     return;
   }
@@ -1659,18 +1673,13 @@ async function handleRequest(
     if (method !== "POST") {
       methodNotAllowed(response, ["POST"]);
     }
-    const parsed = parseGscWorkbookImport(
-      await readJson(request, 30 * 1_024 * 1_024),
-    );
     sendJson(
       response,
       201,
-      await importProjectGscRows(
-        runtime.pool,
-        user,
-        gscWorkbookProjectId,
-        parsed,
-      ),
+      await withGscUpload(runtime.pool, async () => importProjectGscRows(
+        runtime.pool, user, gscWorkbookProjectId,
+        parseGscWorkbookImport(await readGscJson(request)),
+      )),
     );
     return;
   }
@@ -2324,4 +2333,36 @@ export function createApiServer(config: ApiServerConfig = {}): Server {
       sendError(response, error);
     });
   });
+}
+
+export function createHttp2ApiServer(config: ApiServerConfig = {}): Http2Server {
+  return createHttp2Server((request, response) => {
+    void handleRequest(request, response, config).catch((error: unknown) => {
+      sendError(response, error);
+    });
+  });
+}
+
+export function createApiHealthServer(config: ApiServerConfig = {}): Server {
+  return createServer((request, response) => {
+    const pathname = new URL(request.url ?? "/", "http://api.local").pathname;
+    if (pathname !== "/healthz" && pathname !== "/readyz") {
+      sendError(response, new HttpError(404, "not_found", "Route not found."));
+      return;
+    }
+    void handleRequest(request, response, config).catch((error: unknown) => {
+      sendError(response, error);
+    });
+  });
+}
+
+async function readGscJson(request: HttpRequest): Promise<unknown> {
+  try {
+    return await readJson(request, MAXIMUM_GSC_REQUEST_BYTES);
+  } catch (error) {
+    if (error instanceof HttpError && error.code === "payload_too_large") {
+      throw new HttpError(413, "gsc_upload_too_large", "The GSC upload is too large to process. Choose exports totalling at most 50 MB; no files were imported.");
+    }
+    throw error;
+  }
 }

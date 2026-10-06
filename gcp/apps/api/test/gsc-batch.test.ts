@@ -47,4 +47,9 @@ describe("atomic GSC batches", () => {
   it.each([[], Array(11).fill(tv), [{ files: [tv] }], [tv, { ...oven, csvText: "invalid" }]])("rejects invalid batches atomically", (files) => {
     expect(() => parseGscWorkbookImport({ files })).toThrow();
   });
+  it("explains the observation cap for the entire multi-file batch", () => {
+    const first = Array.from({ length: 125_000 }, (_, i) => `keyword ${i},https://example.com/a,1,10,10%,2`).join("\n");
+    const second = `${first}\nextra keyword,https://example.com/b,1,10,10%,2`;
+    expect(() => parseGscWorkbookImport({ files: [file("first", first), file("second", second)] })).toThrow("contains 250,001");
+  }, 30_000);
 });

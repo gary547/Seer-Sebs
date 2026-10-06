@@ -14,6 +14,8 @@ import {
 } from "./authorization.js";
 
 import { queryCalculationDiagnostic } from "./calculation-reads.js";
+import { MAXIMUM_GSC_OBSERVATIONS } from "../../../packages/contracts/src/gsc-import-limits.js";
+import { assertGscObservationLimit } from "./gsc-import-limits.js";
 
 type RuleType =
   | "blacklist"
@@ -1468,7 +1470,10 @@ function gscDevice(
 function parseGscRows(value: unknown): ParsedGscImport {
   const record = bodyRecord(value);
   const sourceName = requireString(record.sourceName, "sourceName", 200);
-  const rows = valueArray(record.rows, "rows", 100_000).map((item, index) => {
+  const inputRows = valueArray(record.rows, "rows", Number.MAX_SAFE_INTEGER);
+  const inputPages = valueArray(record.pages ?? [], "pages", Number.MAX_SAFE_INTEGER);
+  assertGscObservationLimit(inputRows.length + inputPages.length);
+  const rows = inputRows.map((item, index) => {
     const row = bodyRecord(item);
     const path = `rows[${index}]`;
     return {
@@ -1485,7 +1490,7 @@ function parseGscRows(value: unknown): ParsedGscImport {
       query: requireString(row.query, `${path}.query`, 200),
     };
   });
-  const pages = valueArray(record.pages ?? [], "pages", 50_000).map(
+  const pages = inputPages.map(
     (item, index) => {
       const page = bodyRecord(item);
       const path = `pages[${index}]`;
@@ -1500,9 +1505,6 @@ function parseGscRows(value: unknown): ParsedGscImport {
       };
     },
   );
-  if (rows.length + pages.length > 100_000) {
-    throw new HttpError(400, "gsc_batch_too_large", "A GSC upload supports up to 100,000 query and page observations.");
-  }
   const uniqueRows = new Set(
     rows.map(
       (row) =>
@@ -1555,7 +1557,7 @@ function parseGscRows(value: unknown): ParsedGscImport {
       if (!/^[a-f0-9]{64}$/.test(sha256)) throw new HttpError(400, "invalid_request", "Invalid GSC source checksum.");
       return {
         filename: requireString(source.filename, `sourceFiles[${index}].filename`, 255),
-        rowCount: metric(source, "rowCount", `sourceFiles[${index}]`, 100_000),
+        rowCount: metric(source, "rowCount", `sourceFiles[${index}]`, MAXIMUM_GSC_OBSERVATIONS),
         sha256,
       };
     }),

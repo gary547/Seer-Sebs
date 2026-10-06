@@ -33,6 +33,7 @@ locals {
         PIPELINE_WORKFLOW_REGION     = var.region
         REGISTRATION_CONTINUE_URL    = "${google_firebase_hosting_site.web.default_url}/auth"
         SEER_ENVIRONMENT             = var.environment
+        SEER_HTTP2_ENABLED           = "true"
         DATABASE_URL                 = "postgresql://${urlencode(trimsuffix(google_service_account.runtime["api"].email, ".gserviceaccount.com"))}@127.0.0.1:5432/seer"
       }
       secrets = {
@@ -111,6 +112,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
       depends_on = ["cloud-sql-proxy"]
 
       ports {
+        name           = each.key == "api" ? "h2c" : null
         container_port = 8080
       }
 
@@ -118,7 +120,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
         cpu_idle = true
         limits = {
           cpu    = "2"
-          memory = each.key == "worker" ? "8Gi" : "1Gi"
+          memory = each.key == "worker" ? "8Gi" : "2Gi"
         }
       }
 
@@ -151,6 +153,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
 
         http_get {
           path = "/readyz"
+          port = each.key == "api" ? 8081 : 8080
         }
       }
 
@@ -161,6 +164,7 @@ resource "google_cloud_run_v2_service" "request_runtime" {
 
         http_get {
           path = "/healthz"
+          port = each.key == "api" ? 8081 : 8080
         }
       }
     }

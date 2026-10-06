@@ -78,6 +78,15 @@ function workbookBase64(device = "desktop"): string {
 }
 
 describe("GSC workbook parsing", () => {
+  it("keeps CSV quoting, embedded newlines and final empty cells intact", () => {
+    expect(parseCsvRows('A,B,C\r\n"quoted ""text"", value","line one\r\nline two",\r\nlast,,')).toEqual([
+      ["A", "B", "C"], ["quoted \"text\", value", "line one\r\nline two", ""], ["last", "", ""],
+    ]);
+  });
+  it("measures the upload limit in UTF-8 bytes rather than characters", () => {
+    expect(() => parseGscWorkbookImport({ csvText: "é".repeat(25 * 1024 * 1024 + 1), filename: "unicode.csv", format: "csv_text", device: "all",
+      dateRangeStart: "2025-09-01", dateRangeEnd: "2026-08-31" })).toThrow("52,428,802 bytes");
+  });
   it("preserves SAFS query-page observations instead of collapsing distinct landing pages", () => {
     const parsed = parseGscWorkbookImport({
       csvText: "Query,Page,Clicks,Impressions,CTR,Position\ntv,https://example.com/tvs,10,100,10%,8\ntv,https://example.com/offers,5,200,2.5%,12",

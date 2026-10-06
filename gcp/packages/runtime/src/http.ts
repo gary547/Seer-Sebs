@@ -1,6 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Http2ServerRequest, Http2ServerResponse } from "node:http2";
 
 import { gzipSync } from "fflate";
+
+export type HttpRequest = IncomingMessage | Http2ServerRequest;
+export type HttpResponse = ServerResponse | Http2ServerResponse;
 
 export interface ErrorBody {
   error: {
@@ -22,7 +26,7 @@ export class HttpError extends Error {
 }
 
 export function sendJson(
-  response: ServerResponse,
+  response: HttpResponse,
   statusCode: number,
   body: unknown,
   options: { gzip?: boolean } = {},
@@ -43,7 +47,7 @@ export function sendJson(
 }
 
 export function sendError(
-  response: ServerResponse,
+  response: HttpResponse,
   error: unknown,
 ): void {
   if (error instanceof HttpError) {
@@ -66,17 +70,18 @@ export function sendError(
 }
 
 export async function readBody(
-  request: IncomingMessage,
+  request: HttpRequest,
   maximumBytes: number,
 ): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
 
-  for await (const chunk of request) {
+  for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
 
     if (size > maximumBytes) {
+      request.resume();
       throw new HttpError(413, "payload_too_large", "The request body is too large.");
     }
 
@@ -87,7 +92,7 @@ export async function readBody(
 }
 
 export async function readJson(
-  request: IncomingMessage,
+  request: HttpRequest,
   maximumBytes = 1_048_576,
 ): Promise<unknown> {
   const body = await readBody(request, maximumBytes);
@@ -119,7 +124,7 @@ export function requireString(
   return value.trim();
 }
 
-export function bearerToken(request: IncomingMessage): string | null {
+export function bearerToken(request: Pick<HttpRequest, "headers">): string | null {
   const authorization = request.headers.authorization;
 
   if (!authorization?.startsWith("Bearer ")) {

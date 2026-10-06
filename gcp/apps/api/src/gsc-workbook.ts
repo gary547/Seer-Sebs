@@ -3,6 +3,11 @@ import { unzipSync } from "fflate";
 
 import { normaliseKeyword } from "../../../packages/fixtures/src/representative-project.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
+import {
+  MAXIMUM_GSC_FILES,
+  MAXIMUM_GSC_UPLOAD_BYTES,
+} from "../../../packages/contracts/src/gsc-import-limits.js";
+import { assertGscObservationLimit, assertGscUploadByteLimit } from "./gsc-import-limits.js";
 
 const MINIMUM_SPAN_DAYS = 28;
 const MAXIMUM_SPAN_DAYS = 550;
@@ -165,7 +170,7 @@ function parseXlsx(base64: string): SheetGrid[] {
     0,
   );
   if (totalBytes > MAXIMUM_UNCOMPRESSED_BYTES) {
-    throw new HttpError(413, "workbook_too_large", "The workbook is too large.");
+    throw new HttpError(413, "workbook_too_large", `The workbook expands to ${(totalBytes / 1_024 / 1_024).toFixed(2)} MB. The maximum expanded workbook size is 50 MB. Export a smaller workbook or use CSV; no files were imported.`);
   }
   const readXml = (path: string): string | null => {
     const file = files[path];
@@ -402,36 +407,44 @@ function chartDates(rows: unknown[][]): { end: string; start: string } {
 export function parseCsvRows(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
-  let field = "";
+  let fieldParts: string[] = [];
+  let segmentStart = 0;
   let quoted = false;
+  const endField = (index: number) => {
+    fieldParts.push(text.slice(segmentStart, index));
+    row.push(fieldParts.join(""));
+    fieldParts = [];
+    segmentStart = index + 1;
+  };
   for (let index = 0; index < text.length; index += 1) {
     const character = text[index];
     if (quoted) {
       if (character === '"') {
+        fieldParts.push(text.slice(segmentStart, index));
         if (text[index + 1] === '"') {
-          field += '"';
+          fieldParts.push('"');
           index += 1;
         } else {
           quoted = false;
         }
-      } else {
-        field += character;
+        segmentStart = index + 1;
       }
     } else if (character === '"') {
+      fieldParts.push(text.slice(segmentStart, index));
+      segmentStart = index + 1;
       quoted = true;
     } else if (character === ",") {
-      row.push(field);
-      field = "";
+      endField(index);
     } else if (character === "\n") {
-      row.push(field);
+      endField(index);
       if (row.some(Boolean)) rows.push(row);
       row = [];
-      field = "";
-    } else if (character !== "\r") {
-      field += character;
+    } else if (character === "\r") {
+      fieldParts.push(text.slice(segmentStart, index));
+      segmentStart = index + 1;
     }
   }
-  row.push(field);
+  endField(text.length);
   if (row.some(Boolean)) rows.push(row);
   return rows;
 }
@@ -532,6 +545,7 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
     throw new HttpError(400, "invalid_payload", "format is invalid.");
   }
   const originalFilename = requiredString(record.filename, "filename", 255);
+  assertGscUploadByteLimit(gscFileBytes(record));
   let rows: QueryRow[];
   let pages: PageRow[] = [];
   let dateRangeStart: string;
@@ -544,7 +558,7 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
 
   if (format === "csv_text") {
     const parsed = queryRows(
-      parseCsvRows(requiredString(record.csvText, "csvText", 20 * 1_024 * 1_024)),
+      parseCsvRows(requiredString(record.csvText, "csvText", MAXIMUM_GSC_UPLOAD_BYTES)),
     );
     rows = parsed.rows;
     hasPerRowDevice = parsed.hasDevice;
@@ -557,7 +571,7 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
     dateRangeEnd = strictIsoDate(record.dateRangeEnd, "dateRangeEnd");
   } else {
     const workbook = parseXlsx(
-      requiredString(record.fileBase64, "fileBase64", 28 * 1_024 * 1_024),
+      requiredString(record.fileBase64, "fileBase64", Math.ceil(MAXIMUM_GSC_UPLOAD_BYTES / 3) * 4),
     );
     sheetsSeen = workbook.map((sheet) => sheet.name);
     const byName = new Map(
@@ -626,6 +640,7 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
   }
 
   const aggregated = aggregateQueryRows(applyDevice(rows, fallbackDevice));
+  assertGscObservationLimit(aggregated.rows.length + pages.length);
   if (aggregated.duplicateCount > 0) {
     warnings.push(
       `${aggregated.duplicateCount.toLocaleString("en-GB")} duplicate ${aggregated.duplicateCount === 1 ? "row was" : "rows were"} merged into ${aggregated.rows.length.toLocaleString("en-GB")} unique GSC entries.`,
@@ -651,23 +666,35 @@ export function parseGscWorkbookImport(body: unknown): ParsedGscWorkbook {
   };
 }
 
+function gscFileBytes(record: Record<string, unknown>): number {
+  if (record.format === "csv_text" && typeof record.csvText === "string") {
+    return Buffer.byteLength(record.csvText, "utf8");
+  }
+  if (record.format === "xlsx_base64" && typeof record.fileBase64 === "string") {
+    return Buffer.from(record.fileBase64, "base64").byteLength;
+  }
+  return 0;
+}
+
 function parseGscBatch(files: unknown): ParsedGscWorkbook {
-  if (!Array.isArray(files) || files.length < 1 || files.length > 10) {
+  if (!Array.isArray(files) || files.length < 1 || files.length > MAXIMUM_GSC_FILES) {
     throw new HttpError(400, "invalid_gsc_batch", "Select between 1 and 10 GSC files.");
   }
-  const imports = files.map((file) => {
+  assertGscUploadByteLimit(files.reduce((total, file) => total + gscFileBytes(bodyRecord(file)), 0));
+  let observations = 0;
+  const imports = files.map((file, index) => {
     if ("files" in bodyRecord(file)) {
       throw new HttpError(400, "invalid_gsc_batch", "Nested GSC batches are not supported.");
     }
-    return parseGscWorkbookImport(file);
+    const parsed = parseGscWorkbookImport(file);
+    observations += parsed.rows.length + parsed.pages.length;
+    assertGscObservationLimit(observations, index < files.length - 1);
+    return parsed;
   });
   const first = imports[0]!;
   if (imports.length === 1) return first;
   if (imports.some((file) => file.dateRangeStart !== first.dateRangeStart || file.dateRangeEnd !== first.dateRangeEnd)) {
     throw new HttpError(400, "gsc_batch_date_mismatch", "All files in a batch must cover the same export period.");
-  }
-  if (imports.reduce((total, file) => total + file.rows.length + file.pages.length, 0) > 100_000) {
-    throw new HttpError(400, "gsc_batch_too_large", "A GSC batch supports up to 100,000 query and page observations.");
   }
   let duplicateCount = 0;
   const merge = <T extends GscMetricRow>(rows: T[], identity: (row: T) => string): T[] => {

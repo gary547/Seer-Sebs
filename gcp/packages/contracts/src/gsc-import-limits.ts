@@ -1,0 +1,4 @@
+export const MAXIMUM_GSC_FILES = 10;
+export const MAXIMUM_GSC_UPLOAD_BYTES = 50 * 1_024 * 1_024;
+export const MAXIMUM_GSC_OBSERVATIONS = 250_000;
+export const MAXIMUM_GSC_REQUEST_BYTES = 110 * 1_024 * 1_024;
