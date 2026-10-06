@@ -270,7 +270,14 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   batches of at most 1,000 rows. Report the observed count or size and the limit
   on rejection. The API uses h2c on port 8080 to support requests beyond Cloud
   Run's HTTP/1 limit; retain HTTP health/readiness probes on port 8081 and keep
-  the OpenTofu and Cloud Build settings aligned.
+  the OpenTofu and Cloud Build settings aligned. Keep the API at 2 GiB and bound
+  GSC imports to two concurrent operations per database pool, with an actionable
+  retry message when capacity is occupied. Check cumulative batch observations
+  while parsing files so an oversized batch cannot retain every parsed file.
+  The 110 MiB encoded-request allowance covers JSON escaping and XLSX base64;
+  enforce the separate 50 MiB source-byte limit for both single and multi-file
+  uploads before parsing. Keep local HTTP/1 support and drain HTTP/2 sessions
+  gracefully at shutdown.
 - Standard GSC exports may use the aggregate `all` device. Preserve it through
   import, fixtures, pipeline output, and `ctr_curves`; the database device
   constraint must accept `all`, `desktop`, `mobile`, and `tablet`. Prefer an
