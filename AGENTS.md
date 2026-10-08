@@ -601,6 +601,22 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   against PostgreSQL with deterministic provider transport fixtures.
 - Load completed AI batches with one run/stage-scoped query per delivery;
   avoid one database round trip per cached batch during checkpoint replay.
+- `GET` and `POST /v1/pipeline-runs/:id/serp-resolution` are administrator-only
+  review and approval routes for a failed SERP run. Review includes every kept
+  keyword inheriting an affected canonical search, capped at 1,000 exclusions.
+  Approval requires the exact reviewed IDs, compatible project inputs and idle
+  stage locks; archived or active projects and an empty remaining scope fail.
+  Preserve the immutable operator/time/query audit in `input.forecastScope`.
+- An explicitly approved no-results scope filters downstream dependency copies
+  for HAR, Revenue and rollups without changing saved qualification, provider
+  observations, frozen content-fit inputs or batch keys. Unapproved terminal
+  searches block resume with `serp_resolution_required`; every remaining keyword
+  still passes the full coverage gates. Recalculation inherits the last successful
+  approved scope, while new full runs do not and creation rejects supplied scopes.
+- Native results exports retain approved excluded keywords and existing columns,
+  use `excluded_no_search_results` with the approval reason, and leave forecast
+  values unavailable. Never present an excluded query as a measured zero or reuse
+  stale forecasts. The admin review requires explicit confirmation before resume.
 - Large forecast stage outputs can exceed the default ten-second SQL write
   timeout even when normalized forecast rows are batched. Keep the extended
   timeout transaction-local at the final stage-output write and while reading
