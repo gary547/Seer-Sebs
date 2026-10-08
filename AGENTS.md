@@ -580,6 +580,25 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   per-batch OpenRouter attempt count across continuations so the 30-attempt
   provider limit is never reset by a new delivery. Keep the continuation
   message visible in pipeline activity and retain transactional stage writes.
+- Explicit `resume` recovers the same failed run ID after checking project inputs,
+  qualification provenance and idle stage advisory locks. Preserve succeeded
+  outputs, provider task IDs, frozen snapshots and lifetime attempt counts.
+  Migration `037_pipeline_recovery` supplies provider attempt offsets, local task
+  generations and indexed run activity. Automatic deliveries retain attempt
+  limits; an explicit recovery starts a new bounded retry cycle for unfinished
+  work. Workflow tasks and failure callbacks must carry the run generation so
+  stale executions cannot change the recovered run.
+- `POST /v1/pipeline-runs/:id/cancel` stops scheduling new provider requests and
+  preserves successful in-flight responses. Run status exposes `stop.state` as
+  `stopping` until stage locks drain, then `stopped`; the admin panel blocks
+  resume while draining. Voluntary stopping must remain distinguishable from
+  a provider failure, with final saved progress visible.
+- DataForSEO SERP task status `40102` under a successful envelope is a terminal
+  no-results observation. Persist it once against the existing task, collect
+  valid sibling tasks and expose bounded affected-query diagnostics. Never
+  resubmit or repeatedly poll that terminal task, invent organic rows or bypass
+  forecast coverage gates. `test:gcp-pipeline-recovery` verifies these contracts
+  against PostgreSQL with deterministic provider transport fixtures.
 - Load completed AI batches with one run/stage-scoped query per delivery;
   avoid one database round trip per cached batch during checkpoint replay.
 - Large forecast stage outputs can exceed the default ten-second SQL write
