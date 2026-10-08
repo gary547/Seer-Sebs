@@ -32,14 +32,17 @@ import {
 import type { PipelineProviderHydrator } from "./live-providers.js";
 import { restoreKeywordDecisions } from "./recalculation.js";
 import { StageContinuation, STAGE_EXECUTION_BUDGET_MS } from "./stage-continuation.js";
+import { checkProviderRunActive, withProviderRun } from "./run-control.js";
 
 export interface StageTask {
+  generation?: number;
   runId: string;
   stageId: PipelineStageId;
   taskId: string;
 }
 
 export interface PipelineFailure {
+  generation?: number;
   reason: string;
   runId: string;
   stageId: PipelineStageId;
@@ -100,6 +103,12 @@ function recordBody(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function deliveryGeneration(value: unknown): number {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || Number(value) < 0) throw new HttpError(400, "invalid_generation", "Invalid pipeline delivery generation.");
+  return Number(value);
+}
+
 function stageDefinition(value: unknown): PipelineStageDefinition {
   const stageId = requireString(value, "stageId", 64);
   const definition = PIPELINE_STAGES.find((stage) => stage.id === stageId);
@@ -116,6 +125,7 @@ export function parseStageTask(body: unknown): StageTask {
   const definition = stageDefinition(record.stageId);
 
   return {
+    generation: deliveryGeneration(record.generation),
     runId: requireString(record.runId, "runId", 64),
     stageId: definition.id,
     taskId: requireString(record.taskId, "taskId", 64),
@@ -127,6 +137,7 @@ export function parsePipelineFailure(body: unknown): PipelineFailure {
   const definition = stageDefinition(record.stageId);
   return {
     reason: requireString(record.reason, "reason", 1_000),
+    generation: deliveryGeneration(record.generation),
     runId: requireString(record.runId, "runId", 64),
     stageId: definition.id,
   };
@@ -138,12 +149,15 @@ export async function failPipelineRun(
 ): Promise<Record<string, unknown>> {
   const userMessage = pipelineStageFailureMessage(failure.stageId, failure.reason);
   return withTransaction(pool, async (client) => {
-    const run = await client.query<{ status: string }>(
-      `SELECT status FROM pipeline_runs WHERE id = $1 FOR UPDATE`,
+    const run = await client.query<{ status: string; generation: number }>(
+      `SELECT status, COALESCE((input->>'generation')::int, 0) AS generation FROM pipeline_runs WHERE id = $1 FOR UPDATE`,
       [failure.runId],
     );
     if (!run.rows[0]) {
       throw new HttpError(404, "pipeline_run_not_found", "Pipeline run not found.");
+    }
+    if (run.rows[0].generation !== (failure.generation ?? 0)) {
+      return { runId: failure.runId, status: run.rows[0].status, idempotent: true };
     }
     if (run.rows[0].status === "succeeded") {
       return { runId: failure.runId, status: "succeeded", idempotent: true };
@@ -192,6 +206,11 @@ async function markRunning(
   task: StageTask,
   definition: PipelineStageDefinition,
 ): Promise<MarkRunningResult> {
+  const run = await client.query<{ status: string; generation: number }>(
+    `SELECT status, COALESCE((input->>'generation')::int, 0) AS generation FROM pipeline_runs WHERE id = $1 FOR UPDATE`, [task.runId]);
+  if (run.rows[0]?.generation !== (task.generation ?? 0) || !["pending", "running", "succeeded"].includes(run.rows[0]?.status ?? "")) {
+    throw new HttpError(422, "pipeline_stopped", "Pipeline stopped. Saved progress is available for resume.");
+  }
   const lockResult = await client.query<StageLockRow>(
     `
       SELECT state
@@ -353,12 +372,12 @@ export async function executeStageTask(
     acquired = lock.rows[0]?.acquired === true;
     if (!acquired) return { runId: task.runId, stageId: task.stageId, status: "continuing" };
     try {
-      return await executeStageAttempt(pool, task, options, deadline);
+      return await withProviderRun(pool, task.runId, task.generation ?? 0, () => executeStageAttempt(pool, task, options, deadline));
     } catch (error) {
       if (!(error instanceof StageContinuation)) {
         const failure = pipelineStageExecutionError(error);
         if (failure instanceof HttpError && failure.code === "pipeline_output_storage_failed") {
-          await failPipelineRun(pool, { runId: task.runId, stageId: task.stageId, reason: failure.code });
+          await failPipelineRun(pool, { runId: task.runId, stageId: task.stageId, reason: failure.code, generation: task.generation });
         }
         throw failure;
       }
@@ -425,6 +444,7 @@ async function executeStageAttempt(
     );
   }
 
+  await checkProviderRunActive();
   const fixture = representativeFixture(input);
   const runMode = object(input)?.mode === "recalculate" ? "recalculate" : "full";
   const projectId = projectIdFromInput(input);
@@ -437,6 +457,7 @@ async function executeStageAttempt(
       deadline,
     );
   }
+  await checkProviderRunActive();
   const source: ProjectPipelineSource | null =
     fixture ?? (projectId ? await loadProjectPipelineSource(pool, projectId) : null);
   const representativeSummary = fixtureSummary(fixture);
@@ -459,6 +480,7 @@ async function executeStageAttempt(
   if (!fixture && projectId && stageData && runMode === "recalculate") {
     stageData = await restoreKeywordDecisions(pool, projectId, stageData);
   }
+  await checkProviderRunActive();
   const digest = createHash("sha256")
     .update(`${task.runId}:${task.stageId}`)
     .digest("hex");

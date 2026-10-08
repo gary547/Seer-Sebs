@@ -38,6 +38,7 @@
     "test:gcp-backup-restore": "bash gcp/scripts/test-backup-restore.sh",
     "test:gcp-database-access": "bash gcp/scripts/test-database-access-boundaries.sh",
     "test:gcp-volume-history": "node gcp/scripts/test-calculation-volume-history.mjs",
+    "test:gcp-pipeline-recovery": "node gcp/scripts/test-pipeline-recovery.mjs",
     "test:gcp-provider-checkpoints": "node gcp/scripts/test-provider-checkpoints.mjs",
     "test:gcp-stage-output": "node --max-old-space-size=4096 gcp/scripts/test-stage-output.mjs",
     "test:gcp-volume-scale": "node gcp/scripts/test-calculation-volume-scale.mjs",

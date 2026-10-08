@@ -1746,13 +1746,14 @@ async function handleRequest(
     const run = await createPipelineRun(runtime.pool, user, {
       inputVersion: "project-v1",
       mode: inputRecord.mode ?? "full",
+      ...(typeof inputRecord.sourceRunId === "string" ? { sourceRunId: inputRecord.sourceRunId } : {}),
       projectId: pipelineProjectId,
     });
     const orchestration =
       config.orchestrator &&
       typeof run.id === "string" &&
-      run.resumed !== true
-        ? await config.orchestrator.start(run.id)
+      run.startExecution === true
+        ? await config.orchestrator.start(run.id, Number(run.generation ?? 0))
         : null;
     sendJson(response, 202, {
       ...run,
@@ -2265,8 +2266,8 @@ async function handleRequest(
     const orchestration =
       config.orchestrator &&
       typeof result.id === "string" &&
-      result.resumed !== true
-        ? await config.orchestrator.start(result.id)
+      result.startExecution === true
+        ? await config.orchestrator.start(result.id, Number(result.generation ?? 0))
         : null;
     sendJson(response, 202, {
       ...result,

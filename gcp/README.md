@@ -107,4 +107,12 @@ administrator. The trigger uses `seer-build` and the existing managed runtime
 URLs, Firebase web configuration, Hosting site and release bucket as
 substitutions; no provider credential is stored in Git.
 
+Failed or operator-stopped project runs resume against the same run ID. The API checks unchanged project inputs, completed stage dependencies, replacement qualification and idle worker locks before resetting only unfinished stages. An optional `sourceRunId` selects an explicit failed checkpoint; automatic selection prefers compatible runs with more completed stages. Resume never silently creates a full paid run when no safe checkpoint exists.
+
+Each recovery advances the delivery generation passed through Workflows and the dispatcher. Old task deliveries and failure callbacks cannot mutate the resumed execution. Completed outputs, frozen content-fit snapshots, provider task IDs and actual model provenance remain intact. Provider attempt totals are retained; an explicit operator resume opens a new bounded retry cycle for unfinished batches.
+
+`POST /v1/pipeline-runs/:id/cancel` blocks subsequent provider requests and retains in-flight responses. The run-status contract exposes `stop.state` as `stopping` until dedicated stage locks are released, then `stopped`. The admin panel polls through draining, offers Stop on active runs and disables resume during draining.
+
+DataForSEO SERP status 40102 is a persisted terminal `no_results` outcome. Other submitted tasks are collected and terminal tasks are not polled or submitted again. Missing results produce a non-retryable failure with a count and at most 20 affected query examples; no rankings or forecast values are manufactured. Migration `037_pipeline_recovery` supplies retry offsets, dispatcher generations, bounded project activity lookup and the API's narrow provider-checkpoint update grants. `test:gcp-pipeline-recovery` covers these contracts against PostgreSQL with synthetic provider responses.
+
 The exact synthetic coverage and its limits are recorded in `docs/migration/LOCAL_SYNTHETIC_ACCEPTANCE.md`.

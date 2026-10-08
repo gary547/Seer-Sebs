@@ -9,6 +9,7 @@ import {
   Play,
   RotateCcw,
   ShieldCheck,
+  Square,
   TriangleAlert,
   Workflow,
 } from "lucide-react";
@@ -119,6 +120,8 @@ interface Props {
   hasCompletedRun?: boolean;
   onSaveBrandTerms: (brandTerms: string[]) => Promise<void>;
   onRun: (mode: RunMode) => Promise<void>;
+  onStop?: () => Promise<void>;
+  stopping?: boolean;
   onSavePolicy: (policy: PipelineReadiness["policy"]) => Promise<void>;
   onStampPrecurated: () => Promise<void>;
   readiness: PipelineReadiness | undefined;
@@ -134,6 +137,8 @@ export default function AutonomousPipelinePanel({
   hasCompletedRun = false,
   onSaveBrandTerms,
   onRun,
+  onStop,
+  stopping = false,
   onSavePolicy,
   onStampPrecurated,
   readiness,
@@ -151,9 +156,12 @@ export default function AutonomousPipelinePanel({
   const displayedCompetitiveFloor =
     competitiveFloor ??
     String(readiness?.policy.competitiveEnrichmentVolumeFloor ?? 0);
-  const canRun = Boolean(readiness?.ready) && !archived && !running;
+  const active = run?.status === "pending" || run?.status === "running" || run?.stop?.state === "stopping";
+  const canRun = Boolean(readiness?.ready) && !archived && !running && !active && !stopping;
   const canRestoreQualification = hasCompletedRun && readiness?.missing.length === 1 && readiness.missing[0] === "qualified_keywords";
-  const canRecalculate = (Boolean(readiness?.ready) || canRestoreQualification) && !archived && !running;
+  const canRecalculate = (Boolean(readiness?.ready) || canRestoreQualification) && !archived && !running && !active && !stopping;
+  const recoveredStageCount = run?.input && typeof run.input === "object" && "recoveredStageCount" in run.input
+    ? Number(run.input.recoveredStageCount) : 0;
   const configuredBrandTerms = readiness?.configuration.explicitBrandTerms ?? [];
   const displayedBrandTerms = configuredBrandTerms.length
     ? configuredBrandTerms
@@ -179,7 +187,9 @@ export default function AutonomousPipelinePanel({
           <div className="flex items-center gap-2 text-sm font-semibold text-ink">
             <Workflow className="h-4 w-4 text-signal" />
             Autonomous forecast pipeline
+            {run?.stop ? <Badge variant="outline">{run.stop.state === "stopping" ? "Stopping" : "Stopped"}</Badge> : null}
           </div>
+          {recoveredStageCount > 0 ? <p className="mt-2 text-xs font-medium text-signal">Resumed run · {recoveredStageCount} completed stages reused</p> : null}
           <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-muted">
             Intake and qualification feed four parallel tracks. HAR and Revenue
             start only after their required inputs pass formal readiness checks.
@@ -391,6 +401,13 @@ export default function AutonomousPipelinePanel({
                     <p className="mt-1 text-[11px] leading-5 text-ink-muted">
                       {stage ? pipelineActivityMessage(stage) : "Waiting to start"}
                     </p>
+                    {stage?.output?.providerDiagnostics && typeof stage.output.providerDiagnostics === "object" && "noResultCount" in stage.output.providerDiagnostics ? (
+                      <p className="mt-1 text-[11px] leading-5 text-destructive">
+                        Search results unavailable for {String(stage.output.providerDiagnostics.noResultCount)} queries.
+                        {"sampleKeywords" in stage.output.providerDiagnostics && Array.isArray(stage.output.providerDiagnostics.sampleKeywords)
+                          ? ` Examples: ${stage.output.providerDiagnostics.sampleKeywords.filter((keyword): keyword is string => typeof keyword === "string").slice(0, 20).join(", ")}` : ""}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="flex flex-col justify-center gap-1">
                     <StageMeter
@@ -433,15 +450,24 @@ export default function AutonomousPipelinePanel({
                   : "Configuration must be completed before a paid run"}
               </p>
               <p className="mt-0.5 text-xs text-ink-muted">
-                Runs continue server-side and can be safely resumed after an interruption.
+                {run?.stop?.state === "stopping"
+                  ? "Stopping: in-flight requests are being saved. New provider work is blocked."
+                  : run?.stop?.state === "stopped"
+                    ? "Stopped. Resume missing work keeps completed stages and submitted tasks."
+                    : "Resume reuses compatible saved stages and provider checkpoints."}
               </p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {active && onStop ? (
+              <Button variant="destructive" disabled={archived || stopping || run?.stop?.state === "stopping"} onClick={() => void onStop()}>
+                <Square className="h-4 w-4" /> {stopping || run?.stop?.state === "stopping" ? "Stopping…" : "Stop pipeline"}
+              </Button>
+            ) : null}
             <Button disabled={!canRun} variant="signal" onClick={() => void onRun("full")}>
               <Play className="h-4 w-4" /> Full pipeline
             </Button>
-            <Button disabled={!canRun} variant="outline" onClick={() => void onRun("resume")}>
+            <Button disabled={!canRun || run?.status !== "failed"} variant="outline" onClick={() => void onRun("resume")}>
               <RotateCcw className="h-4 w-4" /> Resume missing work
             </Button>
             <Button

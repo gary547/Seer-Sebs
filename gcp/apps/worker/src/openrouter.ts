@@ -5,6 +5,7 @@ import { normaliseKeyword } from "../../../packages/fixtures/src/representative-
 import { HttpError } from "../../../packages/runtime/src/http.js";
 import { LEGACY_PIPELINE_AI_MODEL, PIPELINE_AI_MODEL, PIPELINE_AI_MODEL_LABEL, type PipelineAiModel } from "../../../packages/pipeline/src/ai-model.js";
 import { StageContinuation } from "./stage-continuation.js";
+import { checkProviderRunActive } from "./run-control.js";
 
 export const OPENROUTER_MODEL = PIPELINE_AI_MODEL;
 export const OPENROUTER_MAX_ATTEMPTS = 30;
@@ -270,11 +271,13 @@ export class OpenRouterPipelineClient {
       pending.push({ batch, run: async () => {
         for (let deliveryAttempt = 1; deliveryAttempt <= OPENROUTER_MAX_ATTEMPTS; deliveryAttempt += 1) {
           checkDeadline();
+          await checkProviderRunActive();
           const attempt = await options.cache?.startAttempt?.(key) ?? deliveryAttempt;
           if (attempt > OPENROUTER_MAX_ATTEMPTS) break;
           await report(batch + 1, attempt, attempt === 1 ? "running" : "retrying");
           if (attempt > 1) await this.wait(OPENROUTER_RETRY_WAIT_MS);
           if (stopped) throw stopped;
+          await checkProviderRunActive();
           let result: unknown;
           let values: T[];
           try {

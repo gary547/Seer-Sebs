@@ -15,6 +15,7 @@ const LEASE_SECONDS = 1800;
 const WORKER_TIMEOUT_MS = 1_700_000;
 
 interface RunRow {
+  generation?: number;
   id: string;
 }
 
@@ -24,6 +25,7 @@ interface StageRow {
 }
 
 interface TaskRow {
+  generation?: number;
   attempt_count: number;
   id: string;
   run_id: string;
@@ -62,7 +64,7 @@ export async function fetchMetadataIdentityToken(audience: string): Promise<stri
   return token;
 }
 
-async function scheduleRun(client: PoolClient, runId: string): Promise<number> {
+async function scheduleRun(client: PoolClient, runId: string, generation = 0): Promise<number> {
   const stageResult = await client.query<StageRow>(
     `
       SELECT stage_id, state
@@ -93,12 +95,12 @@ async function scheduleRun(client: PoolClient, runId: string): Promise<number> {
         INSERT INTO local_task_queue (
           idempotency_key,
           run_id,
-          stage_id
+          stage_id, generation
         )
-        VALUES ($1, $2, $3)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (idempotency_key) DO NOTHING
       `,
-      [`${runId}:${definition.id}`, runId, definition.id],
+      [`${runId}:${definition.id}:${generation}`, runId, definition.id, generation],
     );
 
     if ((taskResult.rowCount ?? 0) === 0) {
@@ -125,7 +127,7 @@ export async function scheduleReadyStages(pool: DatabasePool): Promise<number> {
   return withTransaction(pool, async (client) => {
     const runResult = await client.query<RunRow>(
       `
-        SELECT id
+        SELECT id, COALESCE((input->>'generation')::int, 0) AS generation
         FROM pipeline_runs
         WHERE status IN ('pending', 'running')
           AND EXISTS (
@@ -142,7 +144,7 @@ export async function scheduleReadyStages(pool: DatabasePool): Promise<number> {
     let scheduled = 0;
 
     for (const run of runResult.rows) {
-      scheduled += await scheduleRun(client, run.id);
+      scheduled += await scheduleRun(client, run.id, run.generation);
     }
 
     return scheduled;
@@ -180,6 +182,7 @@ export async function claimTask(
           WHERE task.state = 'ready'
             AND task.available_at <= now()
             AND run.status IN ('pending', 'running')
+            AND task.generation = COALESCE((run.input->>'generation')::int, 0)
           ORDER BY task.id
           LIMIT 1
           FOR UPDATE SKIP LOCKED
@@ -195,7 +198,7 @@ export async function claimTask(
           task.id::text,
           task.run_id,
           task.stage_id,
-          task.attempt_count
+          task.attempt_count, task.generation
       `,
       [leaseOwner, LEASE_SECONDS],
     );
@@ -226,8 +229,9 @@ async function retryOrFailTask(
   terminal = false,
 ): Promise<void> {
   await withTransaction(pool, async (client) => {
-    const run = await client.query<{ status: string }>(
-      `SELECT status FROM pipeline_runs WHERE id = $1 FOR UPDATE`, [task.run_id]);
+    const run = await client.query<{ status: string; generation: number }>(
+      `SELECT status, COALESCE((input->>'generation')::int, 0) AS generation FROM pipeline_runs WHERE id = $1 FOR UPDATE`, [task.run_id]);
+    if ((run.rows[0]?.generation ?? 0) !== (task.generation ?? 0)) return;
     if (run.rows[0]?.status === 'failed' || run.rows[0]?.status === 'succeeded') return;
     if (!terminal && task.attempt_count < MAXIMUM_ATTEMPTS) {
       await client.query(
@@ -315,6 +319,7 @@ export async function dispatchTask(
       : config.internalToken;
     const response = await fetch(`${config.workerUrl}/internal/tasks`, {
       body: JSON.stringify({
+        generation: task.generation ?? 0,
         runId: task.run_id,
         stageId: task.stage_id,
         taskId: task.id,

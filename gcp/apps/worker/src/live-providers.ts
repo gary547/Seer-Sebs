@@ -11,6 +11,7 @@ import { INTENT_CLASSIFICATION_VERSION, OpenRouterPipelineClient, OPENROUTER_MOD
 import { classificationCache } from "./classification-cache.js";
 import { PIPELINE_AI_MODEL_LABEL } from "../../../packages/pipeline/src/ai-model.js";
 import { StageContinuation, STAGE_EXECUTION_BUDGET_MS } from "./stage-continuation.js";
+import { checkProviderRunActive } from "./run-control.js";
 
 interface ProjectProviderRow {
   country: string | null;
@@ -56,6 +57,8 @@ interface SerpResult {
 }
 
 interface SerpSnapshot {
+  outcome?: "no_results";
+  statusCode?: number;
   features: string[];
   results: SerpResult[];
 }
@@ -181,18 +184,20 @@ async function concurrently<T, R>(
 ): Promise<R[]> {
   const results = new Array<R>(values.length);
   let index = 0;
+  let failure: unknown;
   await Promise.all(
     Array.from(
       { length: Math.min(concurrency, Math.max(values.length, 1)) },
       async () => {
-        while (index < values.length) {
+        while (!failure && index < values.length) {
           const current = index;
           index += 1;
-          results[current] = await operation(values[current]!);
+          try { results[current] = await operation(values[current]!); } catch (error) { failure ??= error; }
         }
       },
     ),
   );
+  if (failure) throw failure;
   return results;
 }
 
@@ -256,6 +261,7 @@ class ProviderHttpClient {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       checkBudget?.(120_000);
+      await checkProviderRunActive();
       let retryAfterMilliseconds: number | null = null;
       try {
         const response = await this.fetchImplementation(url, {
@@ -426,6 +432,7 @@ export class DataForSeoClient {
     try {
       return await this.liveItems(path, task);
     } catch (error) {
+      if (error instanceof HttpError && error.code === "pipeline_stopped") throw error;
       console.warn("Optional DataForSEO enrichment is unavailable.", {
         endpoint: path,
         reason: error instanceof Error ? error.message : String(error),
@@ -480,7 +487,7 @@ export class DataForSeoClient {
       language_code: languageCode(language),
       ...locationTarget(country),
     };
-    const [volumeItems, historicalItems, difficultyItems, intentItems] = await Promise.all([
+    const requests = await Promise.allSettled([
       this.liveItems(
         "/v3/keywords_data/google_ads/search_volume/live",
         request,
@@ -498,6 +505,9 @@ export class DataForSeoClient {
         language_code: languageCode(language),
       }),
     ]);
+    const rejected = requests.find(request => request.status === "rejected");
+    if (rejected?.status === "rejected") throw rejected.reason;
+    const [volumeItems = [], historicalItems = [], difficultyItems = [], intentItems = []] = requests.map(request => request.status === "fulfilled" ? request.value : []);
     for (const keyword of group) {
       if (!result.has(normaliseKeyword(keyword))) {
         result.set(normaliseKeyword(keyword), emptyEnrichment(keyword));
@@ -698,6 +708,7 @@ export class DataForSeoClient {
     const task = records(raw.tasks)[0];
     const code = numberOrNull(task?.status_code);
     if (code === 40601 || code === 40602) return "pending";
+    if (code === 40102 && numberOrNull(raw.status_code) === 20000) return { features: [], results: [], outcome: "no_results", statusCode: 40102 };
     const items = dataForSeoItems(raw);
     const results = items
       .filter((item) => item.type === "organic")
@@ -852,7 +863,7 @@ export class DataForSeoAuthorityClient {
     } catch (error) {
       if (error === checkpointFailure) throw error;
       await savePages();
-      if (error instanceof StageContinuation) throw error;
+      if (error instanceof StageContinuation || (error instanceof HttpError && error.code === "pipeline_stopped")) throw error;
       throw backlinksFailure(error);
     }
     return output;
@@ -910,7 +921,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
              VALUES ($1, $2, $3, $4, 'openrouter', 'pending', 1)
              ON CONFLICT (pipeline_run_id, stage_id, item_key) DO UPDATE
              SET attempt_count = provider_work_items.attempt_count + 1, updated_at = now()
-             RETURNING attempt_count`, [runId, projectId, stageId, key]);
+             RETURNING attempt_count - attempt_offset AS attempt_count`, [runId, projectId, stageId, key]);
           return result.rows[0]!.attempt_count;
         },
         get: async (key) => {
@@ -938,8 +949,10 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
           : ` Batch ${progress.batch}, attempt ${progress.attempt}/${progress.maxAttempts}${progress.phase === "retrying" ? "; retrying in 2s" : ""}.`;
         await pool.query(
           `UPDATE pipeline_stage_runs SET output = COALESCE(output, '{}'::jsonb) ||
-             jsonb_build_object('message', $3::text, 'provider', 'openrouter', 'model', $4::text, 'providerProgress', $5::jsonb)
-           WHERE run_id = $1 AND stage_id = $2 AND state = 'running'`,
+             jsonb_build_object('provider', 'openrouter', 'model', $4::text, 'providerProgress', $5::jsonb) ||
+             CASE WHEN state = 'running' THEN jsonb_build_object('message', $3::text) ELSE '{}'::jsonb END
+           WHERE run_id = $1 AND stage_id = $2
+             AND (state = 'running' OR output->>'reason' IN ('pipeline_cancelled', 'pipeline_blocked'))`,
           [runId, stageId, `${PIPELINE_AI_MODEL_LABEL}: ${progress.operation}, ${progress.completedBatches}/${progress.batchCount} batches complete, ${progress.activeBatches} in parallel.${activity}`, OPENROUTER_MODEL, JSON.stringify(progress)]);
       },
     };
@@ -1256,7 +1269,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       ),
     ]);
     const keywords = keywordResult.rows;
-    if (keywords.length === 0) return;
+    if (keywords.length === 0) { await this.assertSerpResults(pool, runId); return; }
     for (const group of batches(keywords, 2_000)) {
       await pool.query(
         `
@@ -1287,9 +1300,13 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     );
     const deadline = this.now() + this.serpHydrationBudgetMs;
     while (this.now() < deadline) {
+      await checkProviderRunActive();
       const work = await this.serpWork(pool, runId);
       const remaining = work.filter((item) => item.state !== "succeeded");
-      if (remaining.length === 0) return;
+      if (remaining.length === 0) {
+        await this.assertSerpResults(pool, runId);
+        return;
+      }
       if (remaining.some((item) => item.state === "failed")) {
         throw new Error("A DataForSEO SERP work item failed.");
       }
@@ -1337,6 +1354,7 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
     const leftover = (await this.serpWork(pool, runId)).filter(
       (item) => item.state !== "succeeded",
     ).length;
+    if (leftover === 0) await this.assertSerpResults(pool, runId);
     if (leftover > 0) {
       throw new HttpError(
         503,
@@ -1344,6 +1362,23 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
         `SERP collection paused after persisting progress. ${leftover} keywords remaining.`,
       );
     }
+  }
+
+  private async assertSerpResults(pool: DatabasePool, runId: string): Promise<void> {
+    const result = await pool.query<{ count: string; keywords: string[] }>(
+      `SELECT count(*)::text AS count,
+         ARRAY(SELECT item_key FROM provider_work_items WHERE pipeline_run_id = $1
+           AND stage_id = 'serp-collection' AND result->>'outcome' = 'no_results' ORDER BY item_key LIMIT 20) AS keywords
+       FROM provider_work_items WHERE pipeline_run_id = $1 AND stage_id = 'serp-collection'
+         AND result->>'outcome' = 'no_results'`, [runId]);
+    const diagnostic = result.rows[0];
+    if (Number(diagnostic?.count ?? 0) === 0) return;
+    await pool.query(
+      `UPDATE pipeline_stage_runs SET output = COALESCE(output, '{}'::jsonb) ||
+         jsonb_build_object('providerDiagnostics', $2::jsonb)
+       WHERE run_id = $1 AND stage_id = 'serp-collection' AND state = 'running'`,
+      [runId, JSON.stringify({ noResultCount: Number(diagnostic!.count), sampleKeywords: diagnostic!.keywords, statusCode: 40102 })]);
+    throw new HttpError(422, "dataforseo_no_search_results", "DataForSEO returned no search results for retained keywords. Review SERP diagnostics before resuming; completed searches are saved.");
   }
 
   private async submitSerpChunk(
@@ -1541,12 +1576,13 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
             state = 'succeeded',
             completed_at = now(),
             updated_at = now(),
-            last_error = NULL
+            last_error = NULL,
+            result = $3::jsonb
           WHERE pipeline_run_id = $1
             AND stage_id = 'serp-collection'
             AND item_key = $2
         `,
-        [runId, keyword.normalised_keyword],
+        [runId, keyword.normalised_keyword, JSON.stringify(snapshot)],
       );
     });
   }
@@ -1719,9 +1755,10 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       const done = saved.size;
       await pool.query(
         `UPDATE pipeline_stage_runs
-         SET output = COALESCE(output, '{}'::jsonb) ||
-           jsonb_build_object('message', $2::text, 'providerProgress', $3::jsonb)
-         WHERE run_id = $1 AND stage_id = 'backlinks' AND state = 'running'`,
+         SET output = COALESCE(output, '{}'::jsonb) || jsonb_build_object('providerProgress', $3::jsonb) ||
+           CASE WHEN state = 'running' THEN jsonb_build_object('message', $2::text) ELSE '{}'::jsonb END
+         WHERE run_id = $1 AND stage_id = 'backlinks'
+           AND (state = 'running' OR output->>'reason' IN ('pipeline_cancelled', 'pipeline_blocked'))`,
         [runId,
           `DataForSEO Backlinks: ${done} of ${urls.length} URLs saved; remaining work resumes automatically.`,
           JSON.stringify({ provider: "dataforseo_backlinks", unit: "items", batch: Math.min(done + 1, urls.length),

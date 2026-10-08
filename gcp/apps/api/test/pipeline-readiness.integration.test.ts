@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
+import { PIPELINE_STAGES } from "../../../packages/pipeline/src/definition.js";
 import { createApiServer } from "../src/server.js";
 
 const userId = "00000000-0000-4000-8000-000000000001";
@@ -11,6 +12,11 @@ const clientId = "00000000-0000-4000-8000-000000000003";
 const successfulRunId = "00000000-0000-4000-8000-000000000004";
 let readinessOverrides: Record<string, unknown> = {};
 let completedQualification = true;
+const failedRunId = "00000000-0000-4000-8000-000000000006";
+let hasCheckpoint = false;
+let changedInputs = false;
+let idle = true;
+let recoveryWrites: string[] = [];
 
 function result(rows: unknown[], rowCount = rows.length) {
   return { rowCount, rows };
@@ -95,6 +101,11 @@ function database(): DatabasePool {
     if (sql.includes("FROM pipeline_runs") && sql.includes("status IN ('pending', 'running')")) {
       return result([]);
     }
+    if (sql.includes("AS checkpoint")) return result([{ checkpoint: { lastDirtyAt: changedInputs ? "2026-10-08T00:00:00Z" : null, latestUploadAt: null, clientChangedAt: null } }]);
+    if (sql.includes("AS completed_count")) return result(hasCheckpoint ? [{ id: failedRunId, input: { mode: "full", projectId }, created_at: new Date("2026-10-07T00:00:00Z"), completed_count: 2 }] : []);
+    if (sql.includes("AS idle")) return result([{ idle }]);
+    if (sql.includes("SELECT stage_id, state, output")) return result(PIPELINE_STAGES.map((stage, index) => ({ stage_id: stage.id, state: index < 2 ? "succeeded" : "failed", output: { preserved: stage.id } })));
+    if (sql.startsWith("UPDATE pipeline") || sql.startsWith("UPDATE provider_work_items")) { recoveryWrites.push(sql); return result([], 1); }
     if (sql.startsWith("INSERT INTO pipeline_runs")) return result([], 1);
     if (sql.startsWith("INSERT INTO pipeline_stage_runs")) return result([], 1);
     throw new Error(`Unexpected SQL in pipeline readiness test: ${sql}`);
@@ -111,6 +122,7 @@ describe("autonomous pipeline readiness API", () => {
   beforeEach(async () => {
     readinessOverrides = {};
     completedQualification = true;
+    hasCheckpoint = false; changedInputs = false; idle = true; recoveryWrites = [];
     orchestrator.start.mockClear();
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({ email: "admin@example.com", id: userId })),
@@ -205,7 +217,7 @@ describe("autonomous pipeline readiness API", () => {
     expect(orchestrator.start).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
   });
 
-  it("persists operator thresholds and starts a server-side run in the requested mode", async () => {
+  it("persists operator thresholds and starts a server-side full run", async () => {
     const policy = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-readiness`, {
       body: JSON.stringify({ competitiveEnrichmentVolumeFloor: 500, gscPromotionImpressionsFloor: 25 }),
       headers: { "content-type": "application/json" },
@@ -214,7 +226,7 @@ describe("autonomous pipeline readiness API", () => {
     expect(policy.status).toBe(200);
 
     const run = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-runs`, {
-      body: JSON.stringify({ mode: "resume" }),
+      body: JSON.stringify({ mode: "full" }),
       headers: { "content-type": "application/json" },
       method: "POST",
     });
@@ -227,4 +239,26 @@ describe("autonomous pipeline readiness API", () => {
     expect(orchestrator.start).toHaveBeenCalledOnce();
     expect(orchestrator.start).not.toHaveBeenCalledWith(successfulRunId);
   });
+  it("resumes a failed run and starts another execution with its saved stages", async () => {
+    hasCheckpoint = true;
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-runs`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "resume", sourceRunId: failedRunId }),
+    });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ id: failedRunId, resumed: true, recoveredStageCount: 2, generation: 1, startExecution: true });
+    expect(orchestrator.start).toHaveBeenCalledWith(failedRunId, 1);
+    expect(recoveryWrites.find(sql => sql.startsWith("UPDATE pipeline_stage_runs"))).toContain("state <> 'succeeded'");
+    expect(recoveryWrites.find(sql => sql.startsWith("UPDATE provider_work_items"))).toContain("provider_task_id IS NOT NULL THEN 'submitted'");
+  });
+
+  it.each(["missing", "changed", "draining"])("rejects %s checkpoints without starting paid work", async kind => {
+    hasCheckpoint = kind !== "missing"; changedInputs = kind === "changed"; idle = kind !== "draining";
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-runs`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "resume" }),
+    });
+    expect(response.status).toBe(409);
+    expect(orchestrator.start).not.toHaveBeenCalled();
+    expect(recoveryWrites).toHaveLength(0);
+  });
+
 });

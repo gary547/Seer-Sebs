@@ -13,6 +13,7 @@ import {
 import { userFacingPipelineFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertProjectAccessByRole } from "./authorization.js";
+import { lockIdleRun, projectCheckpoint, recoverPipelineRun } from "./pipeline-recovery.js";
 import {
   buildStageProgress,
   type StageWorkCounts,
@@ -591,6 +592,8 @@ export async function createPipelineRun(
   let id: string = randomUUID();
   let resumed = false;
   let status = "pending";
+  let generation = 0;
+  let recovery: Record<string, unknown> | undefined;
 
   await withTransaction(pool, async (client) => {
     if (projectId) {
@@ -625,9 +628,9 @@ export async function createPipelineRun(
         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
         [projectId],
       );
-      const existing = await client.query<{ id: string; status: string }>(
+      const existing = await client.query<{ id: string; status: string; generation: number }>(
         `
-          SELECT id, status
+          SELECT id, status, COALESCE((input->>'generation')::int, 0) AS generation
           FROM pipeline_runs
           WHERE input->>'projectId' = $1
             AND status IN ('pending', 'running')
@@ -639,9 +642,16 @@ export async function createPipelineRun(
       if (existing.rows[0]) {
         id = existing.rows[0].id;
         status = existing.rows[0].status;
+        generation = existing.rows[0].generation;
         resumed = true;
         return;
       }
+      const checkpoint = await projectCheckpoint(client, projectId);
+      if (mode === "resume") {
+        recovery = await recoverPipelineRun(client, projectId, checkpoint, typeof input.sourceRunId === "string" ? input.sourceRunId : undefined);
+        return;
+      }
+      input.checkpoint = checkpoint;
     }
     await client.query(
       `
@@ -653,7 +663,10 @@ export async function createPipelineRun(
     await insertStages(client, id);
   });
 
+  if (recovery) return recovery;
   return {
+    startExecution: !resumed,
+    generation,
     id,
     resumed,
     stageCount: PIPELINE_STAGES.length,
@@ -720,6 +733,7 @@ export async function getPipelineRun(
               'failedStage', output->>'failedStage',
               'message', left(output->>'message', 500),
               'providerProgress', output->'providerProgress',
+              'providerDiagnostics', output->'providerDiagnostics',
               'reason', output->>'reason'
             ))
             ELSE NULL
@@ -822,7 +836,12 @@ export async function getPipelineRun(
     };
   });
 
+  const stopRequestedAt = outputRecord(run.input)?.stopRequestedAt;
+  const stop = typeof stopRequestedAt === "string"
+    ? { requestedAt: stopRequestedAt, state: await withTransaction(pool, client => lockIdleRun(client, id)) ? "stopped" : "stopping" }
+    : null;
   return {
+    stop,
     completedAt: run.completed_at?.toISOString() ?? null,
     createdAt: run.created_at.toISOString(),
     deliveredEventCount: Number(eventResult.rows[0]?.count ?? "0"),
@@ -888,7 +907,7 @@ export async function cancelPipelineRun(
   pool: DatabasePool,
   user: AuthenticatedUser,
   id: string,
-  reason = "Cancelled by operator.",
+  reason = "Stopped by operator. In-flight requests are saved; completed work is retained for resume.",
 ): Promise<Record<string, unknown>> {
   const run = await loadAuthorizedPipelineRun(pool, user, id);
   const input =
@@ -902,6 +921,9 @@ export async function cancelPipelineRun(
   }
 
   await withTransaction(pool, async (client) => {
+    const current = await client.query<{ status: string }>(`SELECT status FROM pipeline_runs WHERE id = $1 FOR UPDATE`, [id]);
+    if (current.rows[0]?.status === "failed") return;
+    if (!["pending", "running"].includes(current.rows[0]?.status ?? "")) throw new HttpError(409, "pipeline_run_not_cancellable", "Only active runs can be stopped.");
     const stages = await client.query<{ stage_id: PipelineStageId; state: string }>(
       `
         SELECT stage_id, state
@@ -920,14 +942,12 @@ export async function cancelPipelineRun(
       `
         UPDATE pipeline_stage_runs
         SET state = 'failed',
-            output = COALESCE(
-              output,
+            output = COALESCE(output, '{}'::jsonb) ||
               jsonb_build_object(
                 'reason', 'pipeline_cancelled',
                 'failedStage', $2::text,
                 'message', $3::text
-              )
-            ),
+              ),
             completed_at = COALESCE(completed_at, now())
         WHERE run_id = $1
           AND state <> 'succeeded'
@@ -938,6 +958,7 @@ export async function cancelPipelineRun(
       `
         UPDATE pipeline_runs
         SET status = 'failed',
+            input = input || jsonb_build_object('stopRequestedAt', now()),
             completed_at = COALESCE(completed_at, now())
         WHERE id = $1
           AND status IN ('pending', 'running')
@@ -968,7 +989,7 @@ export async function getLatestProjectPipelineRun(
       SELECT id
       FROM pipeline_runs
       WHERE input->>'projectId' = $1
-      ORDER BY created_at DESC, id DESC
+      ORDER BY last_activity_at DESC, id DESC
       LIMIT 1
     `,
     [projectId],

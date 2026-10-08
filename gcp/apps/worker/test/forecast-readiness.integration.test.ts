@@ -34,6 +34,7 @@ describe("forecast completeness task delivery", () => {
       if (sql.includes("SELECT state")) return { rows: [{ state: "pending" }], rowCount: 1 };
       if (sql.includes("SELECT stage_id, state")) return { rows: definition.dependencies.map(id => ({ stage_id: id, state: "succeeded" })), rowCount: definition.dependencies.length };
       if (sql.includes("RETURNING attempts")) return { rows: [{ attempts: 1 }], rowCount: 1 };
+      if (sql.includes("SELECT status")) return { rows: [{ status: "running", generation: 0 }], rowCount: 1 };
       if (sql.includes("SELECT input")) return { rows: [{ input: { fixture } }], rowCount: 1 };
       if (sql.includes("SELECT stage_id, output")) return { rows: definition.dependencies.map(id => ({ stage_id: id, output: outputs[id] })), rowCount: definition.dependencies.length };
       return { rows: [], rowCount: 1 };

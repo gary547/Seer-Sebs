@@ -111,6 +111,38 @@ function pipelineRun(): PipelineRun {
 }
 
 describe("AutonomousPipelinePanel", () => {
+  it("offers stop on an active run and prevents a second start", () => {
+    const onStop = vi.fn();
+    render(<AutonomousPipelinePanel archived={false} onStop={onStop}
+      onRun={vi.fn()} onSaveBrandTerms={vi.fn()} onSavePolicy={vi.fn()} onStampPrecurated={vi.fn()}
+      readiness={readiness} run={pipelineRun()} running={false}
+      savingBrandTerms={false} savingPolicy={false} stampingPrecurated={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Stop pipeline" }));
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Full pipeline" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Resume missing work" })).toBeDisabled();
+  });
+  it("shows draining and reused checkpoints while resume remains disabled", () => {
+    const run = { ...pipelineRun(), status: "failed" as const, input: { recoveredStageCount: 13 },
+      stop: { requestedAt: "2026-10-08T10:00:00Z", state: "stopping" as const } };
+    render(<AutonomousPipelinePanel archived={false} onStop={vi.fn()}
+      onRun={vi.fn()} onSaveBrandTerms={vi.fn()} onSavePolicy={vi.fn()} onStampPrecurated={vi.fn()}
+      readiness={readiness} run={run} running={false}
+      savingBrandTerms={false} savingPolicy={false} stampingPrecurated={false} />);
+    expect(screen.getByText("Resumed run · 13 completed stages reused")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Resume missing work" })).toBeDisabled();
+  });
+  it("shows the affected queries when DataForSEO has no search results", () => {
+    const run = pipelineRun();
+    run.status = "failed";
+    run.stages.find(stage => stage.id === "serp-collection")!.output = { providerDiagnostics: { noResultCount: 2, sampleKeywords: ["missing search", "another search"] } };
+    render(<AutonomousPipelinePanel archived={false}
+      onRun={vi.fn()} onSaveBrandTerms={vi.fn()} onSavePolicy={vi.fn()} onStampPrecurated={vi.fn()}
+      readiness={readiness} run={run} running={false}
+      savingBrandTerms={false} savingPolicy={false} stampingPrecurated={false} />);
+    expect(screen.getByText(/Search results unavailable for 2 queries.*missing search, another search/)).toBeInTheDocument();
+  });
   it.each([false, true])("allows recovery after a failed recalculation only with a completed baseline: %s", (hasCompletedRun) => {
     const onRun = vi.fn();
     render(<AutonomousPipelinePanel archived={false} hasCompletedRun={hasCompletedRun}

@@ -55,8 +55,8 @@ describe("pipeline failure recording", () => {
       if (sql.includes("SELECT state")) return { rows: [{ state: "running" }], rowCount: 1 };
       if (sql.includes("SELECT stage_id, state")) return { rows: [{ stage_id: "intake", state: "running" }], rowCount: 1 };
       if (sql.includes("RETURNING attempts")) return { rows: [{ attempts: 1 }], rowCount: 1 };
+      if (sql.includes("SELECT status")) return { rows: [{ status: "running", generation: 0 }], rowCount: 1 };
       if (sql.includes("SELECT input")) return { rows: [{ input: {} }], rowCount: 1 };
-      if (sql.includes("SELECT status")) return { rows: [{ status: "running" }], rowCount: 1 };
       if (sql.includes("SET state = 'succeeded'")) throw Object.assign(new Error("private error"), { code: "54000" });
       return { rows: [], rowCount: 1 };
     });
@@ -90,6 +90,7 @@ describe("pipeline failure recording", () => {
       if (sql.includes("SELECT state")) return { rows: [{ state: "running" }], rowCount: 1 };
       if (sql.includes("SELECT stage_id, state")) return { rows: [{ stage_id: "calibration", state: "running" }, { stage_id: "revenue-v2", state: "succeeded" }], rowCount: 2 };
       if (sql.includes("RETURNING attempts")) return { rows: [{ attempts: 1 }], rowCount: 1 };
+      if (sql.includes("SELECT status")) return { rows: [{ status: "running", generation: 0 }], rowCount: 1 };
       if (sql.includes("SELECT input")) return { rows: [{ input: {} }], rowCount: 1 };
       if (sql.includes("SELECT stage_id, output")) return { rows: [{ stage_id: "revenue-v2", output: {} }], rowCount: 1 };
       if (sql.includes("count(*)::text")) return { rows: [{ count: "1" }], rowCount: 1 };
@@ -110,6 +111,7 @@ describe("pipeline failure recording", () => {
       if (sql.includes("SELECT state")) return { rows: [{ state: "running" }], rowCount: 1 };
       if (sql.includes("SELECT stage_id, state")) return { rows: [{ stage_id: "intake", state: "running" }], rowCount: 1 };
       if (sql.includes("RETURNING attempts")) return { rows: [{ attempts: 1 }], rowCount: 1 };
+      if (sql.includes("SELECT status")) return { rows: [{ status: "running", generation: 0 }], rowCount: 1 };
       if (sql.includes("SELECT input")) return { rows: [{ input: {} }], rowCount: 1 };
       if (sql.includes("count(*)::text")) return { rows: [{ count: "23" }], rowCount: 1 };
       return { rows: [], rowCount: 1 };
@@ -141,7 +143,7 @@ describe("pipeline failure recording", () => {
       query: async (sqlValue: string, params: unknown[] = []) => {
         const sql = sqlValue.replace(/\s+/g, " ").trim();
         queries.push({ params, sql });
-        if (sql.startsWith("SELECT status FROM pipeline_runs")) return { rows: [{ status: "running" }], rowCount: 1 };
+        if (sql.startsWith("SELECT status, COALESCE")) return { rows: [{ status: "running", generation: 0 }], rowCount: 1 };
         return {
           rowCount: sql.startsWith("UPDATE pipeline_runs") ? 1 : null,
           rows: [],
@@ -170,7 +172,7 @@ describe("pipeline failure recording", () => {
 
   it("does not overwrite the first failure when a parallel stage subsequently fails", async () => {
     const query = vi.fn(async (sql: string) => {
-      if (sql.includes("SELECT status FROM pipeline_runs")) return { rows: [{ status: "failed" }], rowCount: 1 };
+      if (sql.includes("SELECT status, COALESCE")) return { rows: [{ status: "failed", generation: 0 }], rowCount: 1 };
       if (sql.includes("AS failed_stage")) return { rows: [{ failed_stage: "backlinks" }], rowCount: 1 };
       return { rows: [], rowCount: 0 };
     });
@@ -181,7 +183,7 @@ describe("pipeline failure recording", () => {
   });
 
   it("explains temporary provider failures without incorrectly blaming access", async () => {
-    const query = vi.fn(async (sql: string) => ({ rows: sql.includes("SELECT status") ? [{ status: "running" }] : [], rowCount: 1 }));
+    const query = vi.fn(async (sql: string) => ({ rows: sql.includes("SELECT status") ? [{ status: "running", generation: 0 }] : [], rowCount: 1 }));
     const pool = { connect: async () => ({ query, release: vi.fn() }) } as unknown as DatabasePool;
     await failPipelineRun(pool, { runId: "run", stageId: "backlinks", reason: '{"code":"dataforseo_backlinks_unavailable","status":500}' });
     const update = query.mock.calls.find(([sql]) => sql.includes("UPDATE pipeline_stage_runs"));

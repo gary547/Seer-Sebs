@@ -66,6 +66,7 @@ export interface PipelineRunFailure {
 }
 
 export interface PipelineRun {
+  stop?: { requestedAt: string; state: "stopping" | "stopped" } | null;
   completedAt: string | null;
   createdAt: string;
   deliveredEventCount: number;
@@ -186,12 +187,17 @@ async function authenticatedRequest<T>(
 export async function startProjectPipeline(
   projectId: string,
   mode: "full" | "recalculate" | "resume" = "full",
-): Promise<{ id: string; stageCount: number; status: string }> {
+  sourceRunId?: string,
+): Promise<{ id: string; stageCount: number; status: string; recoveredStageCount?: number }> {
   return authenticatedRequest(`/v1/projects/${projectId}/pipeline-runs`, {
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify({ mode, ...(sourceRunId ? { sourceRunId } : {}) }),
     headers: { "content-type": "application/json" },
     method: "POST",
   });
+}
+
+export async function stopPipelineRun(runId: string): Promise<PipelineRun> {
+  return authenticatedRequest(`/v1/pipeline-runs/${runId}/cancel`, { method: "POST" });
 }
 
 export const PIPELINE_OUTPUT_BATCH_SIZE = 1;

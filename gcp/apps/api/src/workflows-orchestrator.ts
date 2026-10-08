@@ -4,7 +4,7 @@ import {
 } from "../../../packages/runtime/src/google-auth.js";
 
 export interface PipelineOrchestrator {
-  start(runId: string): Promise<{ executionName: string }>;
+  start(runId: string, generation?: number): Promise<{ executionName: string }>;
 }
 
 export class WorkflowsOrchestrator implements PipelineOrchestrator {
@@ -20,12 +20,12 @@ export class WorkflowsOrchestrator implements PipelineOrchestrator {
     }
   }
 
-  async start(runId: string): Promise<{ executionName: string }> {
+  async start(runId: string, generation?: number): Promise<{ executionName: string }> {
     const response = await this.fetchImplementation(
       `https://workflowexecutions.googleapis.com/v1/projects/${encodeURIComponent(this.projectId)}/locations/${encodeURIComponent(this.region)}/workflows/${encodeURIComponent(this.workflowName)}/executions`,
       {
         body: JSON.stringify({
-          argument: JSON.stringify({ runId }),
+          argument: JSON.stringify({ runId, ...(generation !== undefined ? { generation } : {}) }),
         }),
         headers: {
           authorization: `Bearer ${await this.tokenProvider.getAccessToken()}`,

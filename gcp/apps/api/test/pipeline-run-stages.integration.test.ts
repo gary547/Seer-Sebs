@@ -282,6 +282,7 @@ describe("pipeline run stage batches", () => {
       if (sql.includes("FROM provider_work_items")) {
         return result([]);
       }
+      if (sql.includes("SELECT status FROM pipeline_runs")) return result([{ status: cancelled ? "failed" : "running" }]);
       throw new Error(`Unexpected SQL in cancel test: ${sql}`);
     });
     const client = { query, release: vi.fn() };

@@ -14,25 +14,25 @@ main:
         result: internalToken
     - intake:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "intake" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "intake" }
     - gscPromotion:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "gsc-promotion" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "gsc-promotion" }
     - detox:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "detox" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "detox" }
     - categorisation:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "categorisation" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "categorisation" }
     - preflight:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "preflight" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "preflight" }
     - keywordEnrichment:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "keyword-enrichment" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "keyword-enrichment" }
     - clustering:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "clustering" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "clustering" }
     - calculationTracks:
         parallel:
           exception_policy: continueAll
@@ -41,61 +41,61 @@ main:
                 steps:
                   - brandClassification:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "brand-classification" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "brand-classification" }
                   - gscIntent:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "gsc-intent" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "gsc-intent" }
                   - ctrCurves:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "ctr-curves" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "ctr-curves" }
             - demandTrack:
                 steps:
                   - historicalVolume:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "historical-volume" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "historical-volume" }
                   - demandSignals:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "demand-signals" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "demand-signals" }
             - competitiveTrack:
                 steps:
                   - serpCollection:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "serp-collection" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "serp-collection" }
                   - authority:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "authority" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "authority" }
                   - backlinks:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "backlinks" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "backlinks" }
                   - linkPowerScore:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "link-power-score" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "link-power-score" }
             - contentTrack:
                 steps:
                   - rankingUrl:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "ranking-url" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "ranking-url" }
                   - siteArchitecture:
                       call: runStage
-                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "site-architecture" }
+                      args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "site-architecture" }
     - harReadiness:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "har-readiness" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "har-readiness" }
     - harV2:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "har-v2" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "har-v2" }
     - revenueReadiness:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "revenue-readiness" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "revenue-readiness" }
     - revenueV2:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "revenue-v2" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "revenue-v2" }
     - calibration:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "calibration" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "calibration" }
     - rollupOutput:
         call: runStage
-        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', stageId: "rollup-output" }
+        args: { internalToken: '$${internalToken}', runId: '$${args.runId}', generation: '$${default(map.get(args, "generation"), 0)}', stageId: "rollup-output" }
     - complete:
         return:
           runId: $${args.runId}
@@ -103,7 +103,7 @@ main:
           status: "succeeded"
 
 runStage:
-  params: [internalToken, runId, stageId]
+  params: [internalToken, runId, stageId, generation]
   steps:
     - deliver:
         try:
@@ -119,6 +119,7 @@ runStage:
               X-Seer-Internal-Token: $${internalToken}
             body:
               runId: $${runId}
+              generation: $${generation}
               stageId: $${stageId}
               taskId: $${runId + ":" + stageId}
           result: stageResponse
@@ -147,6 +148,7 @@ runStage:
                     body:
                       reason: $${json.encode_to_string(stageError)}
                       runId: $${runId}
+                      generation: $${generation}
                       stageId: $${stageId}
                 except:
                   as: failureRecordError

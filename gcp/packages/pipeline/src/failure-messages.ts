@@ -19,6 +19,10 @@ const TECHNICAL_FAILURE_PATTERN =
   /HTTP server responded|internal_error|x-cloud-trace|traceparent|application\/json|\b5\d\d\b|\{\s*"(?:body|code|headers|message)"/i;
 
 export function pipelineStageFailureMessage(stageId: PipelineStageId, reason = ""): string {
+  if (reason.includes("dataforseo_no_search_results")) {
+    return "DataForSEO returned no search results for retained keywords. Review SERP diagnostics and resolve those inputs before resuming; completed searches are saved.";
+  }
+  if (reason.includes("pipeline_stopped")) return "Pipeline stopped. Completed results and submitted tasks are saved for resume.";
   if (reason.includes("pipeline_output_storage_failed")) {
     return "Calculation output could not be saved or verified safely. Automatic retries stopped; previously completed stages are preserved. Contact support before resuming.";
   }

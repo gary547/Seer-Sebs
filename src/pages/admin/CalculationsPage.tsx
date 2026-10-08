@@ -37,6 +37,7 @@ import {
   markProjectKeywordsPrecurated,
   resolvePipelineFailure,
   startProjectPipeline,
+  stopPipelineRun,
   updateProjectPipelinePolicy,
   type PipelineRun,
   type PipelineReadiness,
@@ -56,6 +57,7 @@ export default function CalculationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [showArchived, setShowArchived] = useState(false);
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [savingBrandTerms, setSavingBrandTerms] = useState(false);
   const [stampingPrecurated, setStampingPrecurated] = useState(false);
@@ -93,7 +95,7 @@ export default function CalculationsPage() {
     enabled: Boolean(projectId) && !archived,
     refetchInterval: (query) => {
       const value = query.state.data as { run: PipelineRun | null } | undefined;
-      return value?.run?.status === "pending" || value?.run?.status === "running"
+      return value?.run?.status === "pending" || value?.run?.status === "running" || value?.run?.stop?.state === "stopping"
         ? 5_000
         : false;
     },
@@ -146,19 +148,34 @@ export default function CalculationsPage() {
     if (!projectId || archived || running) return;
     setRunning(true);
     try {
-      await startProjectPipeline(projectId, mode);
+      const started = await startProjectPipeline(projectId, mode);
       await refreshQueries();
       toast.success(
         mode === "recalculate"
           ? "Forecast recalculation started"
           : mode === "resume"
-            ? "Pipeline resume started"
+            ? `Pipeline resumed with ${started.recoveredStageCount ?? 0} completed stages preserved`
             : "Full autonomous pipeline started",
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Calculation run failed");
     } finally {
       setRunning(false);
+    }
+  };
+
+  const stopPipeline = async () => {
+    const run = latestPipeline.data?.run;
+    if (!run || archived || stopping) return;
+    setStopping(true);
+    try {
+      await stopPipelineRun(run.id);
+      await latestPipeline.refetch();
+      toast.success("Stop requested. In-flight requests are saved before stopping.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Pipeline could not be stopped");
+    } finally {
+      setStopping(false);
     }
   };
 
@@ -297,9 +314,9 @@ export default function CalculationsPage() {
       )}
 
       {failedStage && (
-        <Alert variant="destructive">
+        <Alert variant={latestRun?.stop ? "default" : "destructive"}>
           <TriangleAlert className="h-4 w-4" />
-          <AlertTitle>Latest pipeline failed at {failedStage.id}</AlertTitle>
+          <AlertTitle>{latestRun?.stop ? latestRun.stop.state === "stopping" ? "Pipeline is stopping" : "Pipeline stopped" : `Latest pipeline failed at ${failedStage.id}`}</AlertTitle>
           <AlertDescription>
             {pipelineFailure?.message ??
               `The stage exhausted ${failedStage.attempts} attempts. The next run can resume safely.`}
@@ -335,6 +352,8 @@ export default function CalculationsPage() {
           hasCompletedRun={Boolean(summary.data?.runId)}
           onSaveBrandTerms={saveBrandTerms}
           onRun={runPipeline}
+          onStop={stopPipeline}
+          stopping={stopping}
           onSavePolicy={savePolicy}
           onStampPrecurated={stampPrecurated}
           readiness={readiness.data}

@@ -99,6 +99,7 @@ describe("seer-worker integration", () => {
 
     expect(response.status).toBe(200);
     expect(processTask).toHaveBeenCalledWith({
+      generation: 0,
       runId: "00000000-0000-4000-8000-000000000001",
       stageId: "intake",
       taskId: "1",
@@ -172,6 +173,7 @@ describe("seer-worker integration", () => {
 
     expect(response.status).toBe(200);
     expect(failRun).toHaveBeenCalledWith({
+      generation: 0,
       reason: "Provider delivery exhausted.",
       runId: "00000000-0000-4000-8000-000000000001",
       stageId: "serp-collection",
