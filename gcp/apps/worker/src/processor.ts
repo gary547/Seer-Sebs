@@ -19,6 +19,7 @@ import {
   type PipelineStageId,
 } from "../../../packages/pipeline/src/definition.js";
 import { pipelineStageFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
+import { forecastScope, scopeDependencyOutputs } from "../../../packages/pipeline/src/forecast-scope.js";
 import {
   executeDataDrivenStage,
   PipelinePreflightError,
@@ -431,6 +432,9 @@ async function executeStageAttempt(
   if (input === undefined) {
     throw new Error(`Pipeline input is missing for run ${task.runId}.`);
   }
+  let scope;
+  try { scope = forecastScope(input); }
+  catch { throw new HttpError(422, "pipeline_inputs_incomplete", "The approved forecast exclusion scope is invalid. Review the saved run before resuming."); }
   if (
     shouldInjectLocalFailure(
       input,
@@ -461,13 +465,14 @@ async function executeStageAttempt(
   const source: ProjectPipelineSource | null =
     fixture ?? (projectId ? await loadProjectPipelineSource(pool, projectId) : null);
   const representativeSummary = fixtureSummary(fixture);
-  const dependencyOutputs = await loadDependencyOutputs(
+  const savedDependencyOutputs = await loadDependencyOutputs(
     pool,
     task.runId,
     definition.dependencies,
   );
   let stageData: ReturnType<typeof executeDataDrivenStage> | null;
   try {
+    const dependencyOutputs = scopeDependencyOutputs(task.stageId, savedDependencyOutputs, scope);
     stageData = source
       ? executeDataDrivenStage(task.stageId, source, dependencyOutputs)
       : null;
@@ -490,6 +495,7 @@ async function executeStageAttempt(
     execution: definition.execution,
     ...(representativeSummary ? { fixtureSummary: representativeSummary } : {}),
     ...(stageData ?? {}),
+    ...(scope ? { forecastExclusions: { reason: scope.reason, queryCount: scope.queries.length, keywordCount: scope.keywords.length } } : {}),
     validationMode: representativeSummary
       ? "local-synthetic-contract"
       : projectId

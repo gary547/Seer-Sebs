@@ -12,6 +12,7 @@ import {
 } from "../../../packages/pipeline/src/definition.js";
 import { userFacingPipelineFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
+import { forecastScope } from "../../../packages/pipeline/src/forecast-scope.js";
 import { assertProjectAccessByRole } from "./authorization.js";
 import { lockIdleRun, projectCheckpoint, recoverPipelineRun } from "./pipeline-recovery.js";
 import {
@@ -585,8 +586,9 @@ export async function createPipelineRun(
     body && typeof body === "object" && !Array.isArray(body)
       ? (body as Record<string, unknown>)
       : {};
+  if ("forecastScope" in input) throw new HttpError(400, "invalid_forecast_scope", "Approve exclusions through the run's SERP review; pipeline creation cannot supply a forecast scope.");
   const projectId =
-    typeof input.projectId === "string" ? input.projectId : null;
+      typeof input.projectId === "string" ? input.projectId : null;
   const mode = pipelineRunMode(input.mode);
   input.mode = mode;
   let id: string = randomUUID();
@@ -652,6 +654,13 @@ export async function createPipelineRun(
         return;
       }
       input.checkpoint = checkpoint;
+      if (mode === "recalculate") {
+        const previous = await client.query<{ input: unknown }>(
+          `SELECT input FROM pipeline_runs WHERE input->>'projectId' = $1 AND status = 'succeeded'
+           ORDER BY completed_at DESC, id DESC LIMIT 1`, [projectId]);
+        const scope = forecastScope(previous.rows[0]?.input);
+        if (scope) input.forecastScope = scope;
+      }
     }
     await client.query(
       `

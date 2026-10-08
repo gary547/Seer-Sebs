@@ -63,6 +63,7 @@ import {
   getProjectCalculationControl,
 } from "./calculation-control.js";
 import { getCalculationExportPage } from "./calculation-export.js";
+import { approveSerpExclusions, getSerpResolution } from "./serp-resolution.js";
 import { getProjectLinkPowerDomains } from "./link-power-domains.js";
 import {
   assertApprovedUser,
@@ -418,6 +419,7 @@ async function handleRequest(
     "/cancel",
   );
   const runId = uuidPath(url.pathname, "/v1/pipeline-runs/");
+  const runSerpResolutionId = uuidSubresourcePath(url.pathname, "/v1/pipeline-runs/", "/serp-resolution");
   const projectId = uuidPath(url.pathname, "/v1/projects/");
   const clientProjectClientId = uuidSubresourcePath(
     url.pathname,
@@ -700,6 +702,7 @@ async function handleRequest(
     assetId !== null ||
     runStagesId !== null ||
     runCancelId !== null ||
+    runSerpResolutionId !== null ||
     runId !== null ||
     projectId !== null ||
     clientId !== null ||
@@ -2274,6 +2277,18 @@ async function handleRequest(
       ...(orchestration ?? {}),
     });
     return;
+  }
+
+  if (runSerpResolutionId) {
+    if (method === "GET") {
+      sendJson(response, 200, await getSerpResolution(runtime.pool, user, runSerpResolutionId));
+      return;
+    }
+    if (method === "POST") {
+      sendJson(response, 200, await approveSerpExclusions(runtime.pool, user, runSerpResolutionId, await readJson(request, 64 * 1_024)));
+      return;
+    }
+    methodNotAllowed(response, ["GET", "POST"]);
   }
 
   if (runStagesId) {

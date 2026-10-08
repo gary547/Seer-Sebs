@@ -200,6 +200,27 @@ export async function stopPipelineRun(runId: string): Promise<PipelineRun> {
   return authenticatedRequest(`/v1/pipeline-runs/${runId}/cancel`, { method: "POST" });
 }
 
+export interface SerpResolution {
+  runId: string;
+  projectId: string;
+  approved: boolean;
+  queryCount: number;
+  keywordCount: number;
+  remainingKeywordCount: number;
+  queries: string[];
+  keywords: Array<{ id: string; text: string; query: string; sourceKeywordId: string; normalisedText: string }>;
+}
+
+export async function getSerpResolution(runId: string): Promise<SerpResolution> {
+  return authenticatedRequest(`/v1/pipeline-runs/${runId}/serp-resolution`);
+}
+
+export async function approveSerpExclusions(runId: string, keywordIds: string[]): Promise<{ approved: boolean }> {
+  return authenticatedRequest(`/v1/pipeline-runs/${runId}/serp-resolution`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ keywordIds }),
+  });
+}
+
 export const PIPELINE_OUTPUT_BATCH_SIZE = 1;
 
 export interface PipelineStageOutput {

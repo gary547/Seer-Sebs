@@ -2,7 +2,14 @@ import type { PoolClient } from "pg";
 
 import { PIPELINE_STAGES } from "../../../packages/pipeline/src/definition.js";
 import { PIPELINE_AI_MODEL } from "../../../packages/pipeline/src/ai-model.js";
+import { forecastScope } from "../../../packages/pipeline/src/forecast-scope.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
+
+export function checkpointMatches(source: { input: Record<string, unknown>; created_at: Date }, checkpoint: Record<string, unknown>): boolean {
+  if (source.input.checkpoint) return JSON.stringify(source.input.checkpoint) === JSON.stringify(checkpoint);
+  return [checkpoint.lastDirtyAt, checkpoint.latestUploadAt, checkpoint.clientChangedAt]
+    .every(value => value === null || (typeof value === "string" && new Date(value).getTime() <= source.created_at.getTime()));
+}
 
 export async function projectCheckpoint(client: PoolClient, projectId: string): Promise<Record<string, unknown>> {
   const result = await client.query<{ checkpoint: Record<string, unknown> }>(
@@ -44,17 +51,18 @@ export async function recoverPipelineRun(client: PoolClient, projectId: string, 
            AND replacement.completed_at > COALESCE(original.completed_at, run.created_at))
        AND ($2::text IS NULL OR run.id::text = $2) AND COALESCE(input->>'mode', 'full') <> 'recalculate'
      ORDER BY completed_count DESC, last_activity_at DESC, id DESC LIMIT 20`, [projectId, sourceRunId ?? null]);
-  const compatible = sources.rows.filter(source => {
-    const previous = source.input.checkpoint;
-    if (previous) return JSON.stringify(previous) === JSON.stringify(checkpoint);
-    return [checkpoint.lastDirtyAt, checkpoint.latestUploadAt, checkpoint.clientChangedAt]
-      .every(value => value === null || (typeof value === "string" && new Date(value).getTime() <= source.created_at.getTime()));
-  });
+  const compatible = sources.rows.filter(source => checkpointMatches(source, checkpoint));
   const source = compatible[0];
   if (!source) throw new HttpError(409, "pipeline_resume_unavailable", sources.rows.length
     ? "Project inputs changed since the saved run. Review the changes and start a full pipeline explicitly."
     : "No failed or stopped pipeline checkpoint is available. Start a full pipeline explicitly.");
   if (!await lockIdleRun(client, source.id)) throw new HttpError(409, "pipeline_still_stopping", "Provider requests are still finishing. Resume once the saved run has stopped.");
+  const scope = forecastScope(source.input);
+  const unresolved = await client.query(
+    `SELECT 1 FROM provider_work_items WHERE pipeline_run_id = $1 AND stage_id = 'serp-collection'
+     AND provider = 'dataforseo' AND result->>'outcome' = 'no_results' AND NOT (item_key = ANY($2::text[])) LIMIT 1`,
+    [source.id, scope?.queries ?? []]);
+  if (unresolved.rowCount) throw new HttpError(409, "serp_resolution_required", "Saved searches returned no results. Review and explicitly approve their forecast exclusions before resuming; completed work is preserved.");
   const stages = await client.query<{ stage_id: string; state: string; output: unknown }>(
     `SELECT stage_id, state, output FROM pipeline_stage_runs WHERE run_id = $1`, [source.id]);
   const saved = new Map(stages.rows.map(stage => [stage.stage_id, stage]));

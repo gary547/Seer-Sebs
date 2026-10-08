@@ -3,6 +3,7 @@ import { HttpError } from "../../../packages/runtime/src/http.js";
 import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth.js";
 import { assertProjectAccessByRole } from "./authorization.js";
 import { verifiedHarNoTargetReason } from "../../../packages/models/src/har-outcome.js";
+import { forecastScope } from "../../../packages/pipeline/src/forecast-scope.js";
 
 const TEXT_FIELDS = [
   "keyword_id", "keyword", "scenario", "category", "search_intent", "categorisation_source", "intent_source",
@@ -41,8 +42,8 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   if (!Number.isInteger(limit) || limit < 1 || limit > 500 || (after && !uuid.test(after)) || (requestedRun && !uuid.test(requestedRun)) || (after && !requestedRun)) {
     throw new HttpError(400, "invalid_export_page", "Export pagination is invalid.");
   }
-  const runs = await pool.query<{ id: string; completed_at: Date; currency: string | null; dirty: boolean; active: boolean }>(
-    `SELECT run.id, run.completed_at, project.currency,
+  const runs = await pool.query<{ id: string; input: unknown; completed_at: Date; currency: string | null; dirty: boolean; active: boolean }>(
+    `SELECT run.id, run.input, run.completed_at, project.currency,
        (project.inputs_dirty OR project.keywords_dirty OR project.serp_dirty) AS dirty,
        EXISTS (SELECT 1 FROM pipeline_runs AS active WHERE active.input->>'projectId' = $1::text AND active.status IN ('pending', 'running')) AS active
      FROM pipeline_runs AS run JOIN navigator_projects AS project ON project.id = $1::uuid
@@ -51,6 +52,8 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   const run = runs.rows[0];
   if (!run) throw new HttpError(409, "export_not_ready", "Complete the pipeline before downloading final results.");
   if (run.dirty || run.active || (requestedRun && run.id !== requestedRun)) throw new HttpError(409, "export_inputs_changed", "The project is changing or its inputs have changed. Complete the pipeline, then restart the export.");
+  const scope = forecastScope(run.input);
+  const excluded = new Set(scope?.keywords.map(keyword => keyword.id) ?? []);
   const page = await pool.query<Record<string, unknown>>(
     `WITH export_keywords AS (
        SELECT * FROM keywords WHERE project_id = $1 AND detox_status = 'keep'
@@ -93,12 +96,21 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
      WHERE ($5::text IS NULL OR scenario.value = $5)
      ORDER BY keyword.id, scenario.value`, [projectId, run.id, after, limit, scenario]);
   const keys = new Set(page.rows.map((row) => String(row.keyword_id)));
-  if (page.rows.some((row) => !row.har_model_version || !row.revenue_model_version || row.expected_incremental_annual == null)) {
+  if (page.rows.some((row) => !excluded.has(String(row.keyword_id)) && (!row.har_model_version || !row.revenue_model_version || row.expected_incremental_annual == null))) {
     throw new HttpError(409, "export_incomplete", "The completed run does not contain forecasts for every eligible keyword. Re-run the pipeline before exporting final results.");
   }
   const columns = ["project_id", "run_id", "completed_at", "currency", ...TEXT_FIELDS, ...NUMBER_FIELDS, ...PEAK_FIELDS];
   for (const row of page.rows) {
-    row.har_outcome = row.har_position != null ? "attainable_target"
+    if (excluded.has(String(row.keyword_id))) {
+      row.har_outcome = "excluded_no_search_results";
+      row.har_no_beat_reason = "not_applicable";
+      row.har_explanation = { reason: scope!.reason, approvedBy: scope!.approvedBy, approvedAt: scope!.approvedAt };
+      row.warnings = ["excluded_from_forecast:dataforseo_no_results"];
+      for (const key of ["har_model_version", "revenue_model_version", "har_position", "har_confidence", "rank_attainment_probability",
+        "authority_score", "link_power_score", "link_gap_score", "content_fit_score", "serp_visibility_multiplier", "annual_volume",
+        "volume_forward", "factor_applied", "ctr_now", "ctr_target", "current_revenue_annual", "target_absolute_revenue_annual",
+        "target_incremental_revenue_annual", "expected_incremental_annual", "expected_incremental_low_annual", "expected_incremental_high_annual"]) row[key] = null;
+    } else row.har_outcome = row.har_position != null ? "attainable_target"
       : verifiedHarNoTargetReason(row.har_explanation) !== null ? "no_attainable_target" : "insufficient_inputs";
   }
   const rows = page.rows.map((row) => ({
@@ -111,6 +123,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
     peak_months: exportedPeakMonths(row.peak_months).join(",") || "not_available",
   }));
   return { columns, rows, runId: run.id, keywordCount: keys.size, completedAt: run.completed_at.toISOString(),
+    excludedKeywordCount: excluded.size,
     nextAfter: keys.size === limit ? [...keys].at(-1) : null,
     filename: `seer-results-${projectId}-${run.id}${scenario ? `-${scenario}` : ""}.csv`,
   };

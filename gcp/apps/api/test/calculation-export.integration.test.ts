@@ -17,12 +17,14 @@ let harExplanation: Record<string, unknown>;
 let expectedRevenue = "125.25";
 let peakMonths: number[];
 let executed: Array<{ sql: string; values: unknown[] }>;
+let scope: unknown;
 
 describe("complete calculation export API", () => {
   let server: ReturnType<typeof createApiServer>;
   let url: string;
   beforeEach(async () => {
     dirty = false; active = false; complete = true; allowed = true; latestRun = true; currency = "GBP"; executed = [];
+    scope = undefined;
     harPosition = 3; harExplanation = { authorityProvider: "dataforseo" }; expectedRevenue = "125.25"; peakMonths = [11, 12, 1];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       sql = sql.replace(/\s+/g, " ").trim();
@@ -32,7 +34,7 @@ describe("complete calculation export API", () => {
       else if (sql.includes("SELECT client_id FROM navigator_projects")) rows = [{ client_id: projectId }];
       else if (sql.includes("FROM user_roles AS user_role")) rows = [{ role: allowed ? "admin" : "view_only" }];
       else if (sql.includes("FROM user_client_access")) rows = [];
-      else if (sql.includes("SELECT run.id")) rows = latestRun ? [{ id: runId, completed_at: new Date("2026-09-08T09:00:00Z"), currency, dirty, active }] : [];
+      else if (sql.includes("SELECT run.id")) rows = latestRun ? [{ id: runId, input: scope ? { forecastScope: scope } : {}, completed_at: new Date("2026-09-08T09:00:00Z"), currency, dirty, active }] : [];
       else if (sql.includes("WITH export_keywords")) rows = ["conservative", "realistic", "stretch"].filter((scenario) => !values[4] || values[4] === scenario).map((scenario) => ({
         keyword_id: keywordId, keyword: 'keyword, with "quotes"', scenario, category: "Pharmacy", search_intent: "commercial",
         har_model_version: "har-v2", revenue_model_version: complete ? "revenue-v2" : null,
@@ -60,6 +62,22 @@ describe("complete calculation export API", () => {
     expect(page.rows[0]).toMatchObject({ link_power_score: 0, expected_incremental_annual: 125.25, content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash" });
     expect(page.columns).toContain("har_explanation");
     expect(executed.find(({ sql }) => sql.includes("WITH export_keywords"))?.values).toEqual([projectId, runId, null, 1, null]);
+  });
+  it("keeps approved exclusions in the CSV with explicit unavailable values, without allowing other incomplete forecasts", async () => {
+    complete = false;
+    scope = { reason: "dataforseo_no_results", approvedBy: "00000000-0000-4000-8000-000000000001",
+      approvedAt: "2026-10-08T13:00:00Z", queries: ["empty query"],
+      keywords: [{ id: keywordId, normalisedText: "empty query", sourceKeywordId: keywordId }] };
+    const response = await fetch(`${url}?limit=1`);
+    expect(response.status).toBe(200);
+    const page = await response.json() as { rows: Array<Record<string, unknown>>; columns: string[] };
+    expect(page).toMatchObject({ keywordCount: 1, excludedKeywordCount: 1 });
+    expect(page.rows).toHaveLength(3);
+    expect(page.rows[0]).toMatchObject({ har_outcome: "excluded_no_search_results", har_position: "not_available",
+      expected_incremental_annual: "not_available", warnings: '["excluded_from_forecast:dataforseo_no_results"]' });
+    expect(page.columns.slice(-2)).toEqual(["peak_month", "peak_months"]);
+    scope = { ...(scope as object), keywords: [{ id: runId, normalisedText: "other query", sourceKeywordId: runId }] };
+    expect((await fetch(`${url}?limit=1`)).status).toBe(409);
   });
   it("appends peak months after every existing column without moving them", async () => {
     const response = await fetch(`${url}?limit=1`);

@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { createDatabasePool, withTransaction } from "../../dist/gcp/packages/runtime/src/database.js";
 import { PIPELINE_STAGES } from "../../dist/gcp/packages/pipeline/src/definition.js";
 import { projectCheckpoint, recoverPipelineRun } from "../../dist/gcp/apps/api/src/pipeline-recovery.js";
+import { approveSerpExclusions, getSerpResolution } from "../../dist/gcp/apps/api/src/serp-resolution.js";
+import { createPipelineRun } from "../../dist/gcp/apps/api/src/pipeline-runs.js";
 import { DataForSeoClient, LivePipelineProviderHydrator } from "../../dist/gcp/apps/worker/src/live-providers.js";
 import { executeStageTask, failPipelineRun } from "../../dist/gcp/apps/worker/src/processor.js";
 import { OpenRouterPipelineClient, OPENROUTER_MODEL } from "../../dist/gcp/apps/worker/src/openrouter.js";
@@ -25,12 +27,13 @@ const checkpointRows = () => pool.query("SELECT stage_id, output FROM pipeline_s
 try {
   await owner.query(`CREATE SCHEMA ${schema}`);
   await owner.query(`GRANT USAGE ON SCHEMA ${schema} TO seer_api`);
-  for (const table of ["pipeline_runs", "pipeline_stage_runs", "provider_work_items", "clients", "navigator_projects", "gsc_uploads", "keywords", "keyword_clusters", "project_serp_features", "local_provider_serp_keywords", "local_provider_serp_results", "local_provider_site_architecture_inputs"]) {
+  for (const table of ["pipeline_runs", "pipeline_stage_runs", "provider_work_items", "clients", "navigator_projects", "gsc_uploads", "keywords", "keyword_clusters", "keyword_cluster_members", "user_roles", "project_serp_features", "local_provider_serp_keywords", "local_provider_serp_results", "local_provider_site_architecture_inputs"]) {
     await pool.query(`CREATE TABLE ${schema}.${table} (LIKE public.${table} INCLUDING ALL)`);
     await pool.query(`GRANT SELECT ON ${schema}.${table} TO seer_api`);
   }
   await pool.query("GRANT UPDATE ON pipeline_runs, pipeline_stage_runs TO seer_api");
   await pool.query("GRANT UPDATE (state, last_error, attempt_offset, updated_at) ON provider_work_items TO seer_api");
+  await pool.query("INSERT INTO user_roles (user_id, role) VALUES ($1, 'admin')", [userId]);
   await pool.query("INSERT INTO clients (id, company_name, domain) VALUES ($1, 'Recovery test', 'recovery.test')", [clientId]);
   await pool.query("INSERT INTO navigator_projects (id, client_id, project_name, country, language) VALUES ($1, $2, 'Recovery test', 'GB', 'en')", [projectId, clientId]);
   await pool.query("INSERT INTO pipeline_runs (id, user_id, status, input) VALUES ($1, $2, 'failed', $3), ($4, $2, 'failed', $3)", [runId, userId, JSON.stringify({ projectId, mode: "resume" }), duplicateId]);
@@ -111,6 +114,7 @@ try {
     const keywordId = randomUUID();
     await pool.query("INSERT INTO keywords (id, project_id, keyword, normalised_keyword, detox_status) VALUES ($1, $2, $3, $3, 'keep')", [keywordId, projectId, query]);
     await pool.query("INSERT INTO keyword_clusters (project_id, pipeline_run_id, cluster_key, canonical_keyword_id, canonical_basis, member_count) VALUES ($1, $2, $3, $4, 'alphabetical', 1)", [projectId, runId, query, keywordId]);
+    await pool.query("INSERT INTO keyword_cluster_members (cluster_id, keyword_id, is_canonical) SELECT id, $3, true FROM keyword_clusters WHERE pipeline_run_id = $1 AND cluster_key = $2", [runId, query, keywordId]);
   }
   await pool.query("UPDATE pipeline_stage_runs SET state = 'running' WHERE run_id = $1 AND stage_id = 'serp-collection'", [runId]);
   const calls = [];
@@ -135,6 +139,44 @@ try {
   await assert.rejects(withProviderRun(pool, runId, 2, () => hydrator.hydrate(pool, projectId, runId, "serp-collection")), { code: "dataforseo_no_search_results" });
   assert.equal(calls.length, callCount, "A terminal search must not be polled or submitted again.");
   await failPipelineRun(pool, { runId, stageId: "serp-collection", reason: "dataforseo_no_search_results", generation: 2 });
+  const user = { id: userId, email: "recovery@example.test" };
+  await assert.rejects(createPipelineRun(pool, user, { forecastScope: {}, projectId, mode: "full" }), { code: "invalid_forecast_scope" });
+  await assert.rejects(withTransaction(pool, client => recoverPipelineRun(client, projectId, checkpoint, runId)), { code: "serp_resolution_required" });
+  const memberId = randomUUID();
+  await pool.query("INSERT INTO keywords (id, project_id, keyword, normalised_keyword, detox_status) VALUES ($1, $2, 'empty query variant', 'empty query variant', 'keep')", [memberId, projectId]);
+  await pool.query("INSERT INTO keyword_cluster_members (cluster_id, keyword_id, is_canonical) SELECT id, $2, false FROM keyword_clusters WHERE pipeline_run_id = $1 AND cluster_key = 'empty query'", [runId, memberId]);
+  await pool.query("UPDATE keyword_clusters SET member_count = 2 WHERE pipeline_run_id = $1 AND cluster_key = 'empty query'", [runId]);
+  const review = await getSerpResolution(pool, user, runId);
+  assert.equal(review.queryCount, 1);
+  assert.equal(review.keywordCount, 2, "Review must include every member inheriting the empty canonical search.");
+  assert.deepEqual(review.queries, ["empty query"]);
+  const reviewedIds = review.keywords.map(keyword => keyword.id);
+  await assert.rejects(approveSerpExclusions(pool, user, runId, { keywordIds: reviewedIds.slice(0, 1) }), { code: "serp_exclusion_scope_changed" });
+  await assert.rejects(approveSerpExclusions(pool, user, runId, { keywordIds: [memberId, randomUUID()] }), { code: "serp_exclusion_scope_changed" });
+  await pool.query("UPDATE user_roles SET role = 'user' WHERE user_id = $1", [userId]);
+  await assert.rejects(getSerpResolution(pool, user, runId), { code: "administrator_required" });
+  await assert.rejects(approveSerpExclusions(pool, user, runId, { keywordIds: reviewedIds }), { code: "administrator_required" });
+  await pool.query("UPDATE user_roles SET role = 'admin' WHERE user_id = $1", [userId]);
+  const apiRolePool = { connect: async () => {
+    const connection = await pool.connect();
+    await connection.query("SET ROLE seer_api");
+    return { query: (...args) => connection.query(...args), release: () => connection.release(true) };
+  } };
+  const approved = await approveSerpExclusions(apiRolePool, user, runId, { keywordIds: reviewedIds });
+  assert.equal(approved.approved, true);
+  const approvedInput = (await pool.query("SELECT input FROM pipeline_runs WHERE id = $1", [runId])).rows[0].input;
+  assert.equal(approvedInput.forecastScope.approvedBy, userId);
+  assert.equal(approvedInput.forecastScope.keywords.length, 2);
+  assert.equal((await approveSerpExclusions(apiRolePool, user, runId, { keywordIds: reviewedIds })).idempotent, true);
+  assert.deepEqual((await pool.query("SELECT input FROM pipeline_runs WHERE id = $1", [runId])).rows[0].input, approvedInput, "Approval audit must not be overwritten on repeat requests.");
+  assert.deepEqual((await checkpointRows()).rows, before);
+  const resolved = await withTransaction(pool, client => recoverPipelineRun(client, projectId, checkpoint, runId));
+  assert.equal(resolved.generation, 3);
+  await pool.query("UPDATE pipeline_stage_runs SET state = 'running' WHERE run_id = $1 AND stage_id = 'serp-collection'", [runId]);
+  await withProviderRun(pool, runId, 3, () => hydrator.hydrate(pool, projectId, runId, "serp-collection"));
+  assert.equal(calls.length, callCount, "Approved terminal outcomes must not be submitted or polled again.");
+  assert.deepEqual((await pool.query("SELECT item_key, provider_task_id, state, result FROM provider_work_items WHERE stage_id = 'serp-collection' AND pipeline_run_id = $1 ORDER BY item_key", [runId])).rows, terminal, "Original provider observations remain unchanged.");
+  await failPipelineRun(pool, { runId, stageId: "serp-collection", reason: "validation finished", generation: 3 });
   await pool.query("UPDATE navigator_projects SET last_dirty_at = now() WHERE id = $1", [projectId]);
   const changed = await withTransaction(pool, client => projectCheckpoint(client, projectId));
   await assert.rejects(withTransaction(pool, client => recoverPipelineRun(client, projectId, changed, runId)), { code: "pipeline_resume_unavailable" });
@@ -142,6 +184,7 @@ try {
   console.log("PostgreSQL recovery passed: 13 immutable completed stages, source selection, active-lock protection, API column grants, frozen inputs, retained task IDs/attempt totals, stale delivery rejection and changed-input rejection.");
   console.log("PostgreSQL AI stop/resume passed: in-flight responses saved, new batches blocked, original frozen inputs reused and only missing requests executed.");
   console.log("PostgreSQL SERP outcomes passed: 40102 persisted once, sibling collected, no resubmissions/repeated polling, bounded keyword diagnostics and no invented SERP rows.");
+  console.log("PostgreSQL exclusion review passed: admin-only exact cluster scope, immutable approval audit, API-role grants, zero repeated provider requests and preserved successful stages.");
 } finally {
   await pool.end();
   await owner.query(`DROP SCHEMA ${schema} CASCADE`);

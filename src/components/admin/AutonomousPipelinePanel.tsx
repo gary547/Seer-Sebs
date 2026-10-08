@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import PipelineActivityDialog from "@/components/admin/PipelineActivityDialog";
+import SerpResolutionDialog from "@/components/admin/SerpResolutionDialog";
 import { pipelineActivityMessage } from "@/components/admin/pipelineActivity";
 import {
   PIPELINE_STAGE_IDS,
@@ -163,6 +164,11 @@ export default function AutonomousPipelinePanel({
   const recoveredStageCount = run?.input && typeof run.input === "object" && "recoveredStageCount" in run.input
     ? Number(run.input.recoveredStageCount) : 0;
   const configuredBrandTerms = readiness?.configuration.explicitBrandTerms ?? [];
+  const approvedScope = run?.input && typeof run.input === "object" && "forecastScope" in run.input
+    ? run.input.forecastScope as { keywords?: unknown[]; queries?: string[] } : null;
+  const noResultCount = run?.stages.find(stage => stage.id === "serp-collection")?.output?.providerDiagnostics;
+  const requiresSerpReview = run?.status === "failed" && !approvedScope
+    && noResultCount && typeof noResultCount === "object" && "noResultCount" in noResultCount && Number(noResultCount.noResultCount) > 0;
   const displayedBrandTerms = configuredBrandTerms.length
     ? configuredBrandTerms
     : readiness?.configuration.brandTerms ?? [];
@@ -190,6 +196,12 @@ export default function AutonomousPipelinePanel({
             {run?.stop ? <Badge variant="outline">{run.stop.state === "stopping" ? "Stopping" : "Stopped"}</Badge> : null}
           </div>
           {recoveredStageCount > 0 ? <p className="mt-2 text-xs font-medium text-signal">Resumed run · {recoveredStageCount} completed stages reused</p> : null}
+          {approvedScope?.keywords?.length ? <div className="mt-3 rounded-lg border border-hairline bg-canvas p-3 text-xs leading-5 text-ink-muted">
+            <p className="font-semibold text-ink">{approvedScope.keywords.length} keywords explicitly excluded from forecasts: no search results.</p>
+            <details className="mt-1"><summary className="cursor-pointer">View excluded searches</summary>
+              <ul className="mt-2 space-y-1">{approvedScope.queries?.map(query => <li key={query} className="break-words">{query}</li>)}</ul>
+            </details>
+          </div> : null}
           <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-muted">
             Intake and qualification feed four parallel tracks. HAR and Revenue
             start only after their required inputs pass formal readiness checks.
@@ -316,6 +328,10 @@ export default function AutonomousPipelinePanel({
       </div>
 
       <div className="px-5 py-5 lg:px-6">
+        {requiresSerpReview && run ? <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-hairline bg-canvas p-4">
+          <p className="text-sm text-ink">Review searches without results before resuming.</p>
+          <SerpResolutionDialog key={run.id} runId={run.id} disabled={Boolean(archived || active || running || stopping)} onResume={() => onRun("resume")} />
+        </div> : null}
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {tracks.map((track) => {
             const state = trackState(run, track.stages);
@@ -467,7 +483,7 @@ export default function AutonomousPipelinePanel({
             <Button disabled={!canRun} variant="signal" onClick={() => void onRun("full")}>
               <Play className="h-4 w-4" /> Full pipeline
             </Button>
-            <Button disabled={!canRun || run?.status !== "failed"} variant="outline" onClick={() => void onRun("resume")}>
+            <Button disabled={!canRun || run?.status !== "failed" || Boolean(requiresSerpReview)} variant="outline" onClick={() => void onRun("resume")}>
               <RotateCcw className="h-4 w-4" /> Resume missing work
             </Button>
             <Button

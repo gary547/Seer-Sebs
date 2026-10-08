@@ -4,6 +4,7 @@ import { normaliseKeyword } from "../../../packages/fixtures/src/representative-
 import type { ProjectPipelineSource } from "../../../packages/fixtures/src/representative-project.js";
 import { decideTier, type DataDrivenStageData } from "../../../packages/pipeline/src/stage-handlers.js";
 import type { PipelineStageId } from "../../../packages/pipeline/src/definition.js";
+import { forecastScope } from "../../../packages/pipeline/src/forecast-scope.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
@@ -1365,12 +1366,15 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
   }
 
   private async assertSerpResults(pool: DatabasePool, runId: string): Promise<void> {
+    const run = await pool.query<{ input: unknown }>("SELECT input FROM pipeline_runs WHERE id = $1", [runId]);
+    const scope = forecastScope(run.rows[0]?.input);
     const result = await pool.query<{ count: string; keywords: string[] }>(
       `SELECT count(*)::text AS count,
          ARRAY(SELECT item_key FROM provider_work_items WHERE pipeline_run_id = $1
-           AND stage_id = 'serp-collection' AND result->>'outcome' = 'no_results' ORDER BY item_key LIMIT 20) AS keywords
+           AND stage_id = 'serp-collection' AND result->>'outcome' = 'no_results'
+           AND NOT (item_key = ANY($2::text[])) ORDER BY item_key LIMIT 20) AS keywords
        FROM provider_work_items WHERE pipeline_run_id = $1 AND stage_id = 'serp-collection'
-         AND result->>'outcome' = 'no_results'`, [runId]);
+         AND result->>'outcome' = 'no_results' AND NOT (item_key = ANY($2::text[]))`, [runId, scope?.queries ?? []]);
     const diagnostic = result.rows[0];
     if (Number(diagnostic?.count ?? 0) === 0) return;
     await pool.query(

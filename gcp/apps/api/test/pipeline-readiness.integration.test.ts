@@ -17,13 +17,16 @@ let hasCheckpoint = false;
 let changedInputs = false;
 let idle = true;
 let recoveryWrites: string[] = [];
+let unresolvedSerps = false;
+let previousScope: unknown;
+let createdInput: Record<string, unknown>;
 
 function result(rows: unknown[], rowCount = rows.length) {
   return { rowCount, rows };
 }
 
 function database(): DatabasePool {
-  const query = vi.fn(async (sqlValue: string) => {
+  const query = vi.fn(async (sqlValue: string, values: unknown[] = []) => {
     const sql = sqlValue.replace(/\s+/g, " ").trim();
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result([]);
     if (sql.includes("SELECT approval_status FROM profiles")) {
@@ -104,9 +107,11 @@ function database(): DatabasePool {
     if (sql.includes("AS checkpoint")) return result([{ checkpoint: { lastDirtyAt: changedInputs ? "2026-10-08T00:00:00Z" : null, latestUploadAt: null, clientChangedAt: null } }]);
     if (sql.includes("AS completed_count")) return result(hasCheckpoint ? [{ id: failedRunId, input: { mode: "full", projectId }, created_at: new Date("2026-10-07T00:00:00Z"), completed_count: 2 }] : []);
     if (sql.includes("AS idle")) return result([{ idle }]);
+    if (sql.startsWith("SELECT 1 FROM provider_work_items")) return result(unresolvedSerps ? [{}] : []);
+    if (sql.startsWith("SELECT input FROM pipeline_runs")) return result([{ input: previousScope ? { forecastScope: previousScope } : {} }]);
     if (sql.includes("SELECT stage_id, state, output")) return result(PIPELINE_STAGES.map((stage, index) => ({ stage_id: stage.id, state: index < 2 ? "succeeded" : "failed", output: { preserved: stage.id } })));
     if (sql.startsWith("UPDATE pipeline") || sql.startsWith("UPDATE provider_work_items")) { recoveryWrites.push(sql); return result([], 1); }
-    if (sql.startsWith("INSERT INTO pipeline_runs")) return result([], 1);
+    if (sql.startsWith("INSERT INTO pipeline_runs")) { createdInput = JSON.parse(String(values[2])); return result([], 1); }
     if (sql.startsWith("INSERT INTO pipeline_stage_runs")) return result([], 1);
     throw new Error(`Unexpected SQL in pipeline readiness test: ${sql}`);
   });
@@ -123,6 +128,7 @@ describe("autonomous pipeline readiness API", () => {
     readinessOverrides = {};
     completedQualification = true;
     hasCheckpoint = false; changedInputs = false; idle = true; recoveryWrites = [];
+    unresolvedSerps = false; previousScope = undefined; createdInput = {};
     orchestrator.start.mockClear();
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({ email: "admin@example.com", id: userId })),
@@ -153,6 +159,27 @@ describe("autonomous pipeline readiness API", () => {
       rollups: [{ clusterDedupedExpectedIncrementalAnnual: 120000, doubleCountAnnual: 30000 }],
       substitutions: [{ count: 12, input: "content_fit", stageId: "har-readiness" }],
     });
+  });
+  it("inherits approved forecast exclusions for recalculation and clears them for a new full run", async () => {
+    previousScope = { reason: "dataforseo_no_results", approvedBy: userId, approvedAt: "2026-10-08T12:00:00Z",
+      queries: ["empty query"], keywords: [{ id: failedRunId, normalisedText: "empty query", sourceKeywordId: failedRunId }] };
+    const route = `${baseUrl}/v1/projects/${projectId}/pipeline-runs`;
+    const post = (mode: string) => fetch(route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode }) });
+    expect((await post("recalculate")).status).toBe(202);
+    expect(createdInput.forecastScope).toEqual(previousScope);
+    expect((await post("full")).status).toBe(202);
+    expect(createdInput.forecastScope).toBeUndefined();
+  });
+
+  it("rejects unresolved terminal searches before starting another execution or resetting checkpoints", async () => {
+    hasCheckpoint = true; unresolvedSerps = true;
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-runs`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "resume" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "serp_resolution_required" } });
+    expect(orchestrator.start).not.toHaveBeenCalled();
+    expect(recoveryWrites).toEqual([]);
   });
 
   it("uses a safe domain fallback and resolves missing authority at run start", async () => {
