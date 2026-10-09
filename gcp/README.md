@@ -137,4 +137,12 @@ scenario values. Health probes remain enabled and responsive during computation.
 Rollup cannibalisation grouping appends keyword IDs without copying the accumulated
 group for each keyword, keeping shared-URL aggregation linear.
 
+Large stage arrays retain their original ordering through bounded, checksummed
+storage. An individual nested record larger than eight MiB, including a complete
+rollup scenario, is automatically encoded as Unicode-safe JSON fragments. The
+version-two manifest reconstructs the complete original array and verifies every
+chunk, field checksum and item count. Existing version-one checkpoints remain
+readable. The database gate verifies all three 107,926-keyword rollup scenarios
+without changing calculation values or weakening the storage limits.
+
 The exact synthetic coverage and its limits are recorded in `docs/migration/LOCAL_SYNTHETIC_ACCEPTANCE.md`.

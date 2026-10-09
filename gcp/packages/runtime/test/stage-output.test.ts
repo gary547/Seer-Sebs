@@ -9,7 +9,7 @@ function database() {
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     const [run, stage, field, index, count, payload, sha256] = params;
     if (sql.startsWith("DELETE")) {
-      for (let i = chunks.length - 1; i >= 0; i--) if (chunks[i]!.run === run && chunks[i]!.stage === stage) chunks.splice(i, 1);
+      for (let i = chunks.length - 1; i >= 0; i--) if (chunks[i]!.run === run && chunks[i]!.stage === stage && (field === undefined || chunks[i]!.field === field)) chunks.splice(i, 1);
     } else if (sql.startsWith("INSERT")) {
       chunks.push({ run: String(run), stage: String(stage), field: String(field), chunk_index: Number(index), item_count: Number(count), payload: String(payload), sha256: String(sha256) });
     } else if (sql.startsWith("SELECT")) {
@@ -62,10 +62,37 @@ describe("bounded stage output", () => {
     });
   }
 
-  it("rejects unsupported manifests and oversized individual records", async () => {
+  it("round trips oversized nested records using bounded Unicode-safe fragments", async () => {
+    const db = database();
+    const value = { handlerVersion: "rollup-output-v1", keywords: [{ id: "kept" }], scenarios: [{ scenario: "realistic", clusterRollup: [{ zero: 0, target: null, text: '🧪"\\\n'.repeat(1_300_000) }] }] };
+    const stored = await storeStageOutput(db.client, "run", "rollup-output", value);
+    expect(stored.stageOutputStorage).toMatchObject({ version: 2, arrays: [{ field: "scenarios", items: 1, encoding: "json_fragments" }] });
+    expect(db.chunks.length).toBeGreaterThan(2);
+    expect(db.chunks.every(chunk => Buffer.byteLength(chunk.payload) <= STAGE_OUTPUT_CHUNK_BYTES && JSON.parse(chunk.payload).length === 1)).toBe(true);
+    expect(await loadStageOutput(db.client, "run", "rollup-output", stored)).toEqual(value);
+    await storeStageOutput(db.client, "run", "rollup-output", value);
+    expect(await loadStageOutput(db.client, "run", "rollup-output", stored)).toEqual(value);
+    db.chunks[0]!.payload = '["tampered"]';
+    await expect(loadStageOutput(db.client, "run", "rollup-output", stored)).rejects.toMatchObject({ code: "pipeline_output_storage_failed" });
+  }, 20000);
+
+  it("rejects unsupported manifests and reserved storage fields", async () => {
     const db = database();
     await expect(loadStageOutput(db.client, "run", "stage", { stageOutputStorage: { version: 2, arrays: [] } })).rejects.toMatchObject({ statusCode: 422 });
-    await expect(storeStageOutput(db.client, "run", "stage", { keywords: ["x".repeat(STAGE_OUTPUT_CHUNK_BYTES)] })).rejects.toMatchObject({ statusCode: 422 });
     await expect(storeStageOutput(db.client, "run", "stage", { stageOutputStorage: {} })).rejects.toMatchObject({ statusCode: 422 });
   });
+
+  it("preserves sibling fields and input order when a later nested record needs fragments", async () => {
+    const db = database();
+    const value = {
+      keywords: Array.from({ length: 100 }, (_, id) => ({ id, text: "x".repeat(1000) })),
+      scenarios: [...Array.from({ length: 9 }, (_, id) => ({ id, text: "x".repeat(1024 * 1024) })), { id: 9, text: "x".repeat(STAGE_OUTPUT_CHUNK_BYTES) }],
+    };
+    const stored = await storeStageOutput(db.client, "run", "rollup-output", value);
+    expect(db.chunks.some(chunk => chunk.field === "keywords")).toBe(true);
+    expect(await loadStageOutput(db.client, "run", "rollup-output", stored)).toEqual(value);
+    const malformed = structuredClone(stored);
+    (malformed.stageOutputStorage as { version: unknown }).version = "2";
+    await expect(loadStageOutput(db.client, "run", "rollup-output", malformed)).rejects.toMatchObject({ code: "pipeline_output_storage_failed" });
+  }, 20000);
 });

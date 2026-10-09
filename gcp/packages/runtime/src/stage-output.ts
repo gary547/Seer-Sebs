@@ -7,12 +7,14 @@ export const STAGE_OUTPUT_INLINE_BYTES = 64 * 1024;
 export const STAGE_OUTPUT_CHUNK_BYTES = 8 * 1024 * 1024;
 const STORAGE_KEY = "stageOutputStorage";
 const READ_PAGE_SIZE = 2;
+const FRAGMENT_BYTES = 3 * 1024 * 1024;
 
 interface ArrayManifest {
   field: string;
   items: number;
   chunks: number;
   sha256: string;
+  encoding?: "json_fragments";
 }
 
 interface ChunkRow {
@@ -36,6 +38,36 @@ function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+async function storeArrayFragments(
+  client: Pick<PoolClient, "query">,
+  runId: string,
+  stageId: string,
+  field: string,
+  value: unknown[],
+): Promise<ArrayManifest> {
+  await client.query("DELETE FROM pipeline_stage_output_chunks WHERE run_id = $1 AND stage_id = $2 AND field_name = $3", [runId, stageId, field]);
+  const encoded = Buffer.from(JSON.stringify(value));
+  const hash = createHash("sha256");
+  let chunks = 0;
+  for (let start = 0; start < encoded.length;) {
+    let end = Math.min(start + FRAGMENT_BYTES, encoded.length);
+    while (end < encoded.length && (encoded[end]! & 0xc0) === 0x80) end -= 1;
+    const payload = JSON.stringify([encoded.subarray(start, end).toString("utf8")]);
+    if (Buffer.byteLength(payload) > STAGE_OUTPUT_CHUNK_BYTES) throw invalidOutput();
+    const sha256 = digest(payload);
+    await client.query(
+      `INSERT INTO pipeline_stage_output_chunks
+        (run_id, stage_id, field_name, chunk_index, item_count, payload, sha256)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [runId, stageId, field, chunks, 1, payload, sha256],
+    );
+    hash.update(sha256);
+    chunks += 1;
+    start = end;
+  }
+  return { field, items: value.length, chunks, sha256: hash.digest("hex"), encoding: "json_fragments" };
+}
+
 export async function storeStageOutput(
   client: Pick<PoolClient, "query">,
   runId: string,
@@ -55,6 +87,7 @@ export async function storeStageOutput(
     let bytes = 2;
     let chunkIndex = 0;
     const hash = createHash("sha256");
+    let fragmented = false;
     const flush = async () => {
       if (pending.length === 0) return;
       const payload = `[${pending.join(",")}]`;
@@ -73,11 +106,16 @@ export async function storeStageOutput(
     for (const item of value) {
       const encoded = JSON.stringify(item) ?? "null";
       const size = Buffer.byteLength(encoded);
-      if (size + 2 > STAGE_OUTPUT_CHUNK_BYTES) throw invalidOutput();
+      if (size + 2 > STAGE_OUTPUT_CHUNK_BYTES) {
+        arrays.push(await storeArrayFragments(client, runId, stageId, field, value));
+        fragmented = true;
+        break;
+      }
       if (bytes + size + (pending.length ? 1 : 0) > STAGE_OUTPUT_CHUNK_BYTES) await flush();
       bytes += size + (pending.length ? 1 : 0);
       pending.push(encoded);
     }
+    if (fragmented) continue;
     const fieldBytes = Buffer.byteLength(JSON.stringify(field)) + 1;
     if (chunkIndex === 0 && inlineBytes + fieldBytes + bytes < STAGE_OUTPUT_INLINE_BYTES) {
       Object.defineProperty(summary, field, { value, enumerable: true, configurable: true, writable: true });
@@ -87,7 +125,7 @@ export async function storeStageOutput(
       arrays.push({ field, items: value.length, chunks: chunkIndex, sha256: hash.digest("hex") });
     }
   }
-  if (arrays.length) summary[STORAGE_KEY] = { version: 1, arrays };
+  if (arrays.length) summary[STORAGE_KEY] = { version: arrays.some(array => array.encoding) ? 2 : 1, arrays };
   if (Buffer.byteLength(JSON.stringify(summary)) > STAGE_OUTPUT_INLINE_BYTES) throw invalidOutput();
   return summary;
 }
@@ -101,9 +139,10 @@ export async function loadStageOutput(
   const stored = record(output);
   if (!stored || !Object.hasOwn(stored, STORAGE_KEY)) return output;
   const manifest = record(stored[STORAGE_KEY]);
-  if (manifest?.version !== 1 || !Array.isArray(manifest.arrays) || manifest.arrays.length === 0) throw invalidOutput();
+  if ((manifest?.version !== 1 && manifest?.version !== 2) || !Array.isArray(manifest.arrays) || manifest.arrays.length === 0) throw invalidOutput();
   const restored = Object.fromEntries(Object.entries(stored).filter(([key]) => key !== STORAGE_KEY));
   const fields = new Set<string>();
+  let fragmentsPresent = false;
   for (const entry of manifest.arrays) {
     const array = record(entry);
     if (!array || typeof array.field !== "string" || array.field === STORAGE_KEY || array.field.length === 0 || array.field.length > 128 ||
@@ -111,6 +150,9 @@ export async function loadStageOutput(
       typeof array.items !== "number" || !Number.isSafeInteger(array.items) || array.items < 0 ||
       typeof array.chunks !== "number" || !Number.isSafeInteger(array.chunks) || array.chunks < 0 ||
       typeof array.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(array.sha256)) throw invalidOutput();
+    const fragmented = array.encoding === "json_fragments";
+    if (array.encoding !== undefined && (!fragmented || manifest.version !== 2)) throw invalidOutput();
+    fragmentsPresent ||= fragmented;
     fields.add(array.field);
     const values: unknown[] = [];
     const hash = createHash("sha256");
@@ -129,14 +171,20 @@ export async function loadStageOutput(
         let items: unknown;
         try { items = JSON.parse(chunk.payload); } catch { throw invalidOutput(); }
         if (!Array.isArray(items) || items.length !== chunk.item_count || items.length === 0 ||
-          values.length + items.length > array.items) throw invalidOutput();
+          (fragmented ? items.length !== 1 || typeof items[0] !== "string" : values.length + items.length > array.items)) throw invalidOutput();
         for (const item of items) values.push(item);
         hash.update(chunk.sha256);
         next += 1;
       }
     }
-    if (next !== array.chunks || values.length !== array.items || hash.digest("hex") !== array.sha256) throw invalidOutput();
-    Object.defineProperty(restored, array.field, { value: values, enumerable: true, configurable: true, writable: true });
+    if (next !== array.chunks || hash.digest("hex") !== array.sha256) throw invalidOutput();
+    let reconstructed: unknown = values;
+    if (fragmented) {
+      try { reconstructed = JSON.parse(values.join("")); } catch { throw invalidOutput(); }
+    }
+    if (!Array.isArray(reconstructed) || reconstructed.length !== array.items) throw invalidOutput();
+    Object.defineProperty(restored, array.field, { value: reconstructed, enumerable: true, configurable: true, writable: true });
   }
+  if (manifest.version === 2 && !fragmentsPresent) throw invalidOutput();
   return restored;
 }
