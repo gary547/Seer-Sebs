@@ -609,14 +609,38 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   Preserve the immutable operator/time/query audit in `input.forecastScope`.
 - An explicitly approved no-results scope filters downstream dependency copies
   for HAR, Revenue and rollups without changing saved qualification, provider
-  observations, frozen content-fit inputs or batch keys. Unapproved terminal
-  searches block resume with `serp_resolution_required`; every remaining keyword
+  observations, frozen content-fit inputs or batch keys. Every remaining keyword
   still passes the full coverage gates. Recalculation inherits the last successful
   approved scope, while new full runs do not and creation rejects supplied scopes.
 - Native results exports retain approved excluded keywords and existing columns,
   use `excluded_no_search_results` with the approval reason, and leave forecast
   values unavailable. Never present an excluded query as a measured zero or reuse
-  stale forecasts. The admin review requires explicit confirmation before resume.
+  stale forecasts. Historical operator approvals remain immutable.
+- New and resumed runs use the user-approved `automatic-v1` forecast eligibility
+  policy (2026-10-09). Before HAR, classify saved per-keyword observations as
+  `missing_volume` after the existing GSC fallback, `below_operator_threshold`,
+  or `no_organic_results`; continue on the remaining scope. Preserve genuine
+  zero volume at a zero threshold. Unexpected missing provider observations,
+  invalid authority, corrupt checkpoints and an empty scope still fail readiness.
+- Migration `038_forecast_eligibility` adds `pipeline_forecast_exclusions`, with
+  an immutable run/keyword key, reason, canonical search source, policy and time.
+  Worker audit writes, run summary, stage success and events commit atomically.
+  The API may read the audit and copy it from the latest successful run during
+  provider-free recalculation. Full runs reassess eligibility; request bodies
+  cannot supply the policy, summary or arbitrary exclusions. Preserve any earlier
+  `input.forecastScope` operator audit separately.
+- HAR, Revenue, calibration, rollups and native exports share automatic scope.
+  Run metadata exposes bounded counts and at most 20 sample exclusions. Native
+  exports keep these keywords and existing columns, report `not_calculable_*`
+  reasons, and leave forecasts unavailable. The admin pipeline panel shows counts
+  and reasons; performance rows without a forecast must not claim missing rank.
+- DataForSEO task status `20000` with a completed observation but no organic
+  results is terminal, including feature-only searches. Preserve actual status
+  and feature provenance, as for `40102`; never resubmit a terminal task. Missing
+  observations and malformed organic rows remain actionable failures. Automatic
+  runs continue past saved terminal outcomes; legacy review routes remain available.
+  `test:gcp-forecast-eligibility` verifies real worker-role continuation through
+  all 24 stages, immutable saved stages, audit replay, rollback and run isolation.
 - Large forecast stage outputs can exceed the default ten-second SQL write
   timeout even when normalized forecast rows are batched. Keep the extended
   timeout transaction-local at the final stage-output write and while reading
