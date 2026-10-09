@@ -646,6 +646,13 @@ async function validateEndToEnd() {
       if (JSON.stringify(paged) !== JSON.stringify(all.domains)) {
         throw new Error("Paginated domain results do not match the complete benchmark.");
       }
+      const csvExport = await jsonRequest(`${apiBaseUrl}/v1/projects/${project.id}/link-power-domains-export?runId=${firstRun.id}&sort=${sort}&direction=${direction}`, authenticated(domainAdmin.token));
+      const expectedCsv = [['Domain', 'Mean LPS', 'Best rank', 'Appearances', 'Client domain'],
+        ...all.domains.map(domain => [domain.domain, domain.meanScore, domain.bestRank, domain.appearances, domain.isClientDomain ? 'Yes' : 'No'])]
+        .map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\r\n');
+      if (csvExport.runId !== firstRun.id || csvExport.total !== all.total || csvExport.csv !== expectedCsv) {
+        throw new Error("The complete domain CSV does not reconcile to the paginated LPS benchmark.");
+      }
       const end = await jsonRequest(`${url}&limit=2&offset=${all.total}`, authenticated(domainAdmin.token));
       if (end.domains.length || end.total !== all.total) {
         throw new Error("An empty domain page lost the full benchmark count.");

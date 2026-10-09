@@ -18,7 +18,7 @@ function result(rows: unknown[]) {
 
 function database(): DatabasePool {
   return {
-    query: vi.fn(async (sqlValue: string) => {
+    query: vi.fn(async (sqlValue: string, values?: unknown[]) => {
       const sql = sqlValue.replace(/\s+/g, " ").trim();
       if (sql.includes("SELECT client_id FROM navigator_projects")) {
         return result([{ client_id: clientId }]);
@@ -100,6 +100,7 @@ function database(): DatabasePool {
         ]);
       }
       if (sql.includes("WITH domain_benchmark AS MATERIALIZED")) {
+        if (Number(values?.[2]) > 200) return result(Array.from({ length: 201 }, (_, index) => ({ appearance_count: "2", best_rank: 7, domain: index === 0 ? "pilltime.co.uk" : `competitor-${index}.test`, is_client_domain: index === 0, mean_score: "70.1", total: "201" })));
         return result([{ appearance_count: "2", best_rank: 7, domain: "pilltime.co.uk", is_client_domain: true, mean_score: "70.1", total: "12" }]);
       }
       if (
@@ -301,11 +302,49 @@ describe("calculation inspector API", () => {
     expect(vi.mocked(pool.query).mock.calls.some(([sql]) => String(sql).includes("FROM pipeline_runs"))).toBe(false);
   });
 
+  it.each(["meanScore", "appearances"])("exports all domains by %s through one authorised aggregation", async (sort) => {
+    for (const direction of ["asc", "desc"]) {
+      vi.mocked(pool.query).mockClear();
+      const response = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains-export?runId=${runId}&sort=${sort}&direction=${direction}`);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { csv: string; runId: string; total: number };
+      expect(body).toMatchObject({ runId, total: 201 });
+      const rows = body.csv.split("\r\n");
+      expect(rows).toHaveLength(202);
+      expect(rows[0]).toBe('"Domain","Mean LPS","Best rank","Appearances","Client domain"');
+      expect(rows[1]).toBe('"pilltime.co.uk","70.1","7","2","Yes"');
+      expect(rows[201]).toBe('"competitor-200.test","70.1","7","2","No"');
+      const aggregations = vi.mocked(pool.query).mock.calls.filter(([sql]) => String(sql).includes("WITH domain_benchmark"));
+      expect(aggregations).toHaveLength(1);
+      expect(aggregations[0]?.[1]).toEqual([projectId, runId, 250_001, 0]);
+    }
+  });
+
+  it.each(["no domains", "partial results", "too many domains", "oversized response"])("does not return a partial domain CSV for %s", async (failure) => {
+    const original = database();
+    vi.mocked(pool.query).mockImplementation(async (sql, values) => {
+      if (String(sql).includes("WITH domain_benchmark")) return result([{
+        appearance_count: "2", best_rank: 7,
+        domain: failure === "no domains" ? null : failure === "oversized response" ? '"'.repeat(9 * 1024 * 1024) : "pilltime.co.uk",
+        is_client_domain: true, mean_score: "70.1",
+        total: failure === "no domains" ? "0" : failure === "too many domains" ? "250001" : failure === "partial results" ? "2" : "1",
+      }]) as never;
+      return original.query(sql, values) as never;
+    });
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains-export?runId=${runId}`);
+    expect(response.status).toBe(["too many domains", "oversized response"].includes(failure) ? 413 : 409);
+    const body = await response.json() as { csv?: string; error: { code: string } };
+    expect(body.csv).toBeUndefined();
+    expect(body.error.code).toMatch(/^domain_export_/);
+  });
+
   it("requires an administrator for domain results and CSV pages", async () => {
     vi.mocked(pool.query).mockImplementation(async (sql) => result(String(sql).includes("FROM profiles") ? [{ approval_status: "approved" }] : [{ role: "user" }]) as never);
     const response = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains?limit=200`);
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "administrator_required" } });
+    expect(vi.mocked(pool.query).mock.calls.some(([sql]) => String(sql).includes("WITH domain_benchmark"))).toBe(false);
+    expect((await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains-export?runId=${runId}`)).status).toBe(403);
     expect(vi.mocked(pool.query).mock.calls.some(([sql]) => String(sql).includes("WITH domain_benchmark"))).toBe(false);
   });
 
@@ -317,6 +356,7 @@ describe("calculation inspector API", () => {
     });
     const missingRun = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains?runId=${runId}`);
     expect(missingRun.status).toBe(404);
+    expect((await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains-export?runId=${runId}`)).status).toBe(404);
     expect(vi.mocked(pool.query).mock.calls.some(([sql]) => String(sql).includes("WITH domain_benchmark"))).toBe(false);
     vi.mocked(pool.query).mockImplementation(async (sql) => result(String(sql).includes("FROM user_roles") ? [{ role: "admin" }] : String(sql).includes("FROM profiles") ? [{ approval_status: "approved" }] : []) as never);
     expect((await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-domains`)).status).toBe(404);

@@ -49,10 +49,10 @@ export default function LinkPowerDomainBenchmark({ projectId, runId }: { project
   };
   return (
     <div className="space-y-3" aria-busy={benchmark.isFetching}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3" aria-busy={downloading}>
         <p className="text-xs text-ink-muted">{number(total, 0)} domains · Click Mean LPS or Appearances to change the order. CSV includes all domains.</p>
         <Button type="button" variant="outline" size="sm" onClick={() => void download()} disabled={downloading || !total}>
-          <Download className="mr-1 h-4 w-4" />{downloading ? "Preparing domains…" : "Export domains (CSV)"}
+          <Download className="mr-1 h-4 w-4" />{downloading ? `Preparing ${number(total, 0)} domains…` : "Export domains (CSV)"}
         </Button>
       </div>
       <div className="overflow-auto rounded-lg border border-hairline">

@@ -1,6 +1,5 @@
 import { getAccessToken } from "./auth";
-import { seerApiRequest } from "./api";
-import { calculationCsvCell } from "./calculation-export";
+import { SeerApiError, seerApiRequest } from "./api";
 import type { LinkPowerInspectorPage } from "./calculations";
 
 export type DomainSort = "meanScore" | "appearances";
@@ -25,27 +24,31 @@ export async function getProjectLinkPowerDomains(
 export async function downloadLinkPowerDomains(
   projectId: string, runId: string, sort: DomainSort, direction: DomainDirection,
 ): Promise<number> {
-  const lines = [["Domain", "Mean LPS", "Best rank", "Appearances", "Client domain"].map(calculationCsvCell).join(",")];
-  let offset = 0;
-  let total: number | undefined;
-  do {
-    const page = await getProjectLinkPowerDomains(projectId, { runId, sort, direction, limit: 200, offset });
-    if (page.runId !== runId || (total !== undefined && page.total !== total)) {
-      throw new Error("Domain results changed. Refresh the benchmark and retry.");
+  const token = await getAccessToken();
+  if (!token) throw new Error("Authentication is required.");
+  const params = new URLSearchParams({ runId, sort, direction });
+  let result: { csv: string; runId: string; total: number };
+  try {
+    result = await seerApiRequest(`/v1/projects/${projectId}/link-power-domains-export?${params}`, { signal: AbortSignal.timeout(60000) }, token);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "name" in error && ["TimeoutError", "AbortError"].includes(String(error.name))) {
+      throw new Error("Domain export timed out. Please retry the download.");
     }
-    total = page.total;
-    if (!page.domains.length) throw new Error("No domain results are available for this export.");
-    for (const domain of page.domains) {
-      lines.push([domain.domain, domain.meanScore, domain.bestRank, domain.appearances, domain.isClientDomain ? "Yes" : "No"].map(calculationCsvCell).join(","));
+    if (error instanceof TypeError || (error instanceof SeerApiError && error.status >= 500)) {
+      throw new Error("Domain export could not be downloaded. Please retry the download.");
     }
-    offset += page.domains.length;
-  } while (offset < total);
+    throw error;
+  }
+  if (result.runId !== runId) throw new Error("Domain results changed. Refresh the benchmark and retry.");
+  if (!Number.isSafeInteger(result.total) || result.total < 1 || typeof result.csv !== "string" || !result.csv.length) {
+    throw new Error("No complete domain results are available for this export.");
+  }
 
-  const url = URL.createObjectURL(new Blob(["\uFEFF", lines.join("\r\n")], { type: "text/csv;charset=utf-8" }));
+  const url = URL.createObjectURL(new Blob(["\uFEFF", result.csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = `seer-link-power-domains-${projectId}-${runId}.csv`;
-  document.body.appendChild(link); link.click(); link.remove();
-  URL.revokeObjectURL(url);
-  return offset;
+  try { document.body.appendChild(link); link.click(); }
+  finally { link.remove(); URL.revokeObjectURL(url); }
+  return result.total;
 }
