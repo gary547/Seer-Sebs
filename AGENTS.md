@@ -296,6 +296,16 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   `GET /v1/projects/:projectId/link-power-inspector`. Both routes require an
   administrator and project access, and they inspect the latest successful
   pipeline run without mutating calculation data.
+- `GET /v1/projects/:projectId/link-power-domains-export` returns
+  `{csv, runId, total}` for an authorised administrator and a successful project
+  run. Preserve the benchmark's `meanScore`/`appearances` sorting, direction and
+  existing five CSV columns. Export uses one aggregation through the shared
+  diagnostic query budget; the normal domain page remains capped at 200 rows.
+  Bound single-file exports at 250,000 domains and below 30 MiB of JSON response;
+  reject absent, incomplete or oversized results before downloading any file.
+  The browser pins the run, preserves the UTF-8 BOM, applies a 60-second timeout
+  and restores the download button after failures. Export reads saved LPS results
+  without starting calculation or provider work.
 - `GET /v1/projects/:projectId/calculation-control` is the bounded aggregate
   contract for every panel in the admin Calculations page. Keep uploads and
   recent runs capped at 20, comparison rows capped at 50, and detail samples
