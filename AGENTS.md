@@ -663,6 +663,12 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   in the same locked transaction. Only the worker may read/write chunk contents.
   Keep metadata plus its manifest within 64 KiB, and load at most two chunks per
   indexed query. Existing inline outputs remain readable without rewriting them.
+- An individual nested array record over 8 MiB uses version-two
+  `json_fragments`: Unicode-safe JSON string pages reconstruct the original
+  complete array without changing values or item order. Preserve version-one
+  reads, the 8-MiB page cap, field/chunk checksums and original item counts.
+  `test:gcp-stage-output` verifies all three 107,926-keyword rollup scenarios,
+  transactional persistence, replay, isolation and corruption rejection.
 - Worker dependencies and recalculation qualification baselines must reconstruct
   chunked outputs through the shared stage-output reader. Verify contiguous
   order, hashes and item counts, with bounded indexed reads; reject missing or
