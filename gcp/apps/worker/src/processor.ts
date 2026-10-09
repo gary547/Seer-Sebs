@@ -20,6 +20,9 @@ import {
 } from "../../../packages/pipeline/src/definition.js";
 import { pipelineStageFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 import { forecastScope, scopeDependencyOutputs } from "../../../packages/pipeline/src/forecast-scope.js";
+import { automaticForecastEligibility, deriveForecastExclusions, forecastEligibilitySummary } from "../../../packages/pipeline/src/forecast-eligibility.js";
+import type { KeywordEnrichmentStageData, SerpCollectionStageData } from "../../../packages/pipeline/src/stage-handlers.js";
+import { loadForecastExclusions, persistForecastExclusions } from "./forecast-eligibility.js";
 import {
   executeDataDrivenStage,
   PipelinePreflightError,
@@ -470,9 +473,21 @@ async function executeStageAttempt(
     task.runId,
     definition.dependencies,
   );
+  const automatic = automaticForecastEligibility(input);
+  const forecastStage = ["har-readiness", "har-v2", "revenue-readiness", "revenue-v2", "calibration", "rollup-output"].includes(task.stageId);
+  let exclusions = automatic && forecastStage ? await loadForecastExclusions(pool, task.runId) : [];
+  let eligibility: ReturnType<typeof forecastEligibilitySummary> | undefined;
+  if (automatic && source && task.stageId === "har-readiness") {
+    const approvedOutputs = scopeDependencyOutputs(task.stageId, savedDependencyOutputs, scope);
+    const enrichment = approvedOutputs["keyword-enrichment"] as KeywordEnrichmentStageData;
+    if (runMode !== "recalculate") {
+      exclusions = deriveForecastExclusions(enrichment, approvedOutputs["serp-collection"] as SerpCollectionStageData);
+    }
+    eligibility = forecastEligibilitySummary(exclusions, enrichment.keywords.length, new Date().toISOString());
+  }
   let stageData: ReturnType<typeof executeDataDrivenStage> | null;
   try {
-    const dependencyOutputs = scopeDependencyOutputs(task.stageId, savedDependencyOutputs, scope);
+    const dependencyOutputs = scopeDependencyOutputs(task.stageId, savedDependencyOutputs, scope, exclusions);
     stageData = source
       ? executeDataDrivenStage(task.stageId, source, dependencyOutputs)
       : null;
@@ -495,6 +510,7 @@ async function executeStageAttempt(
     execution: definition.execution,
     ...(representativeSummary ? { fixtureSummary: representativeSummary } : {}),
     ...(stageData ?? {}),
+    ...(eligibility ? { forecastEligibility: eligibility } : {}),
     ...(scope ? { forecastExclusions: { reason: scope.reason, queryCount: scope.queries.length, keywordCount: scope.keywords.length } } : {}),
     validationMode: representativeSummary
       ? "local-synthetic-contract"
@@ -530,6 +546,11 @@ async function executeStageAttempt(
     }
 
     await client.query("SET LOCAL statement_timeout = '600s'");
+    if (eligibility) {
+      await persistForecastExclusions(client, task.runId, exclusions);
+      await client.query(`UPDATE pipeline_runs SET input = input || jsonb_build_object('forecastEligibility', $2::jsonb) WHERE id = $1`,
+        [task.runId, JSON.stringify(eligibility)]);
+    }
     if (projectId && stageData) {
       await persistProjectStageData(client, projectId, task.runId, stageData);
     }

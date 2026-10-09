@@ -19,6 +19,7 @@ let idle = true;
 let recoveryWrites: string[] = [];
 let unresolvedSerps = false;
 let previousScope: unknown;
+let previousEligibility: unknown;
 let createdInput: Record<string, unknown>;
 
 function result(rows: unknown[], rowCount = rows.length) {
@@ -108,11 +109,13 @@ function database(): DatabasePool {
     if (sql.includes("AS completed_count")) return result(hasCheckpoint ? [{ id: failedRunId, input: { mode: "full", projectId }, created_at: new Date("2026-10-07T00:00:00Z"), completed_count: 2 }] : []);
     if (sql.includes("AS idle")) return result([{ idle }]);
     if (sql.startsWith("SELECT 1 FROM provider_work_items")) return result(unresolvedSerps ? [{}] : []);
-    if (sql.startsWith("SELECT input FROM pipeline_runs")) return result([{ input: previousScope ? { forecastScope: previousScope } : {} }]);
+    if (sql.startsWith("SELECT id, input FROM pipeline_runs")) return result([{ id: failedRunId, input: {
+      ...(previousScope ? { forecastScope: previousScope } : {}), ...(previousEligibility ? { forecastEligibility: previousEligibility } : {}) } }]);
     if (sql.includes("SELECT stage_id, state, output")) return result(PIPELINE_STAGES.map((stage, index) => ({ stage_id: stage.id, state: index < 2 ? "succeeded" : "failed", output: { preserved: stage.id } })));
     if (sql.startsWith("UPDATE pipeline") || sql.startsWith("UPDATE provider_work_items")) { recoveryWrites.push(sql); return result([], 1); }
     if (sql.startsWith("INSERT INTO pipeline_runs")) { createdInput = JSON.parse(String(values[2])); return result([], 1); }
     if (sql.startsWith("INSERT INTO pipeline_stage_runs")) return result([], 1);
+    if (sql.startsWith("INSERT INTO pipeline_forecast_exclusions")) { recoveryWrites.push(sql); return result([], 1); }
     throw new Error(`Unexpected SQL in pipeline readiness test: ${sql}`);
   });
   const client = { query, release: vi.fn() };
@@ -128,7 +131,7 @@ describe("autonomous pipeline readiness API", () => {
     readinessOverrides = {};
     completedQualification = true;
     hasCheckpoint = false; changedInputs = false; idle = true; recoveryWrites = [];
-    unresolvedSerps = false; previousScope = undefined; createdInput = {};
+    unresolvedSerps = false; previousScope = undefined; previousEligibility = undefined; createdInput = {};
     orchestrator.start.mockClear();
     server = createApiServer({
       authenticateRequest: vi.fn(async () => ({ email: "admin@example.com", id: userId })),
@@ -170,16 +173,28 @@ describe("autonomous pipeline readiness API", () => {
     expect((await post("full")).status).toBe(202);
     expect(createdInput.forecastScope).toBeUndefined();
   });
+  it("inherits automatic eligibility for a provider-free recalculation and reassesses it on a full run", async () => {
+    previousEligibility = { policy: "automatic-v1", excludedKeywordCount: 2, calculatedKeywordCount: 10 };
+    const route = `${baseUrl}/v1/projects/${projectId}/pipeline-runs`;
+    const post = (mode: string) => fetch(route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode }) });
+    expect((await post("recalculate")).status).toBe(202);
+    expect(createdInput.forecastEligibility).toEqual(previousEligibility);
+    expect(recoveryWrites.some(sql => sql.includes("FROM pipeline_forecast_exclusions WHERE run_id = $2"))).toBe(true);
+    expect((await post("full")).status).toBe(202);
+    expect(createdInput.forecastEligibility).toBeUndefined();
+    expect(createdInput.forecastEligibilityPolicy).toBe("automatic-v1");
+    previousEligibility = undefined;
+  });
 
-  it("rejects unresolved terminal searches before starting another execution or resetting checkpoints", async () => {
+  it("resumes saved terminal searches with automatic eligibility and without requiring manual exclusions", async () => {
     hasCheckpoint = true; unresolvedSerps = true;
     const response = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-runs`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "resume" }),
     });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: { code: "serp_resolution_required" } });
-    expect(orchestrator.start).not.toHaveBeenCalled();
-    expect(recoveryWrites).toEqual([]);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ id: failedRunId, recoveredStageCount: 2, generation: 1 });
+    expect(orchestrator.start).toHaveBeenCalled();
+    expect(recoveryWrites.length).toBeGreaterThan(0);
   });
 
   it("uses a safe domain fallback and resolves missing authority at run start", async () => {

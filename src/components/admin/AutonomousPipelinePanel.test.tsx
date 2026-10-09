@@ -111,6 +111,19 @@ function pipelineRun(): PipelineRun {
 }
 
 describe("AutonomousPipelinePanel", () => {
+  it("reports automatic skipped reasons separately from valid forecasts and historical approvals", () => {
+    const run = pipelineRun();
+    run.input = { forecastEligibilityPolicy: "automatic-v1", forecastEligibility: { calculatedKeywordCount: 100,
+      excludedKeywordCount: 2, countsByReason: { missing_volume: 1, no_organic_results: 1 },
+      sample: [{ id: "sample-id", normalisedText: "sample query", reason: "missing_volume" }] } };
+    render(<AutonomousPipelinePanel archived={false} onRun={vi.fn()} onSaveBrandTerms={vi.fn()}
+      onSavePolicy={vi.fn()} onStampPrecurated={vi.fn()} readiness={readiness} run={run} running={false}
+      savingBrandTerms={false} savingPolicy={false} stampingPrecurated={false} />);
+    expect(screen.getByText("100 forecastable keywords · 2 not calculable")).toBeInTheDocument();
+    expect(screen.getByText("No usable volume: 1")).toBeInTheDocument();
+    expect(screen.getByText("No organic search results: 1")).toBeInTheDocument();
+    expect(screen.getByText("sample query · No usable volume")).toBeInTheDocument();
+  });
   it("offers stop on an active run and prevents a second start", () => {
     const onStop = vi.fn();
     render(<AutonomousPipelinePanel archived={false} onStop={onStop}

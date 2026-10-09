@@ -13,6 +13,7 @@ import {
 import { userFacingPipelineFailureMessage } from "../../../packages/pipeline/src/failure-messages.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { forecastScope } from "../../../packages/pipeline/src/forecast-scope.js";
+import { FORECAST_ELIGIBILITY_POLICY } from "../../../packages/pipeline/src/forecast-eligibility.js";
 import { assertProjectAccessByRole } from "./authorization.js";
 import { lockIdleRun, projectCheckpoint, recoverPipelineRun } from "./pipeline-recovery.js";
 import {
@@ -587,6 +588,8 @@ export async function createPipelineRun(
       ? (body as Record<string, unknown>)
       : {};
   if ("forecastScope" in input) throw new HttpError(400, "invalid_forecast_scope", "Approve exclusions through the run's SERP review; pipeline creation cannot supply a forecast scope.");
+  if ("forecastEligibility" in input || "forecastEligibilityPolicy" in input) throw new HttpError(400, "invalid_forecast_scope", "Forecast eligibility is determined from saved pipeline observations.");
+  input.forecastEligibilityPolicy = FORECAST_ELIGIBILITY_POLICY;
   const projectId =
       typeof input.projectId === "string" ? input.projectId : null;
   const mode = pipelineRunMode(input.mode);
@@ -596,6 +599,7 @@ export async function createPipelineRun(
   let status = "pending";
   let generation = 0;
   let recovery: Record<string, unknown> | undefined;
+  let eligibilitySourceRun: string | undefined;
 
   await withTransaction(pool, async (client) => {
     if (projectId) {
@@ -655,11 +659,15 @@ export async function createPipelineRun(
       }
       input.checkpoint = checkpoint;
       if (mode === "recalculate") {
-        const previous = await client.query<{ input: unknown }>(
-          `SELECT input FROM pipeline_runs WHERE input->>'projectId' = $1 AND status = 'succeeded'
+        const previous = await client.query<{ id: string; input: Record<string, unknown> }>(
+          `SELECT id, input FROM pipeline_runs WHERE input->>'projectId' = $1 AND status = 'succeeded'
            ORDER BY completed_at DESC, id DESC LIMIT 1`, [projectId]);
         const scope = forecastScope(previous.rows[0]?.input);
         if (scope) input.forecastScope = scope;
+        if (previous.rows[0]?.input.forecastEligibility) {
+          input.forecastEligibility = previous.rows[0].input.forecastEligibility;
+          eligibilitySourceRun = previous.rows[0].id;
+        }
       }
     }
     await client.query(
@@ -670,6 +678,10 @@ export async function createPipelineRun(
       [id, user.id, JSON.stringify(input)],
     );
     await insertStages(client, id);
+    if (eligibilitySourceRun) await client.query(
+      `INSERT INTO pipeline_forecast_exclusions (run_id, keyword_id, normalised_text, source_keyword_id, reason, policy, evaluated_at)
+       SELECT $1, keyword_id, normalised_text, source_keyword_id, reason, policy, evaluated_at
+       FROM pipeline_forecast_exclusions WHERE run_id = $2`, [id, eligibilitySourceRun]);
   });
 
   if (recovery) return recovery;

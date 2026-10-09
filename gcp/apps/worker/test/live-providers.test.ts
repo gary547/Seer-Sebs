@@ -33,6 +33,15 @@ function dataForSeoFailure(code: number, message: string): Response {
 }
 
 describe("managed pipeline providers", () => {
+  it("records a completed feature-only search without inventing organic results or losing provider status", async () => {
+    const client = new DataForSeoClient("test-only", async () => dataForSeoResponse([{ type: "ai_overview" }, { type: "related_searches" }]));
+    await expect(client.serpTaskSnapshot("completed-task")).resolves.toEqual({ results: [],
+      features: ["ai_overview", "related_searches"], outcome: "no_results", statusCode: 20000 });
+  });
+  it("keeps malformed organic observations as an actionable failure", async () => {
+    const client = new DataForSeoClient("test-only", async () => dataForSeoResponse([{ type: "organic", rank_absolute: 1 }]));
+    await expect(client.serpTaskSnapshot("invalid-task")).rejects.toMatchObject({ statusCode: 422, code: "pipeline_inputs_incomplete" });
+  });
   it("does not turn missing DataForSEO volume into zero from a zero-filled history", async () => {
     const fetchImplementation = vi.fn<typeof fetch>(async (input) => {
       if (String(input).includes("historical_search_volume/live")) return dataForSeoResponse([{

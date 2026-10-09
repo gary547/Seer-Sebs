@@ -321,7 +321,7 @@ export default function PerformanceOutputSection({ projectId }: Props) {
                 </div>
                 <p className="text-3xl type-display">{totalKeptCount}</p>
                 <p className="text-[10px] text-muted-foreground mt-1">
-                  {forecasts.length} forecasted{unrankedKeywords.length > 0 ? ` · ${unrankedKeywords.length} unranked` : ""}
+                  {forecasts.length} forecasted{unrankedKeywords.length > 0 ? ` · ${unrankedKeywords.length} not forecasted` : ""}
                 </p>
               </button>
 
@@ -503,11 +503,11 @@ export default function PerformanceOutputSection({ projectId }: Props) {
                       <TableCell className="text-right text-xs text-muted-foreground">—</TableCell>
                       <TableCell>
                         <span className="text-[10px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded border border-muted-foreground/30 text-muted-foreground">
-                          Unranked
+                          Unavailable
                         </span>
                       </TableCell>
                       <TableCell className="text-right text-xs text-muted-foreground" colSpan={7}>
-                        No rank data — excluded from forecasts &amp; charts
+                        Forecast unavailable — see calculation diagnostics
                       </TableCell>
                     </TableRow>
                   ))}

@@ -27,7 +27,7 @@ const checkpointRows = () => pool.query("SELECT stage_id, output FROM pipeline_s
 try {
   await owner.query(`CREATE SCHEMA ${schema}`);
   await owner.query(`GRANT USAGE ON SCHEMA ${schema} TO seer_api`);
-  for (const table of ["pipeline_runs", "pipeline_stage_runs", "provider_work_items", "clients", "navigator_projects", "gsc_uploads", "keywords", "keyword_clusters", "keyword_cluster_members", "user_roles", "project_serp_features", "local_provider_serp_keywords", "local_provider_serp_results", "local_provider_site_architecture_inputs"]) {
+  for (const table of ["pipeline_runs", "pipeline_stage_runs", "pipeline_forecast_exclusions", "provider_work_items", "clients", "navigator_projects", "gsc_uploads", "keywords", "keyword_clusters", "keyword_cluster_members", "user_roles", "project_serp_features", "local_provider_serp_keywords", "local_provider_serp_results", "local_provider_site_architecture_inputs"]) {
     await pool.query(`CREATE TABLE ${schema}.${table} (LIKE public.${table} INCLUDING ALL)`);
     await pool.query(`GRANT SELECT ON ${schema}.${table} TO seer_api`);
   }
@@ -126,6 +126,7 @@ try {
       result: [{ items: [{ type: "organic", rank_absolute: 1, domain: "competitor.test", url: "https://competitor.test/page" }] }] }] });
   };
   const hydrator = new LivePipelineProviderHydrator(new DataForSeoClient("test-only", fetcher), {}, {});
+  await pool.query("UPDATE pipeline_runs SET input = input - 'forecastEligibilityPolicy' WHERE id = $1", [runId]);
   await assert.rejects(withProviderRun(pool, runId, 2, () => hydrator.hydrate(pool, projectId, runId, "serp-collection")), { code: "dataforseo_no_search_results", statusCode: 422 });
   const terminal = (await pool.query("SELECT item_key, provider_task_id, state, result FROM provider_work_items WHERE stage_id = 'serp-collection' AND pipeline_run_id = $1 ORDER BY item_key", [runId])).rows;
   assert.equal(terminal[0].result.outcome, "no_results");
@@ -141,7 +142,15 @@ try {
   await failPipelineRun(pool, { runId, stageId: "serp-collection", reason: "dataforseo_no_search_results", generation: 2 });
   const user = { id: userId, email: "recovery@example.test" };
   await assert.rejects(createPipelineRun(pool, user, { forecastScope: {}, projectId, mode: "full" }), { code: "invalid_forecast_scope" });
-  await assert.rejects(withTransaction(pool, client => recoverPipelineRun(client, projectId, checkpoint, runId)), { code: "serp_resolution_required" });
+  const preview = await pool.connect();
+  try {
+    await preview.query("BEGIN");
+    const automatic = await recoverPipelineRun(preview, projectId, checkpoint, runId);
+    assert.equal(automatic.generation, 3);
+    const previewInput = (await preview.query("SELECT input FROM pipeline_runs WHERE id = $1", [runId])).rows[0].input;
+    assert.equal(previewInput.forecastEligibilityPolicy, "automatic-v1");
+    assert.equal(previewInput.forecastScope, undefined, "Automatic recovery requires no operator exclusion audit.");
+  } finally { await preview.query("ROLLBACK"); preview.release(); }
   const memberId = randomUUID();
   await pool.query("INSERT INTO keywords (id, project_id, keyword, normalised_keyword, detox_status) VALUES ($1, $2, 'empty query variant', 'empty query variant', 'keep')", [memberId, projectId]);
   await pool.query("INSERT INTO keyword_cluster_members (cluster_id, keyword_id, is_canonical) SELECT id, $2, false FROM keyword_clusters WHERE pipeline_run_id = $1 AND cluster_key = 'empty query'", [runId, memberId]);

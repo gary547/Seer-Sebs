@@ -5,6 +5,7 @@ import type { ProjectPipelineSource } from "../../../packages/fixtures/src/repre
 import { decideTier, type DataDrivenStageData } from "../../../packages/pipeline/src/stage-handlers.js";
 import type { PipelineStageId } from "../../../packages/pipeline/src/definition.js";
 import { forecastScope } from "../../../packages/pipeline/src/forecast-scope.js";
+import { automaticForecastEligibility } from "../../../packages/pipeline/src/forecast-eligibility.js";
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
@@ -710,6 +711,9 @@ export class DataForSeoClient {
     const code = numberOrNull(task?.status_code);
     if (code === 40601 || code === 40602) return "pending";
     if (code === 40102 && numberOrNull(raw.status_code) === 20000) return { features: [], results: [], outcome: "no_results", statusCode: 40102 };
+    if (code === 20000 && (records(task?.result).length === 0 || !Array.isArray(records(task?.result)[0]?.items))) {
+      throw new HttpError(422, "pipeline_inputs_incomplete", "Completed search data has no result observation. Review the saved search before resuming.");
+    }
     const items = dataForSeoItems(raw);
     const results = items
       .filter((item) => item.type === "organic")
@@ -738,7 +742,10 @@ export class DataForSeoClient {
           .map((type) => type.toLowerCase().replace(/[\s-]+/g, "_")),
       ),
     ];
-    return { features, results };
+    if (results.length === 0 && items.some(item => item.type === "organic")) {
+      throw new HttpError(422, "pipeline_inputs_incomplete", "Completed search data contains invalid organic rows. Review the saved search before resuming.");
+    }
+    return { features, results, ...(results.length === 0 ? { outcome: "no_results" as const, statusCode: 20000 } : {}) };
   }
 
   async serpTaskResult(providerTaskId: string): Promise<SerpSnapshot> {
@@ -1381,8 +1388,11 @@ export class LivePipelineProviderHydrator implements PipelineProviderHydrator {
       `UPDATE pipeline_stage_runs SET output = COALESCE(output, '{}'::jsonb) ||
          jsonb_build_object('providerDiagnostics', $2::jsonb)
        WHERE run_id = $1 AND stage_id = 'serp-collection' AND state = 'running'`,
-      [runId, JSON.stringify({ noResultCount: Number(diagnostic!.count), sampleKeywords: diagnostic!.keywords, statusCode: 40102 })]);
-    throw new HttpError(422, "dataforseo_no_search_results", "DataForSEO returned no search results for retained keywords. Review SERP diagnostics before resuming; completed searches are saved.");
+      [runId, JSON.stringify({ noResultCount: Number(diagnostic!.count), sampleKeywords: diagnostic!.keywords,
+        message: "Completed searches without organic results are saved; forecast eligibility is assessed before calculation." })]);
+    if (!automaticForecastEligibility(run.rows[0]?.input)) {
+      throw new HttpError(422, "dataforseo_no_search_results", "DataForSEO returned no search results for retained keywords. Resume to assess forecast eligibility automatically; completed searches are saved.");
+    }
   }
 
   private async submitSerpChunk(

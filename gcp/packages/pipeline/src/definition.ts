@@ -72,7 +72,7 @@ export const PIPELINE_STAGES: readonly PipelineStageDefinition[] = [
   },
   {
     id: "har-readiness",
-    dependencies: ["ranking-url", "site-architecture", "link-power-score", "serp-collection"],
+    dependencies: ["ranking-url", "site-architecture", "link-power-score", "serp-collection", "keyword-enrichment"],
     execution: "job",
   },
   {

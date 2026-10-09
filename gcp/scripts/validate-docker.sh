@@ -140,6 +140,9 @@ docker compose -f "$compose_file" exec -T postgres \
   -f /docker-entrypoint-initdb.d/037_pipeline_recovery.sql
 docker compose -f "$compose_file" exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
+  -f /docker-entrypoint-initdb.d/038_forecast_eligibility.sql
+docker compose -f "$compose_file" exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
   -f /docker-entrypoint-initdb.d/999_local_runtime_users.sql
 docker compose -f "$compose_file" up -d --wait
 
@@ -151,6 +154,7 @@ run_npm run test:gcp-database-access
 run_npm run test:gcp-volume-history
 run_npm run test:gcp-provider-checkpoints
 run_npm run test:gcp-pipeline-recovery
+run_npm run test:gcp-forecast-eligibility
 run_npm run test:gcp-stage-output
 run_npm run test:gcp-volume-scale
 

@@ -54,6 +54,8 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   if (run.dirty || run.active || (requestedRun && run.id !== requestedRun)) throw new HttpError(409, "export_inputs_changed", "The project is changing or its inputs have changed. Complete the pipeline, then restart the export.");
   const scope = forecastScope(run.input);
   const excluded = new Set(scope?.keywords.map(keyword => keyword.id) ?? []);
+  const eligibility = run.input && typeof run.input === "object" && "forecastEligibility" in run.input
+    ? run.input.forecastEligibility as { excludedKeywordCount?: number } : undefined;
   const page = await pool.query<Record<string, unknown>>(
     `WITH export_keywords AS (
        SELECT * FROM keywords WHERE project_id = $1 AND detox_status = 'keep'
@@ -62,7 +64,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
      SELECT keyword.id AS keyword_id, keyword.keyword, scenario.value AS scenario,
        keyword.category, keyword.search_intent, keyword.categorisation_source, keyword.intent_source,
        keyword.is_branded, keyword.brand_source, keyword.device, keyword.ranking_url,
-       keyword.detox_status, keyword.detox_reason, keyword.detox_rule,
+       keyword.detox_status, keyword.detox_reason, keyword.detox_rule, exclusion.reason AS exclusion_reason,
        keyword.avg_monthly_volume, keyword.keyword_difficulty, keyword.gsc_clicks, keyword.gsc_impressions, keyword.gsc_position,
        cluster.cluster_key, canonical.keyword AS canonical_keyword,
        authority.metric_source AS authority_source, authority.domain_rating AS domain_authority,
@@ -82,6 +84,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
        revenue.warnings
      FROM export_keywords AS keyword
      CROSS JOIN (VALUES ('conservative'), ('realistic'), ('stretch')) AS scenario(value)
+     LEFT JOIN pipeline_forecast_exclusions AS exclusion ON exclusion.keyword_id = keyword.id AND exclusion.run_id = $2
      LEFT JOIN har_forecasts AS har ON har.keyword_id = keyword.id AND har.pipeline_run_id = $2 AND har.scenario = scenario.value
      LEFT JOIN revenue_forecasts AS revenue ON revenue.keyword_id = keyword.id AND revenue.pipeline_run_id = $2 AND revenue.scenario = scenario.value
      LEFT JOIN site_architecture AS architecture ON architecture.keyword_id = keyword.id AND architecture.pipeline_run_id = $2
@@ -96,16 +99,18 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
      WHERE ($5::text IS NULL OR scenario.value = $5)
      ORDER BY keyword.id, scenario.value`, [projectId, run.id, after, limit, scenario]);
   const keys = new Set(page.rows.map((row) => String(row.keyword_id)));
-  if (page.rows.some((row) => !excluded.has(String(row.keyword_id)) && (!row.har_model_version || !row.revenue_model_version || row.expected_incremental_annual == null))) {
+  if (page.rows.some((row) => !excluded.has(String(row.keyword_id)) && !row.exclusion_reason && (!row.har_model_version || !row.revenue_model_version || row.expected_incremental_annual == null))) {
     throw new HttpError(409, "export_incomplete", "The completed run does not contain forecasts for every eligible keyword. Re-run the pipeline before exporting final results.");
   }
   const columns = ["project_id", "run_id", "completed_at", "currency", ...TEXT_FIELDS, ...NUMBER_FIELDS, ...PEAK_FIELDS];
   for (const row of page.rows) {
-    if (excluded.has(String(row.keyword_id))) {
-      row.har_outcome = "excluded_no_search_results";
+    if (excluded.has(String(row.keyword_id)) || row.exclusion_reason) {
+      const reason = row.exclusion_reason ?? scope!.reason;
+      row.har_outcome = row.exclusion_reason ? `not_calculable_${reason}` : "excluded_no_search_results";
       row.har_no_beat_reason = "not_applicable";
-      row.har_explanation = { reason: scope!.reason, approvedBy: scope!.approvedBy, approvedAt: scope!.approvedAt };
-      row.warnings = ["excluded_from_forecast:dataforseo_no_results"];
+      row.har_explanation = row.exclusion_reason ? { reason, policy: "automatic-v1" }
+        : { reason, approvedBy: scope!.approvedBy, approvedAt: scope!.approvedAt };
+      row.warnings = [`excluded_from_forecast:${reason}`];
       for (const key of ["har_model_version", "revenue_model_version", "har_position", "har_confidence", "rank_attainment_probability",
         "authority_score", "link_power_score", "link_gap_score", "content_fit_score", "serp_visibility_multiplier", "annual_volume",
         "volume_forward", "factor_applied", "ctr_now", "ctr_target", "current_revenue_annual", "target_absolute_revenue_annual",
@@ -123,7 +128,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
     peak_months: exportedPeakMonths(row.peak_months).join(",") || "not_available",
   }));
   return { columns, rows, runId: run.id, keywordCount: keys.size, completedAt: run.completed_at.toISOString(),
-    excludedKeywordCount: excluded.size,
+    excludedKeywordCount: excluded.size + (eligibility?.excludedKeywordCount ?? 0),
     nextAfter: keys.size === limit ? [...keys].at(-1) : null,
     filename: `seer-results-${projectId}-${run.id}${scenario ? `-${scenario}` : ""}.csv`,
   };

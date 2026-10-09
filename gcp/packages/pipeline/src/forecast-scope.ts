@@ -36,10 +36,11 @@ export function scopeDependencyOutputs(
   stageId: PipelineStageId,
   outputs: Record<string, unknown>,
   scope: ForecastScope | null,
+  automaticExclusions: ReadonlyArray<{ id: string }> = [],
 ): Record<string, unknown> {
-  if (!scope || !scopedStages.has(stageId)) return outputs;
-  const ids = new Set(scope.keywords.map(keyword => keyword.id));
-  const texts = new Set(scope.keywords.map(keyword => keyword.normalisedText));
+  if ((!scope && !automaticExclusions.length) || !scopedStages.has(stageId)) return outputs;
+  const ids = new Set([...(scope?.keywords ?? []), ...automaticExclusions].map(keyword => keyword.id));
+  const texts = new Set(scope?.keywords.map(keyword => keyword.normalisedText) ?? []);
   return Object.fromEntries(Object.entries(outputs).map(([id, output]) => {
     if (!output || typeof output !== "object" || Array.isArray(output) || !("keywords" in output)
       || !Array.isArray(output.keywords)) return [id, output];

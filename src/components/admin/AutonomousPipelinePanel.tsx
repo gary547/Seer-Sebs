@@ -166,8 +166,15 @@ export default function AutonomousPipelinePanel({
   const configuredBrandTerms = readiness?.configuration.explicitBrandTerms ?? [];
   const approvedScope = run?.input && typeof run.input === "object" && "forecastScope" in run.input
     ? run.input.forecastScope as { keywords?: unknown[]; queries?: string[] } : null;
+  const eligibility = run?.input && typeof run.input === "object" && "forecastEligibility" in run.input
+    ? run.input.forecastEligibility as { calculatedKeywordCount: number; excludedKeywordCount: number;
+      countsByReason: Record<string, number>; sample: Array<{ id: string; normalisedText: string; reason: string }> } : null;
+  const automaticEligibility = run?.input && typeof run.input === "object" && "forecastEligibilityPolicy" in run.input
+    && run.input.forecastEligibilityPolicy === "automatic-v1";
+  const reasonLabel = (reason: string) => ({ missing_volume: "No usable volume", no_organic_results: "No organic search results",
+    below_operator_threshold: "Below the competitive volume threshold" }[reason] ?? reason);
   const noResultCount = run?.stages.find(stage => stage.id === "serp-collection")?.output?.providerDiagnostics;
-  const requiresSerpReview = run?.status === "failed" && !approvedScope
+  const requiresSerpReview = run?.status === "failed" && !approvedScope && !automaticEligibility
     && noResultCount && typeof noResultCount === "object" && "noResultCount" in noResultCount && Number(noResultCount.noResultCount) > 0;
   const displayedBrandTerms = configuredBrandTerms.length
     ? configuredBrandTerms
@@ -200,6 +207,15 @@ export default function AutonomousPipelinePanel({
             <p className="font-semibold text-ink">{approvedScope.keywords.length} keywords explicitly excluded from forecasts: no search results.</p>
             <details className="mt-1"><summary className="cursor-pointer">View excluded searches</summary>
               <ul className="mt-2 space-y-1">{approvedScope.queries?.map(query => <li key={query} className="break-words">{query}</li>)}</ul>
+            </details>
+          </div> : null}
+          {eligibility?.excludedKeywordCount ? <div className="mt-3 rounded-lg border border-hairline bg-canvas p-3 text-xs leading-5 text-ink-muted">
+            <p className="font-semibold text-ink">{eligibility.calculatedKeywordCount.toLocaleString()} forecastable keywords · {eligibility.excludedKeywordCount.toLocaleString()} not calculable</p>
+            <p>These keywords were skipped automatically. Their forecast values remain unavailable.</p>
+            <ul className="mt-2 space-y-1">{Object.entries(eligibility.countsByReason).filter(([, count]) => count > 0)
+              .map(([reason, count]) => <li key={reason}>{reasonLabel(reason)}: {count.toLocaleString()}</li>)}</ul>
+            <details className="mt-2"><summary className="cursor-pointer">View a sample of skipped keywords</summary>
+              <ul className="mt-2 space-y-1">{eligibility.sample.map(keyword => <li key={keyword.id} className="break-words">{keyword.normalisedText} · {reasonLabel(keyword.reason)}</li>)}</ul>
             </details>
           </div> : null}
           <p className="mt-1 max-w-2xl text-sm leading-6 text-ink-muted">

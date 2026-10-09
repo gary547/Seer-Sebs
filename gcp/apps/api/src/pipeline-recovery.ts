@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 import { PIPELINE_STAGES } from "../../../packages/pipeline/src/definition.js";
 import { PIPELINE_AI_MODEL } from "../../../packages/pipeline/src/ai-model.js";
 import { forecastScope } from "../../../packages/pipeline/src/forecast-scope.js";
+import { FORECAST_ELIGIBILITY_POLICY } from "../../../packages/pipeline/src/forecast-eligibility.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 
 export function checkpointMatches(source: { input: Record<string, unknown>; created_at: Date }, checkpoint: Record<string, unknown>): boolean {
@@ -57,12 +58,7 @@ export async function recoverPipelineRun(client: PoolClient, projectId: string, 
     ? "Project inputs changed since the saved run. Review the changes and start a full pipeline explicitly."
     : "No failed or stopped pipeline checkpoint is available. Start a full pipeline explicitly.");
   if (!await lockIdleRun(client, source.id)) throw new HttpError(409, "pipeline_still_stopping", "Provider requests are still finishing. Resume once the saved run has stopped.");
-  const scope = forecastScope(source.input);
-  const unresolved = await client.query(
-    `SELECT 1 FROM provider_work_items WHERE pipeline_run_id = $1 AND stage_id = 'serp-collection'
-     AND provider = 'dataforseo' AND result->>'outcome' = 'no_results' AND NOT (item_key = ANY($2::text[])) LIMIT 1`,
-    [source.id, scope?.queries ?? []]);
-  if (unresolved.rowCount) throw new HttpError(409, "serp_resolution_required", "Saved searches returned no results. Review and explicitly approve their forecast exclusions before resuming; completed work is preserved.");
+  forecastScope(source.input); // Preserve and validate any historical operator approval.
   const stages = await client.query<{ stage_id: string; state: string; output: unknown }>(
     `SELECT stage_id, state, output FROM pipeline_stage_runs WHERE run_id = $1`, [source.id]);
   const saved = new Map(stages.rows.map(stage => [stage.stage_id, stage]));
@@ -72,7 +68,8 @@ export async function recoverPipelineRun(client: PoolClient, projectId: string, 
   })) throw new HttpError(409, "pipeline_checkpoint_invalid", "Saved stage outputs or dependencies are incomplete. Contact support before resuming.");
   const generation = Number(source.input.generation ?? 0) + 1;
   const resumedAt = new Date().toISOString();
-  const input: Record<string, unknown> = { ...source.input, generation, checkpoint, resumedAt, recoveredStageCount: source.completed_count };
+  const input: Record<string, unknown> = { ...source.input, forecastEligibilityPolicy: FORECAST_ELIGIBILITY_POLICY,
+    generation, checkpoint, resumedAt, recoveredStageCount: source.completed_count };
   delete input.stopRequestedAt;
   await client.query(
     `UPDATE pipeline_stage_runs SET state = 'pending', completed_at = NULL,

@@ -18,6 +18,7 @@ let expectedRevenue = "125.25";
 let peakMonths: number[];
 let executed: Array<{ sql: string; values: unknown[] }>;
 let scope: unknown;
+let exclusionReason: string | undefined;
 
 describe("complete calculation export API", () => {
   let server: ReturnType<typeof createApiServer>;
@@ -25,6 +26,7 @@ describe("complete calculation export API", () => {
   beforeEach(async () => {
     dirty = false; active = false; complete = true; allowed = true; latestRun = true; currency = "GBP"; executed = [];
     scope = undefined;
+    exclusionReason = undefined;
     harPosition = 3; harExplanation = { authorityProvider: "dataforseo" }; expectedRevenue = "125.25"; peakMonths = [11, 12, 1];
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       sql = sql.replace(/\s+/g, " ").trim();
@@ -34,9 +36,11 @@ describe("complete calculation export API", () => {
       else if (sql.includes("SELECT client_id FROM navigator_projects")) rows = [{ client_id: projectId }];
       else if (sql.includes("FROM user_roles AS user_role")) rows = [{ role: allowed ? "admin" : "view_only" }];
       else if (sql.includes("FROM user_client_access")) rows = [];
-      else if (sql.includes("SELECT run.id")) rows = latestRun ? [{ id: runId, input: scope ? { forecastScope: scope } : {}, completed_at: new Date("2026-09-08T09:00:00Z"), currency, dirty, active }] : [];
+      else if (sql.includes("SELECT run.id")) rows = latestRun ? [{ id: runId, input: { ...(scope ? { forecastScope: scope } : {}),
+        ...(exclusionReason ? { forecastEligibility: { excludedKeywordCount: 1 } } : {}) }, completed_at: new Date("2026-09-08T09:00:00Z"), currency, dirty, active }] : [];
       else if (sql.includes("WITH export_keywords")) rows = ["conservative", "realistic", "stretch"].filter((scenario) => !values[4] || values[4] === scenario).map((scenario) => ({
         keyword_id: keywordId, keyword: 'keyword, with "quotes"', scenario, category: "Pharmacy", search_intent: "commercial",
+        exclusion_reason: exclusionReason,
         har_model_version: "har-v2", revenue_model_version: complete ? "revenue-v2" : null,
         link_power_score: "0", content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash", expected_incremental_annual: expectedRevenue,
         har_position: harPosition, har_explanation: harExplanation, warnings: [], peak_months: peakMonths,
@@ -62,6 +66,16 @@ describe("complete calculation export API", () => {
     expect(page.rows[0]).toMatchObject({ link_power_score: 0, expected_incremental_annual: 125.25, content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash" });
     expect(page.columns).toContain("har_explanation");
     expect(executed.find(({ sql }) => sql.includes("WITH export_keywords"))?.values).toEqual([projectId, runId, null, 1, null]);
+  });
+  it.each(["missing_volume", "no_organic_results", "below_operator_threshold"])("exports %s as unavailable with its automatic audit", async reason => {
+    complete = false; exclusionReason = reason;
+    const response = await fetch(`${url}?limit=1`);
+    expect(response.status).toBe(200);
+    const page = await response.json() as { rows: Array<Record<string, unknown>> };
+    expect(page).toMatchObject({ excludedKeywordCount: 1 });
+    expect(page.rows[0]).toMatchObject({ har_outcome: `not_calculable_${reason}`, expected_incremental_annual: "not_available",
+      har_explanation: JSON.stringify({ reason, policy: "automatic-v1" }) });
+    expect(executed.find(({ sql }) => sql.includes("WITH export_keywords"))?.sql).toContain("exclusion.run_id = $2");
   });
   it("keeps approved exclusions in the CSV with explicit unavailable values, without allowing other incomplete forecasts", async () => {
     complete = false;
