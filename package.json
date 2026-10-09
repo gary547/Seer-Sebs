@@ -40,6 +40,7 @@
     "test:gcp-volume-history": "node gcp/scripts/test-calculation-volume-history.mjs",
     "test:gcp-pipeline-recovery": "node gcp/scripts/test-pipeline-recovery.mjs",
     "test:gcp-forecast-eligibility": "node gcp/scripts/test-forecast-eligibility.mjs",
+    "test:gcp-forecast-scale": "node gcp/scripts/test-forecast-execution-scale.mjs",
     "test:gcp-provider-checkpoints": "node gcp/scripts/test-provider-checkpoints.mjs",
     "test:gcp-stage-output": "node --max-old-space-size=4096 gcp/scripts/test-stage-output.mjs",
     "test:gcp-volume-scale": "node gcp/scripts/test-calculation-volume-scale.mjs",

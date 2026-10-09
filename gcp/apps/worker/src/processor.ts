@@ -37,6 +37,7 @@ import type { PipelineProviderHydrator } from "./live-providers.js";
 import { restoreKeywordDecisions } from "./recalculation.js";
 import { StageContinuation, STAGE_EXECUTION_BUDGET_MS } from "./stage-continuation.js";
 import { checkProviderRunActive, withProviderRun } from "./run-control.js";
+import { executeCooperativeStage } from "./cooperative-stage.js";
 
 export interface StageTask {
   generation?: number;
@@ -489,7 +490,7 @@ async function executeStageAttempt(
   try {
     const dependencyOutputs = scopeDependencyOutputs(task.stageId, savedDependencyOutputs, scope, exclusions);
     stageData = source
-      ? executeDataDrivenStage(task.stageId, source, dependencyOutputs)
+      ? await executeCooperativeStage(task.stageId, source, dependencyOutputs)
       : null;
   } catch (error) {
     throw pipelineStageExecutionError(error);

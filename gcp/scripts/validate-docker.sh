@@ -155,6 +155,7 @@ run_npm run test:gcp-volume-history
 run_npm run test:gcp-provider-checkpoints
 run_npm run test:gcp-pipeline-recovery
 run_npm run test:gcp-forecast-eligibility
+run_npm run test:gcp-forecast-scale
 run_npm run test:gcp-stage-output
 run_npm run test:gcp-volume-scale
 

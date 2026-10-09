@@ -47,7 +47,7 @@ npm run test:gcp:docker
 
 It performs:
 
-- strict target type checking, build and 114 focused tests;
+- strict target type checking, build and focused runtime tests;
 - Docker image build from the isolated `gcp/package-lock.json`;
 - health and readiness checks across six containers;
 - registration and login through the local identity boundary;
@@ -79,6 +79,11 @@ npm run test:gcp:scale
 
 It has persisted 18,000 clusters, demand signals and site-architecture rows, 54,000 HAR forecasts, 54,000 Revenue forecasts and one calibration snapshot without truncation.
 
+`npm run test:gcp-forecast-scale` exercises Revenue with 107,926 keywords and
+323,778 scenarios while calling the actual worker HTTP health endpoint. It also
+checks rollups where all keywords share one ranking URL. This calculation scale
+gate is included in the complete Docker check.
+
 The local API remains available at `http://127.0.0.1:18080`.
 
 Stop containers without deleting validation data:
@@ -89,7 +94,7 @@ docker compose -f gcp/docker-compose.local.yml down
 
 ## Current implementation boundary
 
-The complete local foundation, frontend target boundary and all 24 project-backed pipeline stages are validated. Every stage reads controlled source data, writes versioned PostgreSQL state and feeds its dependent stages. The authenticated API covers identity, tenancy, keywords, GSC, calculations, SERP, roadmaps, archives, URL Monitor, reference data, conversion overrides, portfolio, capture window, Content Planner and Slides export. Live DataForSEO, Ahrefs and Anthropic adapters are implemented behind the worker boundary with persisted resumable state. The target also contains authenticated five-minute URL checks, daily retention, a complete 58-table lossless archive path, 26 ordered operational-table migration rules and repeatable canonical transfer, database restore and access-boundary tests.
+The complete local foundation, frontend target boundary and all 24 project-backed pipeline stages are validated. Every stage reads controlled source data, writes versioned PostgreSQL state and feeds its dependent stages. The authenticated API covers identity, tenancy, keywords, GSC, calculations, SERP, roadmaps, archives, URL Monitor, reference data, conversion overrides, portfolio, capture window, Content Planner and Slides export. Live SEO data uses DataForSEO; pipeline AI uses the approved OpenRouter DeepSeek V4.1 Flash model with persisted resumable state. The target also contains authenticated five-minute URL checks, daily retention, a complete 58-table lossless archive path, 26 ordered operational-table migration rules and repeatable canonical transfer, database restore and access-boundary tests.
 
 Production parity is not yet claimed. Real source discovery, approved data mapping, identity/data/storage import, provider credentials, managed-resource verification and frozen real-project output parity require the isolated Google Cloud projects and source access.
 
@@ -113,6 +118,23 @@ Each recovery advances the delivery generation passed through Workflows and the 
 
 `POST /v1/pipeline-runs/:id/cancel` blocks subsequent provider requests and retains in-flight responses. The run-status contract exposes `stop.state` as `stopping` until dedicated stage locks are released, then `stopped`. The admin panel polls through draining, offers Stop on active runs and disables resume during draining.
 
-DataForSEO SERP status 40102 is a persisted terminal `no_results` outcome. Other submitted tasks are collected and terminal tasks are not polled or submitted again. Missing results produce a non-retryable failure with a count and at most 20 affected query examples; no rankings or forecast values are manufactured. Migration `037_pipeline_recovery` supplies retry offsets, dispatcher generations, bounded project activity lookup and the API's narrow provider-checkpoint update grants. `test:gcp-pipeline-recovery` covers these contracts against PostgreSQL with synthetic provider responses.
+DataForSEO SERP status 40102 and completed status-20000 searches with no organic
+observations are persisted terminal `no_results` outcomes. Other submitted tasks
+are collected; terminal tasks are not polled or submitted again. Automatic
+forecast eligibility records unusable volume after the GSC fallback, volume below
+the configured competitive threshold and completed searches without organic
+results in immutable per-run audits. Calculations continue on the remaining
+scope, and exports retain excluded rows with unavailable values and reasons.
+Unexpected collection gaps and invalid authority still fail explicitly. Migration
+`037_pipeline_recovery` supplies generation fencing and checkpoint grants;
+`038_forecast_eligibility` supplies the exclusion audit. Recalculation reuses the
+audit without provider calls, while a full run reassesses eligibility.
+
+Revenue uses a keyword ranking index and yields between groups of 128 keywords
+through the worker's cooperative executor. The synchronous and cooperative paths
+use the same calculation generator, preserving financial override precedence and
+scenario values. Health probes remain enabled and responsive during computation.
+Rollup cannibalisation grouping appends keyword IDs without copying the accumulated
+group for each keyword, keeping shared-URL aggregation linear.
 
 The exact synthetic coverage and its limits are recorded in `docs/migration/LOCAL_SYNTHETIC_ACCEPTANCE.md`.

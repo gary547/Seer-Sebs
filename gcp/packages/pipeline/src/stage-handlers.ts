@@ -2179,16 +2179,13 @@ function revenueVisibilityMultiplier(
 function revenueAssumptions(
   fixture: ProjectPipelineSource,
   keyword: HarV2StageData["keywords"][number],
-  ranking: RankingUrlStageData,
+  rankingKeyword: RankingUrlStageData["keywords"][number] | undefined,
 ): {
   averageOrderValue: number | null;
   averageOrderValueOverrideId: string | null;
   conversionRate: number | null;
   conversionRateOverrideId: string | null;
 } {
-  const rankingKeyword = ranking.keywords.find(
-    (candidate) => candidate.id === keyword.id,
-  );
   const category = keyword.category;
   const rankingUrl = rankingKeyword?.rankingUrl ?? null;
   const scopePriority = { url: 0, category: 1, intent: 2, project: 3 };
@@ -2238,21 +2235,26 @@ function revenueAssumptions(
   };
 }
 
-function executeRevenueV2(
+function* revenueV2Chunks(
   fixture: ProjectPipelineSource,
   har: HarV2StageData,
   demand: DemandSignalsStageData,
   ctrCurves: CtrCurvesStageData,
   ranking: RankingUrlStageData,
-): RevenueV2StageData {
+): Generator<void, RevenueV2StageData, void> {
   const demandById = new Map(
     demand.keywords.map((keyword) => [keyword.id, keyword]),
   );
-  const keywords = har.keywords.map((keyword) => {
+  const rankingById = new Map<string, RankingUrlStageData["keywords"][number]>();
+  for (const keyword of ranking.keywords) {
+    if (!rankingById.has(keyword.id)) rankingById.set(keyword.id, keyword);
+  }
+  const keywords: RevenueV2StageData["keywords"] = [];
+  for (const keyword of har.keywords) {
     const assumptions = revenueAssumptions(
       fixture,
       keyword,
-      ranking,
+      rankingById.get(keyword.id),
     );
     const demandSignal = demandById.get(keyword.id);
     const volume = demandSignal
@@ -2342,7 +2344,7 @@ function executeRevenueV2(
           ? [...result.warnings, "gsc_impressions_estimate"] : result.warnings,
       };
     });
-    return {
+    keywords.push({
       baseRank: keyword.baseRank,
       id: keyword.id,
       intent: keyword.intent,
@@ -2350,8 +2352,9 @@ function executeRevenueV2(
       isCanonical: keyword.isCanonical,
       normalisedText: keyword.normalisedText,
       scenarios,
-    };
-  });
+    });
+    if (keywords.length % 128 === 0) yield;
+  }
   return {
     forecastCount: keywords.reduce(
       (count, keyword) => count + keyword.scenarios.length,
@@ -2361,6 +2364,23 @@ function executeRevenueV2(
     keywords,
     modelVersion: REVENUE_MODEL_VERSION,
   };
+}
+
+function completeStageChunks<T>(chunks: Generator<void, T, void>): T {
+  let result = chunks.next();
+  while (!result.done) result = chunks.next();
+  return result.value;
+}
+
+function revenueV2Execution(fixture: ProjectPipelineSource, outputs: DependencyOutputs) {
+  dependency<ReadinessStageData>(outputs, "revenue-readiness", "revenue-readiness-v1");
+  return revenueV2Chunks(
+    fixture,
+    dependency<HarV2StageData>(outputs, "har-v2", "har-v2.1"),
+    dependency<DemandSignalsStageData>(outputs, "demand-signals", "demand-signals-v1"),
+    dependency<CtrCurvesStageData>(outputs, "ctr-curves", "ctr-curves-v1"),
+    dependency<RankingUrlStageData>(outputs, "ranking-url", "ranking-url-v1"),
+  );
 }
 
 function executeHarReadiness(
@@ -2577,10 +2597,9 @@ function executeRollupOutput(
   const byUrl = new Map<string, string[]>();
   for (const keyword of ranking.keywords) {
     if (!keyword.rankingUrl) continue;
-    byUrl.set(keyword.rankingUrl, [
-      ...(byUrl.get(keyword.rankingUrl) ?? []),
-      keyword.id,
-    ]);
+    const keywordIds = byUrl.get(keyword.rankingUrl) ?? [];
+    keywordIds.push(keyword.id);
+    byUrl.set(keyword.rankingUrl, keywordIds);
   }
   return {
     cannibalisationFlags: [...byUrl.entries()]
@@ -2889,30 +2908,7 @@ export function executeDataDrivenStage(
         dependency<CtrCurvesStageData>(outputs, "ctr-curves", "ctr-curves-v1"),
       );
     case "revenue-v2":
-      dependency<ReadinessStageData>(
-        outputs,
-        "revenue-readiness",
-        "revenue-readiness-v1",
-      );
-      return executeRevenueV2(
-        fixture,
-        dependency<HarV2StageData>(outputs, "har-v2", "har-v2.1"),
-        dependency<DemandSignalsStageData>(
-          outputs,
-          "demand-signals",
-          "demand-signals-v1",
-        ),
-        dependency<CtrCurvesStageData>(
-          outputs,
-          "ctr-curves",
-          "ctr-curves-v1",
-        ),
-        dependency<RankingUrlStageData>(
-          outputs,
-          "ranking-url",
-          "ranking-url-v1",
-        ),
-      );
+      return completeStageChunks(revenueV2Execution(fixture, outputs));
     case "calibration":
       return executeCalibration(
         fixture,
@@ -2949,4 +2945,13 @@ export function executeDataDrivenStage(
     default:
       return null;
   }
+}
+
+export function* executeDataDrivenStageChunks(
+  stageId: PipelineStageId,
+  fixture: ProjectPipelineSource,
+  outputs: DependencyOutputs,
+): Generator<void, DataDrivenStageData | null, void> {
+  if (stageId === "revenue-v2") return yield* revenueV2Execution(fixture, outputs);
+  return executeDataDrivenStage(stageId, fixture, outputs);
 }
