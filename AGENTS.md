@@ -224,6 +224,15 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   calculation stages. Keep OpenTofu and Cloud Build release settings aligned.
   Transient recovery uses the existing automatic Workflow retries and preserves
   completed stages.
+- Revenue runs through the worker's `executeCooperativeStage` adapter and the
+  shared calculation generator, yielding after each 128 keywords so HTTP health
+  probes remain responsive. Preserve synchronous/cooperative calculation parity
+  and financial override precedence. Index ranking rows once by keyword, keeping
+  the first matching row; never rescan the entire ranking list per forecast.
+- Rollup cannibalisation groups append keyword IDs in input order without copying
+  the accumulated URL group. `test:gcp-forecast-scale` covers 107,926 keywords,
+  323,778 Revenue scenarios, concurrent worker HTTP health probes and the shared-URL
+  rollup case; keep this gate in the full Docker validation.
 - Worker task HTTP responses are bounded acknowledgements containing only the
   run, stage, status, and optional idempotency flag. Stage outputs are persisted
   in PostgreSQL and must never be echoed through Workflows or dispatcher HTTP
