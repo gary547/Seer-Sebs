@@ -456,6 +456,8 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   Preserve saved rollups and complete financial totals. Aggregate latest-upload GSC
   queries once for the preview, and resolve volume coverage plus its bounded sample
   in one statement through `projectVolumeDiagnosticsSql`.
+  Qualification previews on read-only readiness requests must use that budget.
+  Transaction-bound pipeline preflight retains its supplied database client.
 - Local Docker validation links compiled backend code to the installed GCP
   dependencies after building. Frontend builds replace `dist`, so the gate must
   recreate that link when absent. Fresh-schema readiness uses TCP rather than the
