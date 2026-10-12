@@ -575,8 +575,9 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   every pagination request; omitting it preserves the combined three-scenario
   export. No separate spreadsheet calculations or replacement export format.
 - The first complete-export page exposes `totalKeywords` for progress and final
-  row-count verification. Retry transient page/transport failures at most five
-  times with a 60-second timeout per attempt, retaining the same run, scenario
+  row-count verification. Retry transient page/transport failures, including
+  unreadable successful responses, at most five times with a 60-second timeout
+  per attempt, retaining the same run, scenario
   and cursor. Authorization, stale inputs, incomplete data and changed columns
   remain terminal. Encode pages into Blob fragments and download only after all
   completeness checks pass; count actual UTF-8 bytes including each part's header

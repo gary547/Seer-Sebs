@@ -46,6 +46,17 @@ describe("complete calculation CSV", () => {
     expect(seerApiRequest).toHaveBeenCalledTimes(2);
     expect(created).not.toHaveBeenCalled();
   });
+  it("recovers when a successful HTTP response loses its JSON body in transport", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAccessToken).mockResolvedValue("test-token");
+    vi.mocked(seerApiRequest).mockResolvedValueOnce(page("next")).mockResolvedValueOnce({}).mockResolvedValueOnce(page());
+    const { clicked } = downloads();
+    const pending = downloadCalculationResults("project", "realistic");
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual({ parts: 1, rows: 2 });
+    expect(vi.mocked(seerApiRequest).mock.calls[1]?.[0]).toBe(vi.mocked(seerApiRequest).mock.calls[2]?.[0]);
+    expect(clicked).toHaveBeenCalledOnce();
+  });
   it("bounds repeated transport failures and restores an actionable error without downloading", async () => {
     vi.useFakeTimers();
     vi.mocked(getAccessToken).mockResolvedValue("test-token");

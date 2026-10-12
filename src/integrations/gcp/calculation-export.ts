@@ -86,6 +86,10 @@ export async function downloadCalculationResults(
       try {
         page = await seerApiRequest<CalculationExportPage>(`/v1/projects/${projectId}/calculation-export?${params}`,
           { signal: AbortSignal.timeout(PAGE_TIMEOUT_MS) }, token);
+        if (!page || !page.runId || !Array.isArray(page.columns) || !page.columns.length || !Array.isArray(page.rows)
+          || !page.filename || (page.nextAfter !== null && typeof page.nextAfter !== "string")) {
+          throw new TypeError("The results response could not be read.");
+        }
         break;
       } catch (error) {
         if (!retryable(error)) throw error;
@@ -93,10 +97,7 @@ export async function downloadCalculationResults(
         await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
       }
     }
-    if (!page || !page.runId || !Array.isArray(page.columns) || !page.columns.length || !Array.isArray(page.rows)
-      || !page.filename || (page.nextAfter !== null && typeof page.nextAfter !== "string")) {
-      throw new Error("The results response is incomplete. Please retry the download.");
-    }
+    if (!page) throw new Error("The results response is incomplete. Please retry the download.");
     if (runId && page.runId !== runId) throw new Error("The completed run changed. Restart the export.");
     if (columns && (columns.length !== page.columns.length || columns.some((column, i) => column !== page.columns[i]))) {
       throw new Error("The export columns changed. Restart the export.");
@@ -104,7 +105,7 @@ export async function downloadCalculationResults(
     if (!runId) {
       columns = page.columns;
       header = page.columns.map(calculationCsvCell).join(",");
-      if (Number.isSafeInteger(page.totalKeywords) && Number(page.totalKeywords) > 0) {
+      if (Number.isSafeInteger(page.totalKeywords) && Number(page.totalKeywords) >= 0) {
         expectedRows = Number(page.totalKeywords) * (scenario ? 1 : 3);
       }
     }
