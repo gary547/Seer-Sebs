@@ -44,6 +44,7 @@
     "test:gcp-provider-checkpoints": "node gcp/scripts/test-provider-checkpoints.mjs",
     "test:gcp-stage-output": "node --max-old-space-size=4096 gcp/scripts/test-stage-output.mjs",
     "test:gcp-volume-scale": "node gcp/scripts/test-calculation-volume-scale.mjs",
+    "test:gcp-link-power-scale": "node gcp/scripts/test-link-power-inspector-scale.mjs",
     "test:gcp-url-monitor-maintenance": "node gcp/scripts/test-url-monitor-maintenance.mjs",
     "test:gcp:docker": "bash gcp/scripts/validate-docker.sh",
     "test:gcp:fresh-schema": "bash gcp/scripts/validate-fresh-schema.sh",

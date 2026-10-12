@@ -80,7 +80,7 @@ function database(): DatabasePool {
       ) {
         return result([{ count: "1" }]);
       }
-      if (sql.includes("percentile_cont(0.1)")) {
+      if (sql.includes("WITH score_histogram AS MATERIALIZED")) {
         return result([
           {
             average_score: "54.2",
@@ -104,9 +104,12 @@ function database(): DatabasePool {
         return result([{ appearance_count: "2", best_rank: 7, domain: "pilltime.co.uk", is_client_domain: true, mean_score: "70.1", total: "12" }]);
       }
       if (
-        sql.includes("FROM link_power_scores AS score") &&
+        (sql.includes("FROM link_power_scores AS score") || sql.includes("WITH matching_scores AS MATERIALIZED")) &&
         sql.includes("keyword.id AS keyword_id")
       ) {
+        if (sql.includes("WITH matching_scores AS MATERIALIZED") && (values?.[2] === "no-match" || Number(values?.[4]) > 0)) {
+          return result([{ keyword_id: null, total: values?.[2] === "no-match" ? "0" : "1" }]);
+        }
         return result([
           {
             backlinks: "950",
@@ -121,6 +124,7 @@ function database(): DatabasePool {
             rank_absolute: 7,
             referring_domains: "110",
             score: "72.4",
+            total: "1",
             url: "https://pilltime.co.uk/weight-loss",
             url_rating: "51",
           },
@@ -134,6 +138,10 @@ function database(): DatabasePool {
             domain: "pilltime.co.uk",
             is_client_domain: true,
             mean_score: "70.1",
+            missing_backlinks_count: "1",
+            missing_domain_rating_count: "2",
+            missing_referring_domains_count: "3",
+            missing_url_rating_count: "4",
           },
         ]);
       }
@@ -264,7 +272,7 @@ describe("calculation inspector API", () => {
         },
         scoredCount: 6,
       },
-      total: 1,
+      total: 6,
     });
   });
 
@@ -277,6 +285,21 @@ describe("calculation inspector API", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: { code: "invalid_request" },
     });
+  });
+
+  it("returns a filtered LPS count while retaining the complete run summary", async () => {
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-inspector?search=%20PillTime.Co.UK%20&limit=50`);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { total: number; items: unknown[]; summary: { scoredCount: number } };
+    expect(body.total).toBe(1);
+    expect(body.items).toHaveLength(1);
+    expect(body.summary.scoredCount).toBe(6);
+  });
+
+  it.each([["no-match", 0, 0], ["pilltime", 50, 1]])("keeps LPS search counts with an empty page: %s", async (search, offset, total) => {
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/link-power-inspector?search=${search}&offset=${offset}`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ items: [], total, summary: { scoredCount: 6 } });
   });
 
   it.each(["meanScore", "appearances"])("sorts the entire domain benchmark by %s before pagination", async (sort) => {

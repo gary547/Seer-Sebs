@@ -14,6 +14,7 @@ import {
 } from "./authorization.js";
 
 import { queryCalculationDiagnostic } from "./calculation-reads.js";
+import { linkPowerDetailsSql, linkPowerDomainSummarySql, linkPowerSummarySql } from "./link-power-inspector-queries.js";
 import { MAXIMUM_GSC_OBSERVATIONS } from "../../../packages/contracts/src/gsc-import-limits.js";
 import { assertGscObservationLimit } from "./gsc-import-limits.js";
 
@@ -310,10 +311,6 @@ interface LinkPowerSummaryRow {
   high_confidence_count: string;
   keyword_count: string;
   low_confidence_count: string;
-  missing_backlinks_count: string;
-  missing_domain_rating_count: string;
-  missing_referring_domains_count: string;
-  missing_url_rating_count: string;
   medium_confidence_count: string;
   p10_score: string | null;
   p50_score: string | null;
@@ -341,20 +338,25 @@ interface LinkPowerDetailRow {
   domain_rating: string | null;
   is_client_domain: boolean;
   keyword: string;
-  keyword_id: string;
+  keyword_id: string | null;
   rank_absolute: number;
   referring_domains: string | null;
   score: string;
   url: string;
   url_rating: string | null;
+  total?: string;
 }
 
 interface LinkPowerDomainRow {
   appearance_count: string;
   best_rank: number;
-  domain: string;
+  domain: string | null;
   is_client_domain: boolean;
   mean_score: string;
+  missing_backlinks_count: string;
+  missing_domain_rating_count: string;
+  missing_referring_domains_count: string;
+  missing_url_rating_count: string;
 }
 
 interface SiteArchitectureDetailRow {
@@ -3164,102 +3166,18 @@ export async function getProjectLinkPowerInspector(
   const normalisedSearch = normaliseKeyword(search);
   const query = <Row extends QueryResultRow>(text: string, values: unknown[]) => queryCalculationDiagnostic<Row>(pool, text, values);
 
-  const [summary, items, domains, count, clientAuthority] = await Promise.all([
+  const [summary, items, domains, clientAuthority] = await Promise.all([
     query<LinkPowerSummaryRow>(
-      `
-        SELECT
-          count(*)::text AS scored_count,
-          count(DISTINCT score.keyword_id)::text AS keyword_count,
-          avg(score.score)::text AS average_score,
-          percentile_cont(0.1) WITHIN GROUP (ORDER BY score.score)::text AS p10_score,
-          percentile_cont(0.5) WITHIN GROUP (ORDER BY score.score)::text AS p50_score,
-          percentile_cont(0.9) WITHIN GROUP (ORDER BY score.score)::text AS p90_score,
-          count(*) FILTER (WHERE score.confidence = 'high')::text
-            AS high_confidence_count,
-          count(*) FILTER (WHERE score.confidence = 'medium')::text
-            AS medium_confidence_count,
-          count(*) FILTER (WHERE score.confidence = 'low')::text
-            AS low_confidence_count,
-          count(*) FILTER (WHERE result.url_rating IS NULL)::text
-            AS missing_url_rating_count,
-          count(*) FILTER (WHERE result.domain_rating IS NULL)::text
-            AS missing_domain_rating_count,
-          count(*) FILTER (WHERE result.referring_domains IS NULL)::text
-            AS missing_referring_domains_count,
-          count(*) FILTER (WHERE result.backlinks IS NULL)::text
-            AS missing_backlinks_count
-        FROM link_power_scores AS score
-        JOIN serp_results AS result ON result.id = score.serp_result_id
-        WHERE score.project_id = $1
-          AND score.pipeline_run_id = $2
-      `,
+      linkPowerSummarySql,
       [projectId, run.id],
     ),
     query<LinkPowerDetailRow>(
-      `
-        SELECT
-          keyword.id AS keyword_id,
-          keyword.keyword,
-          result.rank_absolute,
-          result.url,
-          result.domain,
-          result.is_client_domain,
-          result.url_rating::text,
-          result.domain_rating::text,
-          result.referring_domains::text,
-          result.backlinks::text,
-          score.score::text,
-          score.confidence,
-          result.metric_source,
-          result.authority_scope
-        FROM link_power_scores AS score
-        JOIN keywords AS keyword ON keyword.id = score.keyword_id
-        JOIN serp_results AS result ON result.id = score.serp_result_id
-        WHERE score.project_id = $1
-          AND score.pipeline_run_id = $2
-          AND (
-            $3 = ''
-            OR keyword.normalised_keyword LIKE '%' || $3 || '%'
-            OR result.domain LIKE '%' || $3 || '%'
-          )
-        ORDER BY score.score DESC, keyword.normalised_keyword, result.rank_absolute
-        LIMIT $4 OFFSET $5
-      `,
-      [projectId, run.id, normalisedSearch, limit, offset],
+      linkPowerDetailsSql(Boolean(normalisedSearch)),
+      normalisedSearch ? [projectId, run.id, normalisedSearch, limit, offset] : [projectId, run.id, limit, offset],
     ),
     query<LinkPowerDomainRow>(
-      `
-        SELECT
-          result.domain,
-          result.is_client_domain,
-          count(*)::text AS appearance_count,
-          avg(score.score)::text AS mean_score,
-          min(result.rank_absolute) AS best_rank
-        FROM link_power_scores AS score
-        JOIN serp_results AS result ON result.id = score.serp_result_id
-        WHERE score.project_id = $1
-          AND score.pipeline_run_id = $2
-        GROUP BY result.domain, result.is_client_domain
-        ORDER BY result.is_client_domain DESC, avg(score.score) DESC, result.domain
-        LIMIT 10
-      `,
+      linkPowerDomainSummarySql,
       [projectId, run.id],
-    ),
-    query<CountRow>(
-      `
-        SELECT count(*)::text AS count
-        FROM link_power_scores AS score
-        JOIN keywords AS keyword ON keyword.id = score.keyword_id
-        JOIN serp_results AS result ON result.id = score.serp_result_id
-        WHERE score.project_id = $1
-          AND score.pipeline_run_id = $2
-          AND (
-            $3 = ''
-            OR keyword.normalised_keyword LIKE '%' || $3 || '%'
-            OR result.domain LIKE '%' || $3 || '%'
-          )
-      `,
-      [projectId, run.id, normalisedSearch],
     ),
     query<ClientAuthorityRow>(
       `
@@ -3311,14 +3229,14 @@ export async function getProjectLinkPowerInspector(
         }
       : null,
     completedAt: run.completed_at.toISOString(),
-    domains: domains.rows.map((row) => ({
+    domains: domains.rows.filter(row => row.domain !== null).map((row) => ({
       appearances: Number(row.appearance_count),
       bestRank: row.best_rank,
       domain: row.domain,
       isClientDomain: row.is_client_domain,
       meanScore: Number(row.mean_score),
     })),
-    items: items.rows.map((row) => ({
+    items: items.rows.filter(row => row.keyword_id !== null).map((row) => ({
       backlinks: row.backlinks === null ? null : Number(row.backlinks),
       metricSource: row.metric_source,
       authorityScope: row.authority_scope,
@@ -3354,12 +3272,12 @@ export async function getProjectLinkPowerInspector(
           },
           keywordCount: Number(summaryRow.keyword_count),
           missingComponents: {
-            backlinks: Number(summaryRow.missing_backlinks_count ?? "0"),
-            domainRating: Number(summaryRow.missing_domain_rating_count ?? "0"),
+            backlinks: Number(domains.rows[0]?.missing_backlinks_count ?? "0"),
+            domainRating: Number(domains.rows[0]?.missing_domain_rating_count ?? "0"),
             referringDomains: Number(
-              summaryRow.missing_referring_domains_count ?? "0",
+              domains.rows[0]?.missing_referring_domains_count ?? "0",
             ),
-            urlRating: Number(summaryRow.missing_url_rating_count ?? "0"),
+            urlRating: Number(domains.rows[0]?.missing_url_rating_count ?? "0"),
           },
           p10: summaryRow.p10_score === null ? null : Number(summaryRow.p10_score),
           p50: summaryRow.p50_score === null ? null : Number(summaryRow.p50_score),
@@ -3367,7 +3285,7 @@ export async function getProjectLinkPowerInspector(
           scoredCount: Number(summaryRow.scored_count),
         }
       : null,
-    total: Number(count.rows[0]?.count ?? "0"),
+    total: Number(normalisedSearch ? items.rows[0]?.total ?? "0" : summaryRow?.scored_count ?? "0"),
   };
 }
 
