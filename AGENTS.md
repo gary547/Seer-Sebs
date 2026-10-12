@@ -296,6 +296,14 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   `GET /v1/projects/:projectId/link-power-inspector`. Both routes require an
   administrator and project access, and they inspect the latest successful
   pipeline run without mutating calculation data.
+- Link Power inspection computes exact continuous percentiles from a frequency
+  histogram of saved scores. Domain grouping supplies full missing-component
+  totals before display sampling; unfiltered counts reuse the scored total.
+  Filtered keyword/domain matches are unioned once before counting and pagination.
+  Preserve empty-page counts, numeric ordering, zero values and provenance.
+  Migration `039_link_power_inspector_index` provides the project/run score order
+  and covered detail keys. Keep `test:gcp-link-power-scale` in the Docker gate;
+  it verifies 900,000 scores against PostgreSQL without increasing live timeouts.
 - `GET /v1/projects/:projectId/link-power-domains-export` returns
   `{csv, runId, total}` for an authorised administrator and a successful project
   run. Preserve the benchmark's `meanScore`/`appearances` sorting, direction and
