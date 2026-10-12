@@ -24,13 +24,15 @@ let previousScope: unknown;
 let previousEligibility: unknown;
 let createdInput: Record<string, unknown>;
 let largeRollups = false;
+let activeDiagnosticReads = 0;
+let peakDiagnosticReads = 0;
 
 function result(rows: unknown[], rowCount = rows.length) {
   return { rowCount, rows };
 }
 
 function database(): DatabasePool {
-  const query = vi.fn(async (sqlValue: string, values: unknown[] = []) => {
+  const execute = async (sqlValue: string, values: unknown[] = []) => {
     const sql = sqlValue.replace(/\s+/g, " ").trim();
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result([]);
     if (sql.includes("SELECT approval_status FROM profiles")) {
@@ -123,6 +125,15 @@ function database(): DatabasePool {
     if (sql.startsWith("INSERT INTO pipeline_stage_runs")) return result([], 1);
     if (sql.startsWith("INSERT INTO pipeline_forecast_exclusions")) { recoveryWrites.push(sql); return result([], 1); }
     throw new Error(`Unexpected SQL in pipeline readiness test: ${sql}`);
+  };
+  const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+    const diagnostic = /FROM pipeline_rollups AS rollup|stage.stage_id IN \('har-readiness', 'revenue-readiness'\)|FROM provider_work_items AS item|promotable_gsc_query_count/.test(sql);
+    if (!diagnostic) return execute(sql, values);
+    peakDiagnosticReads = Math.max(peakDiagnosticReads, ++activeDiagnosticReads);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return await execute(sql, values);
+    } finally {activeDiagnosticReads -= 1;}
   });
   const client = { query, release: vi.fn() };
   return { connect: vi.fn(async () => client), query } as unknown as DatabasePool;
@@ -135,6 +146,7 @@ describe("autonomous pipeline readiness API", () => {
 
   beforeEach(async () => {
     readinessOverrides = {}; largeRollups = false;
+    activeDiagnosticReads = 0; peakDiagnosticReads = 0;
     completedQualification = true;
     hasCheckpoint = false; changedInputs = false; idle = true; recoveryWrites = [];
     unresolvedSerps = false; previousScope = undefined; previousEligibility = undefined; createdInput = {};
@@ -168,6 +180,13 @@ describe("autonomous pipeline readiness API", () => {
       rollups: [{ clusterDedupedExpectedIncrementalAnnual: 120000, doubleCountAnnual: 30000 }],
       substitutions: [{ count: 12, input: "content_fit", stageId: "har-readiness" }],
     });
+  });
+  it("shares the two-query budget for qualification reads during concurrent readiness loads", async () => {
+    const responses = await Promise.all(Array.from({length:3},()=>fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-readiness`)));
+    expect(responses.every(response=>response.status===200)).toBe(true);
+    expect(peakDiagnosticReads).toBe(2);
+    expect(activeDiagnosticReads).toBe(0);
+    expect(orchestrator.start).not.toHaveBeenCalled();
   });
   it("bounds large rollup samples and omits member detail while retaining saved zero totals", async () => {
     largeRollups = true;

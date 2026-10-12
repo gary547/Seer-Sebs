@@ -10,6 +10,8 @@ Migration `039_link_power_inspector_index` supplies the run-scoped score orderin
 
 All reads use the shared diagnostic SQL budget. No increased production statement timeout, skipped rows, sampled totals, persistent response cache or provider fallback is required for this contract.
 
+Filtered reads retain score and confidence in the matching set and select page keys before fetching URL and authority details. Migration `042_link_power_component_indexes` covers full authority aggregation and project-scoped domain matching without reading provider payloads. Read-only qualification preview queries also use the shared diagnostic budget; transaction-bound pipeline preflight keeps its original database client.
+
 The concurrent calculation-control SERP summary uses grouping sets to obtain complete observation counts, distinct keyword coverage, ownership and feature-type counts in one scan. Migration `040_serp_visibility_diagnostic_indexes` covers those fields and the saved realistic HAR visibility average. The thirty displayed feature types are selected after global counts; empty data and a missing forecast retain their original zero/null semantics.
 
 Calculation-control volume coverage reads the exact `provider_volume_coverage` projection maintained transactionally by migration `041_provider_volume_coverage`. Insertions, key changes and deletions update month counts and boundaries; volume-only changes preserve coverage. Imported-month precedence, genuine zeros, complete coverage totals and the twenty-keyword canonical sample remain unchanged. The volume scale gate includes two projects with identical keyword names and 1,588,860 provider observations each.

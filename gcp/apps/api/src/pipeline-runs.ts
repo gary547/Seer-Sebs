@@ -180,6 +180,7 @@ interface ReadinessRow {
 async function projectReadiness(
   client: PoolClient | DatabasePool,
   projectId: string,
+  query = <Row extends QueryResultRow>(text: string, values: unknown[]) => client.query<Row>(text, values),
 ): Promise<{
   configuration: {
     brandTerms: string[];
@@ -207,7 +208,7 @@ async function projectReadiness(
   };
   ready: boolean;
 }> {
-  const result = await client.query<ReadinessRow>(
+  const result = await query<ReadinessRow>(
     `
       WITH latest_upload AS (
         SELECT id FROM gsc_uploads WHERE project_id = $1
@@ -490,7 +491,8 @@ export async function getProjectPipelineReadiness(
       submitted: Number(provider?.submitted ?? "0"),
       succeeded: Number(provider?.succeeded ?? "0"),
     },
-    ...(await projectReadiness(pool, projectId)),
+    ...(await projectReadiness(pool, projectId,
+      <Row extends QueryResultRow>(text: string, values: unknown[]) => queryCalculationDiagnostic<Row>(pool, text, values))),
     rollups: rollups.rows.map((row) => ({
       categoryRollup: sample(row.category_rollup, rollupFields.category_rollup),
       clusterDedupedExpectedIncrementalAnnual: Number(

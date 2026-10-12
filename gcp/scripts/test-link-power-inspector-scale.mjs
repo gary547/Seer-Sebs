@@ -104,9 +104,12 @@ try {
   assert.equal(new Set([...page,...next].map(row=>row.serp_result_id)).size,100);
   assert.ok(page.every(row=>row.metric_source==='dataforseo' && row.authority_scope==='page'));
   for (const [search,total] of [['needle',45],['client.test',100000],['foreign-only',0]]) {
+    const searchStarted=Date.now();
     const result = await client.query(linkPowerDetailsSql(true), [...values,search,50,0]);
+    assert.ok(Date.now()-searchStarted<5000,`${search} exceeded 5s`);
     assert.equal(Number(result.rows[0].total),total,search);
     assert.equal(result.rows.filter(row=>row.keyword_id!==null).length, Math.min(total,50),search);
+    if(search==='client.test')assert.ok(result.rows.every(row=>row.domain==='client.test'&&row.rank_absolute===9));
   }
   const beyond = await client.query(linkPowerDetailsSql(true), [...values,'needle',50,100]);
   assert.equal(beyond.rows.length,1);assert.equal(beyond.rows[0].keyword_id,null);assert.equal(Number(beyond.rows[0].total),45);

@@ -93,30 +93,30 @@ export function linkPowerDetailsSql(hasSearch: boolean): string {
   `;
   return `
     WITH matching_scores AS MATERIALIZED (
-      SELECT score.keyword_id, score.serp_result_id
+      SELECT score.keyword_id, score.serp_result_id, score.score, score.confidence
       FROM keywords AS keyword
       JOIN link_power_scores AS score ON score.keyword_id = keyword.id
       WHERE score.project_id = $1 AND score.pipeline_run_id = $2
         AND keyword.project_id = $1 AND keyword.normalised_keyword LIKE '%' || $3 || '%'
       UNION
-      SELECT score.keyword_id, score.serp_result_id
+      SELECT score.keyword_id, score.serp_result_id, score.score, score.confidence
       FROM serp_results AS result
       JOIN link_power_scores AS score ON score.serp_result_id = result.id
       WHERE score.project_id = $1 AND score.pipeline_run_id = $2
         AND result.project_id = $1 AND result.domain LIKE '%' || $3 || '%'
-    ), detail_page AS (
-      SELECT ${detailColumns}
+    ), page_keys AS MATERIALIZED (
+      SELECT matched.*
       FROM matching_scores AS matched
-      JOIN link_power_scores AS score
-        ON score.pipeline_run_id = $2 AND score.serp_result_id = matched.serp_result_id
       JOIN keywords AS keyword ON keyword.id = matched.keyword_id
       JOIN serp_results AS result ON result.id = matched.serp_result_id
-      ORDER BY score.score DESC, keyword.normalised_keyword, result.rank_absolute, score.serp_result_id
+      ORDER BY matched.score DESC, keyword.normalised_keyword, result.rank_absolute, matched.serp_result_id
       LIMIT $4 OFFSET $5
     )
-    SELECT page.*, totals.total
+    SELECT ${detailColumns}, totals.total
     FROM (SELECT count(*)::text AS total FROM matching_scores) AS totals
-    LEFT JOIN detail_page AS page ON true
-    ORDER BY page.score::numeric DESC, page.normalised_keyword, page.rank_absolute, page.serp_result_id
+    LEFT JOIN page_keys AS score ON true
+    LEFT JOIN keywords AS keyword ON keyword.id = score.keyword_id
+    LEFT JOIN serp_results AS result ON result.id = score.serp_result_id
+    ORDER BY score.score DESC, keyword.normalised_keyword, result.rank_absolute, score.serp_result_id
   `;
 }

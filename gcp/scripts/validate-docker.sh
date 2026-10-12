@@ -152,6 +152,9 @@ docker compose -f "$compose_file" exec -T postgres \
   -f /docker-entrypoint-initdb.d/041_provider_volume_coverage.sql
 docker compose -f "$compose_file" exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
+  -f /docker-entrypoint-initdb.d/042_link_power_component_indexes.sql
+docker compose -f "$compose_file" exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U seer_owner -d seer \
   -f /docker-entrypoint-initdb.d/999_local_runtime_users.sql
 docker compose -f "$compose_file" up -d --wait
 
