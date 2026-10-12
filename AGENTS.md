@@ -338,6 +338,8 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   feature types only after computing global totals. Migration
   `040_serp_visibility_diagnostic_indexes` covers this read and the saved realistic
   HAR visibility average; retain empty-data zeros and missing-forecast nulls.
+  The Docker scale fixture must verify ownership and exact global totals even
+  when the available feature types exceed the display limit.
 - `GET /v1/projects/:projectId/calculation-inspector` accepts the optional
   comma-separated filters `clamped`, `delta`, `missing_lps`, `overrides`, and
   `synthetic_lps`. Apply them in SQL before pagination and keep HAR, Revenue,
