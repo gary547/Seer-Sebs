@@ -333,6 +333,11 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   category rollups, feature ownership, and per-keyword multipliers visible in
   the restored admin panels without expanding those endpoints into unbounded
   result sets.
+- SERP visibility summaries aggregate full observation, keyword, ownership and
+  feature-type counts in one grouping-sets scan. Select the thirty displayed
+  feature types only after computing global totals. Migration
+  `040_serp_visibility_diagnostic_indexes` covers this read and the saved realistic
+  HAR visibility average; retain empty-data zeros and missing-forecast nulls.
 - `GET /v1/projects/:projectId/calculation-inspector` accepts the optional
   comma-separated filters `clamped`, `delta`, `missing_lps`, `overrides`, and
   `synthetic_lps`. Apply them in SQL before pagination and keep HAR, Revenue,

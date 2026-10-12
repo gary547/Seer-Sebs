@@ -8,6 +8,7 @@ import { projectVolumeDiagnosticsSql } from "../../../packages/runtime/src/proje
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertAdministrator } from "./authorization.js";
 import { queryCalculationDiagnostic } from "./calculation-reads.js";
+import { serpVisibilitySummarySql } from "./serp-visibility-queries.js";
 
 interface ProjectRow extends QueryResultRow {
   archived_at: Date | null;
@@ -482,44 +483,7 @@ async function loadProjectCalculationControl(
       [projectId, runId],
     ),
     query<SerpSummaryRow>(
-      `
-        WITH feature_types AS (
-          SELECT
-            result_type,
-            count(*)::integer AS count,
-            count(*) FILTER (WHERE owned)::integer AS owned_count
-          FROM project_serp_features
-          WHERE project_id = $1
-          GROUP BY result_type
-          ORDER BY count(*) DESC, result_type
-          LIMIT 30
-        )
-        SELECT
-          (SELECT count(*)::text FROM project_serp_features
-            WHERE project_id = $1) AS feature_count,
-          (SELECT count(DISTINCT keyword_id)::text FROM project_serp_features
-            WHERE project_id = $1) AS keyword_count,
-          (SELECT count(*) FILTER (WHERE owned)::text FROM project_serp_features
-            WHERE project_id = $1) AS owned_count,
-          (
-            SELECT avg(serp_visibility_multiplier)::text
-            FROM har_forecasts
-            WHERE project_id = $1
-              AND pipeline_run_id = $2::uuid
-              AND scenario = 'realistic'
-          ) AS average_visibility_multiplier,
-          COALESCE(
-            (
-              SELECT jsonb_agg(jsonb_build_object(
-                'resultType', result_type,
-                'count', count,
-                'ownedCount', owned_count
-              ) ORDER BY count DESC, result_type)
-              FROM feature_types
-            ),
-            '[]'::jsonb
-          ) AS feature_types
-      `,
+      serpVisibilitySummarySql,
       [projectId, runId],
     ),
     query<SerpSampleRow>(

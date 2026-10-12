@@ -64,7 +64,7 @@ function database(): DatabasePool {
     if (sql.includes("signal.coverage_months")) {
       return result([{ category: "SEO", coverage_months: 24, demand_warning: false, demand_warning_reason: null, keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", monthly_volume: 1200, peak_months: [1, 9], seasonality_strength: "0.35", trend_confidence: "high", trend_direction: "growing", trend_pct: "0.18", volatility_score: "0.21" }]);
     }
-    if (sql.includes("WITH feature_types AS")) {
+    if (sql.includes("WITH feature_groups AS MATERIALIZED")) {
       return result([{ average_visibility_multiplier: "0.82", feature_count: "16", feature_types: [{ count: 10, ownedCount: 2, resultType: "organic" }], keyword_count: "10", owned_count: "2" }]);
     }
     if (sql.includes("WITH feature_summary AS")) {
@@ -84,7 +84,7 @@ function database(): DatabasePool {
     throw new Error(`Unexpected SQL in calculation control test: ${sql}`);
   };
   const query = vi.fn(async (sql: string, values: unknown[] = []) => {
-    const diagnostic = /FROM gsc_uploads AS upload|WITH base_sources AS|provider_history AS MATERIALIZED|WITH clusters AS|WITH signals AS|signal.coverage_months|WITH feature_types AS|WITH feature_summary AS|WITH rows AS|WITH aggregate AS|LEFT JOIN LATERAL|FROM link_power_scores AS score|WITH keyword_page AS|FROM har_forecasts AS har|FROM client_domain_metrics/.test(sql);
+    const diagnostic = /FROM gsc_uploads AS upload|WITH base_sources AS|provider_history AS MATERIALIZED|WITH clusters AS|WITH signals AS|signal.coverage_months|WITH feature_groups AS|WITH feature_summary AS|WITH rows AS|WITH aggregate AS|LEFT JOIN LATERAL|FROM link_power_scores AS score|WITH keyword_page AS|FROM har_forecasts AS har|FROM client_domain_metrics/.test(sql);
     if (!diagnostic) return execute(sql, values);
     peakDiagnostics = Math.max(peakDiagnostics, ++activeDiagnostics);
     try {
