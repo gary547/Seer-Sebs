@@ -4,7 +4,7 @@ import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
 import { HttpError } from "../../../packages/runtime/src/http.js";
 import type { AuthenticatedUser } from "../../../packages/runtime/src/local-auth.js";
-import { projectVolumeSampleSql, projectVolumeSummarySql } from "../../../packages/runtime/src/project-volume-history.js";
+import { projectVolumeDiagnosticsSql } from "../../../packages/runtime/src/project-volume-history.js";
 import { resolveBrandTerms } from "../../../packages/pipeline/src/brand-terms.js";
 import { assertAdministrator } from "./authorization.js";
 import { queryCalculationDiagnostic } from "./calculation-reads.js";
@@ -263,8 +263,7 @@ async function loadProjectCalculationControl(
   const [
     uploads,
     keywordOverview,
-    volumeSummary,
-    volumeSample,
+    volumeDiagnostics,
     clusterSummary,
     demandSummary,
     demandSamples,
@@ -337,8 +336,7 @@ async function loadProjectCalculationControl(
       `,
       [projectId],
     ),
-    query<VolumeSummaryRow>(projectVolumeSummarySql(), [projectId]),
-    query<VolumeSampleRow>(projectVolumeSampleSql(), [projectId]),
+    query<{ summary: VolumeSummaryRow; sample: VolumeSampleRow[] }>(projectVolumeDiagnosticsSql(), [projectId]),
     query<ClusterSummaryRow>(
       `
         WITH clusters AS (
@@ -719,7 +717,7 @@ async function loadProjectCalculationControl(
   ]);
 
   const keyword = keywordOverview.rows[0];
-  const volume = volumeSummary.rows[0];
+  const volume = volumeDiagnostics.rows[0]?.summary;
   const clusters = clusterSummary.rows[0];
   const demand = demandSummary.rows[0];
   const serp = serpSummary.rows[0];
@@ -846,7 +844,7 @@ async function loadProjectCalculationControl(
       maximumMonths: number(volume.maximum_months),
       medianMonths: number(volume.median_months),
       minimumMonths: number(volume.minimum_months),
-      sample: volumeSample.rows.map((row) => ({
+      sample: (volumeDiagnostics.rows[0]?.sample ?? []).map((row) => ({
         keyword: row.keyword,
         keywordId: row.keyword_id,
         monthCount: Number(row.month_count),

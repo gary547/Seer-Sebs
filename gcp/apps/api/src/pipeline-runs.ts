@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { PoolClient } from "pg";
+import type { PoolClient, QueryResultRow } from "pg";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { withTransaction } from "../../../packages/runtime/src/database.js";
@@ -16,6 +16,7 @@ import { forecastScope } from "../../../packages/pipeline/src/forecast-scope.js"
 import { FORECAST_ELIGIBILITY_POLICY } from "../../../packages/pipeline/src/forecast-eligibility.js";
 import { assertProjectAccessByRole } from "./authorization.js";
 import { lockIdleRun, projectCheckpoint, recoverPipelineRun } from "./pipeline-recovery.js";
+import { queryCalculationDiagnostic } from "./calculation-reads.js";
 import {
   buildStageProgress,
   type StageWorkCounts,
@@ -208,6 +209,14 @@ async function projectReadiness(
 }> {
   const result = await client.query<ReadinessRow>(
     `
+      WITH latest_upload AS (
+        SELECT id FROM gsc_uploads WHERE project_id = $1
+        ORDER BY created_at DESC, id DESC LIMIT 1
+      ), gsc_queries AS MATERIALIZED (
+        SELECT row.normalised_query, sum(row.impressions) AS impressions
+        FROM gsc_upload_keywords AS row JOIN latest_upload AS upload ON upload.id = row.upload_id
+        GROUP BY row.normalised_query
+      )
       SELECT
         client.domain,
         client.brand_terms,
@@ -236,28 +245,10 @@ async function projectReadiness(
             AND detox_status = 'keep'
             AND COALESCE(avg_monthly_volume, 0) >= project.competitive_enrichment_volume_floor)
           AS paid_eligible_keyword_count,
+        (SELECT count(*)::text FROM gsc_queries) AS latest_gsc_query_count,
         COALESCE((
-          SELECT count(DISTINCT row.normalised_query)::text
-          FROM gsc_upload_keywords AS row
-          WHERE row.upload_id = (
-            SELECT upload.id
-            FROM gsc_uploads AS upload
-            WHERE upload.project_id = project.id
-            ORDER BY upload.created_at DESC, upload.id DESC
-            LIMIT 1
-          )
-        ), '0') AS latest_gsc_query_count,
-        COALESCE((
-          SELECT count(DISTINCT row.normalised_query)::text
-          FROM gsc_upload_keywords AS row
-          WHERE row.upload_id = (
-            SELECT upload.id
-            FROM gsc_uploads AS upload
-            WHERE upload.project_id = project.id
-            ORDER BY upload.created_at DESC, upload.id DESC
-            LIMIT 1
-          )
-            AND EXISTS (
+          SELECT count(*)::text FROM gsc_queries AS row
+          WHERE EXISTS (
               SELECT 1
               FROM keywords AS keyword
               WHERE keyword.project_id = project.id
@@ -265,20 +256,8 @@ async function projectReadiness(
             )
         ), '0') AS duplicate_gsc_query_count,
         COALESCE((
-          SELECT count(*)::text
-          FROM (
-            SELECT row.normalised_query
-            FROM gsc_upload_keywords AS row
-            WHERE row.upload_id = (
-              SELECT upload.id
-              FROM gsc_uploads AS upload
-              WHERE upload.project_id = project.id
-              ORDER BY upload.created_at DESC, upload.id DESC
-              LIMIT 1
-            )
-            GROUP BY row.normalised_query
-            HAVING sum(row.impressions) >= project.gsc_promotion_impressions_floor
-          ) AS promotable
+          SELECT count(*)::text FROM gsc_queries
+          WHERE impressions >= project.gsc_promotion_impressions_floor
         ), '0') AS promotable_gsc_query_count
       FROM navigator_projects AS project
       JOIN clients AS client ON client.id = project.client_id
@@ -395,7 +374,20 @@ export async function getProjectPipelineReadiness(
   projectId: string,
 ): Promise<Record<string, unknown>> {
   await assertProjectAccessByRole(pool, user.id, projectId);
-  const [rollups, readinessOutputs, providerSummary] = await Promise.all([pool.query<{
+  const query = <Row extends QueryResultRow>(sql: string, values: unknown[]) => queryCalculationDiagnostic<Row>(pool, sql, values);
+  const rollupFields = {
+    cluster_rollup: ["canonicalKeywordId", "clusterKey", "expectedIncrementalAnnual", "memberCount"],
+    category_rollup: ["category", "expectedIncrementalAnnual", "keywordCount"],
+    quarter_rollup: ["quarter", "expectedIncrementalAnnual", "keywordCount"],
+    trend_rollup: ["trend", "expectedIncrementalAnnual", "keywordCount"],
+  };
+  const sampleSql = (column: keyof typeof rollupFields) => `(
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(${rollupFields[column].map(field => `'${field}', item->'${field}'`).join(", ")}) ORDER BY position), '[]'::jsonb)
+    FROM jsonb_array_elements(jsonb_path_query_array(rollup.${column}, '$[0 to 19]')) WITH ORDINALITY AS sample(item, position)
+  ) AS ${column}`;
+  const sample = (value: unknown, fields: string[]) => Array.isArray(value)
+    ? value.slice(0, 20).map(item => Object.fromEntries(fields.map(field => [field, outputRecord(item)?.[field]]))) : [];
+  const [rollups, readinessOutputs, providerSummary] = await Promise.all([query<{
     category_rollup: unknown;
     cluster_deduped_expected_incremental_annual: string;
     cluster_rollup: unknown;
@@ -411,10 +403,10 @@ export async function getProjectPipelineReadiness(
         rollup.naive_expected_incremental_annual::text,
         rollup.cluster_deduped_expected_incremental_annual::text,
         rollup.double_count_annual::text,
-        rollup.cluster_rollup,
-        rollup.category_rollup,
-        rollup.quarter_rollup,
-        rollup.trend_rollup
+        ${sampleSql("cluster_rollup")},
+        ${sampleSql("category_rollup")},
+        ${sampleSql("quarter_rollup")},
+        ${sampleSql("trend_rollup")}
       FROM pipeline_rollups AS rollup
       WHERE rollup.project_id = $1::uuid
         AND rollup.pipeline_run_id = (
@@ -432,9 +424,14 @@ export async function getProjectPipelineReadiness(
       END
     `,
     [projectId],
-  ), pool.query<{ output: unknown; stage_id: string }>(
+  ), query<{ output: unknown; stage_id: string }>(
     `
-      SELECT stage.stage_id, stage.output
+      SELECT stage.stage_id, jsonb_build_object('substitutions', (
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+          'count', item->'count', 'input', item->'input', 'substitute', item->'substitute'
+        ) ORDER BY position), '[]'::jsonb)
+        FROM jsonb_array_elements(jsonb_path_query_array(stage.output, '$.substitutions[0 to 19]')) WITH ORDINALITY AS sample(item, position)
+      )) AS output
       FROM pipeline_stage_runs AS stage
       WHERE stage.run_id = (
         SELECT run.id
@@ -448,7 +445,7 @@ export async function getProjectPipelineReadiness(
       ORDER BY stage.stage_id
     `,
     [projectId],
-  ), pool.query<{
+  ), query<{
     cache_entries_available: string;
     failed: string;
     max_attempts: number;
@@ -495,27 +492,29 @@ export async function getProjectPipelineReadiness(
     },
     ...(await projectReadiness(pool, projectId)),
     rollups: rollups.rows.map((row) => ({
-      categoryRollup: row.category_rollup,
+      categoryRollup: sample(row.category_rollup, rollupFields.category_rollup),
       clusterDedupedExpectedIncrementalAnnual: Number(
         row.cluster_deduped_expected_incremental_annual,
       ),
-      clusterRollup: row.cluster_rollup,
+      clusterRollup: sample(row.cluster_rollup, rollupFields.cluster_rollup),
       doubleCountAnnual: Number(row.double_count_annual),
       naiveExpectedIncrementalAnnual: Number(
         row.naive_expected_incremental_annual,
       ),
-      quarterRollup: row.quarter_rollup,
+      quarterRollup: sample(row.quarter_rollup, rollupFields.quarter_rollup),
       scenario: row.scenario,
-      trendRollup: row.trend_rollup,
+      trendRollup: sample(row.trend_rollup, rollupFields.trend_rollup),
     })),
     substitutions: readinessOutputs.rows.flatMap((row) => {
       const output = row.output && typeof row.output === "object"
         ? row.output as { substitutions?: unknown }
         : {};
       return Array.isArray(output.substitutions)
-        ? output.substitutions.map((substitution) => ({
+        ? output.substitutions.slice(0, 20).map((substitution) => ({
             stageId: row.stage_id,
-            ...(substitution as Record<string, unknown>),
+            count: outputRecord(substitution)?.count,
+            input: outputRecord(substitution)?.input,
+            substitute: outputRecord(substitution)?.substitute,
           }))
         : [];
     }),

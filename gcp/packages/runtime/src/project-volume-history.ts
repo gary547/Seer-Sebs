@@ -55,9 +55,8 @@ export function projectVolumeHistoryCte(): string {
     WHERE keyword.project_id = $1 AND keyword.detox_status = 'keep'
   )`;
 }
-export function projectVolumeSummarySql(): string {
-  return `WITH ${projectVolumeHistoryCte()}
-    SELECT count(*)::text AS kept_keyword_count,
+function volumeSummarySelect(): string {
+  return `SELECT count(*)::text AS kept_keyword_count,
       count(*) FILTER (WHERE month_count > 0)::text AS with_history_count,
       count(*) FILTER (WHERE month_count >= 12)::text AS with_12_months_count,
       count(*) FILTER (WHERE month_count >= 24)::text AS with_24_months_count,
@@ -70,11 +69,15 @@ export function projectVolumeSummarySql(): string {
     FROM history`;
 }
 
-export function projectVolumeSampleSql(): string {
-  return `WITH ${projectVolumeHistoryCte()}, sample_keywords AS MATERIALIZED (
+function volumeSampleCte(): string {
+  return `sample_keywords AS MATERIALIZED (
     SELECT * FROM history ORDER BY month_count DESC, normalised_keyword LIMIT 20
-  )
-  SELECT keyword.id AS keyword_id, keyword.keyword, keyword.month_count::text,
+  )`;
+}
+
+function volumeSampleSelect(): string {
+  return `SELECT keyword.id AS keyword_id, keyword.keyword, keyword.month_count::text,
+    row_number() OVER (ORDER BY keyword.month_count DESC, keyword.normalised_keyword) AS sample_order,
     COALESCE(sample.months, '[]'::jsonb) AS months
   FROM sample_keywords AS keyword
   CROSS JOIN LATERAL (
@@ -93,4 +96,20 @@ export function projectVolumeSampleSql(): string {
     ) AS canonical_months
   ) AS sample
   ORDER BY keyword.month_count DESC, keyword.normalised_keyword`;
+}
+
+export function projectVolumeSummarySql(): string {
+  return `WITH ${projectVolumeHistoryCte()} ${volumeSummarySelect()}`;
+}
+
+export function projectVolumeSampleSql(): string {
+  return `WITH ${projectVolumeHistoryCte()}, ${volumeSampleCte()} ${volumeSampleSelect()}`;
+}
+
+export function projectVolumeDiagnosticsSql(): string {
+  return `WITH ${projectVolumeHistoryCte()}, summary AS (${volumeSummarySelect()}),
+    ${volumeSampleCte()}, sample AS (${volumeSampleSelect()})
+    SELECT to_jsonb(summary) AS summary,
+      COALESCE((SELECT jsonb_agg(to_jsonb(sample) - 'sample_order' ORDER BY sample_order) FROM sample), '[]'::jsonb) AS sample
+    FROM summary`;
 }

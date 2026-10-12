@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createDatabasePool } from '../../dist/gcp/packages/runtime/src/database.js';
-import { projectVolumeSampleSql, projectVolumeSummarySql } from '../../dist/gcp/packages/runtime/src/project-volume-history.js';
+import { projectVolumeDiagnosticsSql, projectVolumeSampleSql, projectVolumeSummarySql } from '../../dist/gcp/packages/runtime/src/project-volume-history.js';
 const pool = createDatabasePool('postgresql://seer_owner:local-owner-only@127.0.0.1:25432/seer');
 const client = await pool.connect();
 const project = randomUUID();
@@ -14,19 +14,22 @@ try {
   await client.query("INSERT INTO keyword_monthly_volumes (id,keyword_id,month,volume,source) SELECT gen_random_uuid(),id,date '2026-08-01',0,'upload' FROM keywords LIMIT 450");
   for (const table of ['keywords','keyword_monthly_volumes','local_provider_keyword_monthly_volumes']) await client.query(`ANALYZE ${table}`);
   await client.query("SET LOCAL statement_timeout = '30s'");
-  for(const [name, sql] of [['summary',projectVolumeSummarySql()],['sample',projectVolumeSampleSql()]]) {
+  for(const [name, sql] of [['summary',projectVolumeSummarySql()],['sample',projectVolumeSampleSql()],['diagnostics',projectVolumeDiagnosticsSql()]]) {
     const result = await client.query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) '+sql,[project]);
     const plan = result.rows[0]['QUERY PLAN'][0];
     console.log(JSON.stringify({name,keywordCount:44135,historyRows:1588860,plan}));
     assert.ok(plan['Execution Time'] < 5000, `${name} exceeded the 5s large-history query budget: ${plan['Execution Time']}ms`);
     const data = await client.query(sql,[project]);
-    if (name === 'summary') {
-      assert.equal(Number(data.rows[0].kept_keyword_count),44135);
-      assert.equal(Number(data.rows[0].history_row_count),1588860);
-      assert.equal(Number(data.rows[0].with_24_months_count),44135);
-    } else {
-      assert.equal(data.rows.length,20);
-      for(const row of data.rows) {
+    if (name !== 'sample') {
+      const summary = name === 'diagnostics' ? data.rows[0].summary : data.rows[0];
+      assert.equal(Number(summary.kept_keyword_count),44135);
+      assert.equal(Number(summary.history_row_count),1588860);
+      assert.equal(Number(summary.with_24_months_count),44135);
+    }
+    if (name !== 'summary') {
+      const sample = name === 'diagnostics' ? data.rows[0].sample : data.rows;
+      assert.equal(sample.length,20);
+      for(const row of sample) {
         assert.equal(row.months.length,36);
         const index=Number(row.keyword.replace('query ',''));
         assert.equal(row.months.at(-1).volume,index<=450?0:135);

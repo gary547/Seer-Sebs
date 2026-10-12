@@ -42,13 +42,14 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   if (!Number.isInteger(limit) || limit < 1 || limit > 500 || (after && !uuid.test(after)) || (requestedRun && !uuid.test(requestedRun)) || (after && !requestedRun)) {
     throw new HttpError(400, "invalid_export_page", "Export pagination is invalid.");
   }
-  const runs = await pool.query<{ id: string; input: unknown; completed_at: Date; currency: string | null; dirty: boolean; active: boolean }>(
+  const runs = await pool.query<{ id: string; input: unknown; completed_at: Date; currency: string | null; dirty: boolean; active: boolean; keyword_count: string | null }>(
     `SELECT run.id, run.input, run.completed_at, project.currency,
        (project.inputs_dirty OR project.keywords_dirty OR project.serp_dirty) AS dirty,
-       EXISTS (SELECT 1 FROM pipeline_runs AS active WHERE active.input->>'projectId' = $1::text AND active.status IN ('pending', 'running')) AS active
+       EXISTS (SELECT 1 FROM pipeline_runs AS active WHERE active.input->>'projectId' = $1::text AND active.status IN ('pending', 'running')) AS active,
+       CASE WHEN $2::uuid IS NULL THEN (SELECT count(*)::text FROM keywords WHERE project_id = $1::uuid AND detox_status = 'keep') END AS keyword_count
      FROM pipeline_runs AS run JOIN navigator_projects AS project ON project.id = $1::uuid
      WHERE run.input->>'projectId' = $1::text AND run.status = 'succeeded'
-     ORDER BY run.completed_at DESC, run.id DESC LIMIT 1`, [projectId]);
+     ORDER BY run.completed_at DESC, run.id DESC LIMIT 1`, [projectId, after]);
   const run = runs.rows[0];
   if (!run) throw new HttpError(409, "export_not_ready", "Complete the pipeline before downloading final results.");
   if (run.dirty || run.active || (requestedRun && run.id !== requestedRun)) throw new HttpError(409, "export_inputs_changed", "The project is changing or its inputs have changed. Complete the pipeline, then restart the export.");
@@ -129,6 +130,7 @@ export async function getCalculationExportPage(pool: DatabasePool, user: Authent
   }));
   return { columns, rows, runId: run.id, keywordCount: keys.size, completedAt: run.completed_at.toISOString(),
     excludedKeywordCount: excluded.size + (eligibility?.excludedKeywordCount ?? 0),
+    ...(run.keyword_count === null || run.keyword_count === undefined ? {} : { totalKeywords: Number(run.keyword_count) }),
     nextAfter: keys.size === limit ? [...keys].at(-1) : null,
     filename: `seer-results-${projectId}-${run.id}${scenario ? `-${scenario}` : ""}.csv`,
   };

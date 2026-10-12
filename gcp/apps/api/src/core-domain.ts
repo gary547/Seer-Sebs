@@ -2613,9 +2613,10 @@ export async function getProjectCalculations(
       siteActions: [],
     };
   }
+  const query = <Row extends QueryResultRow>(text: string, values: unknown[]) => queryCalculationDiagnostic<Row>(pool, text, values);
   const [har, revenue, calibration, siteActions, opportunities] =
     await Promise.all([
-      pool.query<HarSummaryRow>(
+      query<HarSummaryRow>(
         `
           SELECT
             scenario,
@@ -2636,7 +2637,7 @@ export async function getProjectCalculations(
         `,
         [projectId, run.id],
       ),
-      pool.query<RevenueSummaryRow>(
+      query<RevenueSummaryRow>(
         `
           SELECT
             scenario,
@@ -2661,7 +2662,7 @@ export async function getProjectCalculations(
         `,
         [projectId, run.id],
       ),
-      pool.query<CalibrationApiRow>(
+      query<CalibrationApiRow>(
         `
           SELECT
             model_version,
@@ -2684,7 +2685,7 @@ export async function getProjectCalculations(
         `,
         [projectId, run.id],
       ),
-      pool.query<SiteActionSummaryRow>(
+      query<SiteActionSummaryRow>(
         `
           SELECT tactical_status, count(*)::text AS count
           FROM site_architecture
@@ -2695,7 +2696,7 @@ export async function getProjectCalculations(
         `,
         [projectId, run.id],
       ),
-      pool.query<OpportunityRow>(
+      query<OpportunityRow>(
         `
           SELECT
             keyword.id AS keyword_id,

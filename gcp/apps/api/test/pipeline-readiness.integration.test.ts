@@ -1,10 +1,12 @@
 import type { AddressInfo } from "node:net";
+import { connect, type ServerHttp2Session } from "node:http2";
+import { once } from "node:events";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabasePool } from "../../../packages/runtime/src/database.js";
 import { PIPELINE_STAGES } from "../../../packages/pipeline/src/definition.js";
-import { createApiServer } from "../src/server.js";
+import { createApiServer, createHttp2ApiServer } from "../src/server.js";
 
 const userId = "00000000-0000-4000-8000-000000000001";
 const projectId = "00000000-0000-4000-8000-000000000002";
@@ -21,6 +23,7 @@ let unresolvedSerps = false;
 let previousScope: unknown;
 let previousEligibility: unknown;
 let createdInput: Record<string, unknown>;
+let largeRollups = false;
 
 function result(rows: unknown[], rowCount = rows.length) {
   return { rowCount, rows };
@@ -70,7 +73,10 @@ function database(): DatabasePool {
       return result([{
         category_rollup: [{ category: "Medicine", expectedIncrementalAnnual: 40000, keywordCount: 50 }],
         cluster_deduped_expected_incremental_annual: "120000",
-        cluster_rollup: [],
+        cluster_rollup: largeRollups ? Array.from({ length: 30 }, (_, index) => ({
+          clusterKey: `cluster-${index}`, canonicalKeywordId: projectId, memberCount: 1000,
+          expectedIncrementalAnnual: 0, memberKeywordIds: "private-detail".repeat(150_000),
+        })) : [],
         double_count_annual: "30000",
         naive_expected_incremental_annual: "150000",
         quarter_rollup: [],
@@ -128,7 +134,7 @@ describe("autonomous pipeline readiness API", () => {
   const orchestrator = { start: vi.fn(async () => ({ executionName: "executions/test" })) };
 
   beforeEach(async () => {
-    readinessOverrides = {};
+    readinessOverrides = {}; largeRollups = false;
     completedQualification = true;
     hasCheckpoint = false; changedInputs = false; idle = true; recoveryWrites = [];
     unresolvedSerps = false; previousScope = undefined; previousEligibility = undefined; createdInput = {};
@@ -162,6 +168,42 @@ describe("autonomous pipeline readiness API", () => {
       rollups: [{ clusterDedupedExpectedIncrementalAnnual: 120000, doubleCountAnnual: 30000 }],
       substitutions: [{ count: 12, input: "content_fit", stageId: "har-readiness" }],
     });
+  });
+  it("bounds large rollup samples and omits member detail while retaining saved zero totals", async () => {
+    largeRollups = true;
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/pipeline-readiness`);
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(Buffer.byteLength(text)).toBeLessThan(64 * 1024);
+    const body = JSON.parse(text);
+    expect(body.rollups[0].clusterRollup).toHaveLength(20);
+    expect(body.rollups[0].clusterRollup[0]).toEqual({ clusterKey: "cluster-0", canonicalKeywordId: projectId, memberCount: 1000, expectedIncrementalAnnual: 0 });
+    expect(body.rollups[0].clusterDedupedExpectedIncrementalAnnual).toBe(120000);
+    expect(text).not.toContain("private-detail");
+  });
+  it("keeps browser preflight available on the same h2c session while large-project readiness is unread", async () => {
+    largeRollups = true;
+    const h2 = createHttp2ApiServer({ pool: database(), allowedOrigins: ["https://seer.example.dev"],
+      authenticateRequest: async () => ({ id: userId, email: "admin@example.dev" }),
+      objectStore: { assertReady: async () => undefined, delete: async () => undefined, get: async () => Buffer.alloc(0), put: async () => undefined } });
+    const sessions = new Set<ServerHttp2Session>();
+    h2.on("session", session => { sessions.add(session); session.on("close", () => sessions.delete(session)); });
+    await new Promise<void>(resolve => h2.listen(0, "127.0.0.1", resolve));
+    const client = connect(`http://127.0.0.1:${(h2.address() as AddressInfo).port}`);
+    try {
+      const readiness = client.request({ ":path": `/v1/projects/${projectId}/pipeline-readiness` });
+      readiness.end();
+      const [headers] = await once(readiness, "response");
+      expect(headers[":status"]).toBe(200);
+      const preflight = client.request({ ":method": "OPTIONS", ":path": `/v1/projects/${projectId}/calculation-export`, origin: "https://seer.example.dev" });
+      preflight.end();
+      const [cors] = await once(preflight, "response");
+      expect(cors[":status"]).toBe(204);
+      expect(cors["access-control-allow-origin"]).toBe("https://seer.example.dev");
+    } finally {
+      client.destroy(); for (const session of sessions) session.destroy();
+      await new Promise<void>(resolve => h2.close(() => resolve()));
+    }
   });
   it("inherits approved forecast exclusions for recalculation and clears them for a new full run", async () => {
     previousScope = { reason: "dataforseo_no_results", approvedBy: userId, approvedAt: "2026-10-08T12:00:00Z",

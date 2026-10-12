@@ -618,6 +618,13 @@ async function validateEndToEnd() {
     throw new Error("Detailed forecast API did not expose canonical rows.");
   }
   const exportedForecasts = new Map();
+  const readiness = await jsonRequest(`${apiBaseUrl}/v1/projects/${project.id}/pipeline-readiness`, authenticated(identity.token));
+  if (readiness.rollups.length !== 3 || Buffer.byteLength(JSON.stringify(readiness)) >= 64 * 1024 ||
+      readiness.rollups.some(rollup => rollup.clusterRollup.length > 20 || rollup.categoryRollup.length > 20 ||
+        rollup.clusterRollup.some(cluster => Object.keys(cluster).some(key => !['canonicalKeywordId', 'clusterKey', 'expectedIncrementalAnnual', 'memberCount'].includes(key))) ||
+        rollup.categoryRollup.some(category => Object.keys(category).some(key => !['category', 'expectedIncrementalAnnual', 'keywordCount'].includes(key))))) {
+    throw new Error("Pipeline readiness did not preserve bounded financial rollup summaries.");
+  }
   const domainAdmin = await register(`domain-benchmark-${timestamp}@example.dev`, "admin");
   for (const sort of ["meanScore", "appearances"]) {
     for (const direction of ["asc", "desc"]) {
@@ -667,7 +674,7 @@ async function validateEndToEnd() {
       `${apiBaseUrl}/v1/projects/${project.id}/calculation-export?${params}`,
       authenticated(identity.token),
     );
-    if (page.runId !== firstRun.id || page.columns.length !== 70 || page.rows.length > 15) {
+    if (page.runId !== firstRun.id || page.columns.length !== 70 || page.rows.length > 15 || (!exportCursor && page.totalKeywords !== 12)) {
       throw new Error("Complete export changed its run, columns or page boundary.");
     }
     for (const row of page.rows) {

@@ -1,13 +1,71 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("./auth", () => ({ getAccessToken: vi.fn() }));
-vi.mock("./api", () => ({ seerApiRequest: vi.fn() }));
+vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")>(), seerApiRequest: vi.fn() }));
+import { SeerApiError } from "./api";
 import { getAccessToken } from "./auth";
 import { seerApiRequest } from "./api";
 import { calculationCsvCell, calculationPartFilename, downloadCalculationResults } from "./calculation-export";
 
-afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); });
+
+function downloads() {
+  const created = vi.fn(() => "blob:local-export");
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: created });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+  const clicked = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  return { created, clicked };
+}
+
+function page(nextAfter: string | null = null) {
+  return { columns: ["keyword"], rows: [{ keyword: nextAfter ? "tv" : "oven" }], runId: "run-one", nextAfter, filename: "results.csv", totalKeywords: 2 };
+}
 
 describe("complete calculation CSV", () => {
+  it.each([new TypeError("Failed to fetch"), new SeerApiError(503, "request_failed", "unavailable"),
+    Object.assign(new Error("timed out"), { name: "TimeoutError" })])("recovers the same pinned page after a transient failure: %s", async failure => {
+    vi.useFakeTimers();
+    vi.mocked(getAccessToken).mockResolvedValue("test-token");
+    vi.mocked(seerApiRequest).mockResolvedValueOnce(page("next")).mockRejectedValueOnce(failure).mockResolvedValueOnce(page());
+    const { clicked } = downloads();
+    const progress = vi.fn();
+    const pending = downloadCalculationResults("project", "realistic", progress);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual({ parts: 1, rows: 2 });
+    expect(vi.mocked(seerApiRequest).mock.calls[1]?.[0]).toBe(vi.mocked(seerApiRequest).mock.calls[2]?.[0]);
+    expect(vi.mocked(seerApiRequest).mock.calls[1]?.[0]).toContain("runId=run-one&after=next");
+    expect(progress).toHaveBeenCalledWith({ rows: 1, totalRows: 2, retrying: true });
+    expect(progress).toHaveBeenLastCalledWith({ rows: 2, totalRows: 2, retrying: false });
+    expect(clicked).toHaveBeenCalledOnce();
+  });
+  it.each([401, 403, 409, 413])("keeps deterministic HTTP %s failures terminal and never downloads partial data", async status => {
+    vi.mocked(getAccessToken).mockResolvedValue("test-token");
+    vi.mocked(seerApiRequest).mockResolvedValueOnce(page("next"))
+      .mockRejectedValueOnce(new SeerApiError(status, "blocked", "Please complete the pipeline."));
+    const { created } = downloads();
+    await expect(downloadCalculationResults("project", "stretch")).rejects.toThrow("Please complete the pipeline.");
+    expect(seerApiRequest).toHaveBeenCalledTimes(2);
+    expect(created).not.toHaveBeenCalled();
+  });
+  it("bounds repeated transport failures and restores an actionable error without downloading", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAccessToken).mockResolvedValue("test-token");
+    vi.mocked(seerApiRequest).mockRejectedValue(new TypeError("Failed to fetch"));
+    const { created } = downloads();
+    const rejected = expect(downloadCalculationResults("project")).rejects.toThrow("repeated connection failures");
+    await vi.runAllTimersAsync(); await rejected;
+    expect(seerApiRequest).toHaveBeenCalledTimes(5);
+    expect(created).not.toHaveBeenCalled();
+  });
+  it("rejects early termination and changed columns before producing any files", async () => {
+    vi.mocked(getAccessToken).mockResolvedValue("test-token");
+    const { created } = downloads();
+    vi.mocked(seerApiRequest).mockResolvedValueOnce(page());
+    await expect(downloadCalculationResults("project", "realistic")).rejects.toThrow("download is incomplete");
+    vi.mocked(seerApiRequest).mockResolvedValueOnce(page("next"))
+      .mockResolvedValueOnce({ ...page(), columns: ["unexpected"] });
+    await expect(downloadCalculationResults("project", "realistic")).rejects.toThrow("export columns changed");
+    expect(created).not.toHaveBeenCalled();
+  });
   it("escapes commas, quotes and multiline values", () => {
     expect(calculationCsvCell('a,"b"\nc')).toBe('"a,""b""\nc"');
   });

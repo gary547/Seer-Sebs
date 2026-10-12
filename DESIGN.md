@@ -28,3 +28,4 @@ SEER uses an editorial briefing style built from No Brainer's navy, teal, coral 
 - Category creation supports multiple selections across searches. "Select all in view" affects only the current search results; keep the selected count, keyword population and a short list of selected names visible before saving.
 - Keep light and dark mode legible, use keyboard-accessible controls, and state when a saved change requires a forecast recalculation.
 - Domain benchmark tables sort by clicking numeric column headings. Show the active direction with an arrow and `aria-sort`, paginate domains, and place the CSV action above the table with an explicit all-domains scope.
+- Calculation downloads show prepared rows and the expected total in the existing action button. Use a reconnecting label during automatic recovery, keep both export controls disabled while downloading, and restore them after completion or a clear terminal error.

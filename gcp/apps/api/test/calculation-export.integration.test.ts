@@ -37,7 +37,7 @@ describe("complete calculation export API", () => {
       else if (sql.includes("FROM user_roles AS user_role")) rows = [{ role: allowed ? "admin" : "view_only" }];
       else if (sql.includes("FROM user_client_access")) rows = [];
       else if (sql.includes("SELECT run.id")) rows = latestRun ? [{ id: runId, input: { ...(scope ? { forecastScope: scope } : {}),
-        ...(exclusionReason ? { forecastEligibility: { excludedKeywordCount: 1 } } : {}) }, completed_at: new Date("2026-09-08T09:00:00Z"), currency, dirty, active }] : [];
+        ...(exclusionReason ? { forecastEligibility: { excludedKeywordCount: 1 } } : {}) }, completed_at: new Date("2026-09-08T09:00:00Z"), currency, dirty, active, keyword_count: values[1] ? null : "1" }] : [];
       else if (sql.includes("WITH export_keywords")) rows = ["conservative", "realistic", "stretch"].filter((scenario) => !values[4] || values[4] === scenario).map((scenario) => ({
         keyword_id: keywordId, keyword: 'keyword, with "quotes"', scenario, category: "Pharmacy", search_intent: "commercial",
         exclusion_reason: exclusionReason,
@@ -61,7 +61,7 @@ describe("complete calculation export API", () => {
     const response = await fetch(`${url}?limit=1`);
     expect(response.status).toBe(200);
     const page = await response.json() as { rows: Array<Record<string, unknown>>; columns: string[] };
-    expect(page).toMatchObject({ keywordCount: 1, nextAfter: keywordId, runId });
+    expect(page).toMatchObject({ keywordCount: 1, totalKeywords: 1, nextAfter: keywordId, runId });
     expect(page.rows).toHaveLength(3);
     expect(page.rows[0]).toMatchObject({ link_power_score: 0, expected_incremental_annual: 125.25, content_fit_scope: "domain_fallback", content_fit_source: "openrouter:z-ai/glm-5.3-flash" });
     expect(page.columns).toContain("har_explanation");

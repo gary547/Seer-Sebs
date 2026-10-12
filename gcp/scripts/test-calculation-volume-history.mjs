@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { canonicalProjectVolumeCte, projectVolumeSampleSql, projectVolumeSummarySql } from "../../dist/gcp/packages/runtime/src/project-volume-history.js";
+import { canonicalProjectVolumeCte, projectVolumeDiagnosticsSql, projectVolumeSampleSql, projectVolumeSummarySql } from "../../dist/gcp/packages/runtime/src/project-volume-history.js";
 
 const projectId = "00000000-0000-4000-8000-000000000001";
 const otherProjectId = "00000000-0000-4000-8000-000000000002";
@@ -75,7 +75,7 @@ for (const [keptOnly, role] of [[true, "seer_api"], [false, "seer_worker"]]) {
 
 console.log("Volume history PostgreSQL integration passed: shared worker/inspector resolution, cache fallback, imported zero preservation, deduplication, qualification and project isolation.");
 
-for (const [kind, sql] of [["summary", projectVolumeSummarySql()], ["sample", projectVolumeSampleSql()]]) {
+for (const [kind, sql] of [["summary", projectVolumeSummarySql()], ["sample", projectVolumeSampleSql()], ["diagnostics", projectVolumeDiagnosticsSql()]]) {
   const query = `${setup} SET LOCAL ROLE seer_api;
     SELECT jsonb_agg(result) FROM (${sql}) AS result; ROLLBACK;`
     .replaceAll("$1", `'${projectId}'::uuid`);
@@ -83,11 +83,14 @@ for (const [kind, sql] of [["summary", projectVolumeSummarySql()], ["sample", pr
     "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "seer_owner", "-d", "seer", "-Atq"],
     { input: query, encoding: "utf8", timeout: 30_000 });
   const rows = JSON.parse(output.trim());
-  if (kind === "summary") {
-    assert.equal(rows[0].history_row_count, "4");
-    assert.equal(rows[0].kept_keyword_count, "2");
-  } else {
-    assert.deepEqual(rows.flatMap(row => row.months.map(month => ({ keyword_id: row.keyword_id, ...month }))), kept);
+  if (kind !== "sample") {
+    const summary = kind === "diagnostics" ? rows[0].summary : rows[0];
+    assert.equal(summary.history_row_count, "4");
+    assert.equal(summary.kept_keyword_count, "2");
+  }
+  if (kind !== "summary") {
+    const sample = kind === "diagnostics" ? rows[0].sample : rows;
+    assert.deepEqual(sample.flatMap(row => row.months.map(month => ({ keyword_id: row.keyword_id, ...month }))), kept);
   }
 }
 console.log("Bounded inspector SQL matches canonical volumes, including imported zeros and deterministic ties.");

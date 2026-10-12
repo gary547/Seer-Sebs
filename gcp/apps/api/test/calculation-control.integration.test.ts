@@ -49,7 +49,8 @@ function database(): DatabasePool {
     }
     if (sql.includes("AS history_row_count")) {
       if (failSummaryOnce) { failSummaryOnce = false; throw new Error("Injected diagnostic failure"); }
-      return result([{ earliest_month: calendarDates[2], history_row_count: "240", kept_keyword_count: "10", latest_month: calendarDates[3], maximum_months: "24", median_months: "24", minimum_months: "0", with_12_months_count: "9", with_24_months_count: "8", with_history_count: "9" }]);
+      return result([{ summary: { earliest_month: calendarDates[2], history_row_count: "240", kept_keyword_count: "10", latest_month: calendarDates[3], maximum_months: "24", median_months: "24", minimum_months: "0", with_12_months_count: "9", with_24_months_count: "8", with_history_count: "9" },
+        sample: [{ keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", month_count: "24", months: [{ month: "2025-12-01", volume: 1200 }] }] }]);
     }
     if (sql.includes("sample_keywords AS MATERIALIZED")) {
       return result([{ keyword: "seo agency", keyword_id: "00000000-0000-4000-8000-000000000006", month_count: "24", months: [{ month: "2025-12-01", volume: 1200 }] }]);
@@ -225,8 +226,8 @@ describe("calculation control API", () => {
       executedSql.filter((sql) =>
         sql.includes("provider_history AS MATERIALIZED"),
       ),
-    ).toHaveLength(2);
-    expect(executedSql.filter((sql) => sql.includes("provider.month = volume.month"))).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(executedSql.filter((sql) => sql.includes("provider.month = volume.month"))).toHaveLength(1);
     expect(executedSql.filter((sql) => sql.includes("sample_keywords AS MATERIALIZED"))).toHaveLength(1);
     expect(executedSql.some(sql => sql.includes("ORDER BY month, priority, fetched_at DESC, source DESC, id DESC"))).toBe(true);
     expect(executedSql.some((sql) => sql.includes("ORDER BY stage.attempts DESC"))).toBe(true);
