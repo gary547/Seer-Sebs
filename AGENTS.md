@@ -431,6 +431,12 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
 - Calculation inspectors aggregate monthly-history coverage before fetching the
   bounded sample. Preserve imported-month precedence and deterministic duplicate
   resolution. `test:gcp-volume-scale` covers 44,135 keywords and 1,588,860 months.
+  Migration `041_provider_volume_coverage` maintains exact provider month counts
+  and boundaries transactionally through source-table triggers. Volume-only
+  updates do not change coverage; key changes and deletions do. Read this
+  projection before fetching the canonical monthly sample, avoiding scans of
+  shared provider history. The scale fixture includes a second project with
+  matching keyword names; trigger regressions run with the real API role.
   CTR, HAR and Revenue panels load independently of input diagnostics; identify
   the displayed completed run explicitly when the latest run has different results.
 - Calculation-control, LPS and HAR inspector diagnostics share one budget of at

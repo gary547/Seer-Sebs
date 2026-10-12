@@ -26,10 +26,8 @@ export function canonicalProjectVolumeCte(keptOnly = false): string {
 
 export function projectVolumeHistoryCte(): string {
   return `provider_history AS MATERIALIZED (
-    SELECT normalised_keyword, count(*)::integer AS month_count,
-      min(month) AS earliest_month, max(month) AS latest_month
-    FROM local_provider_keyword_monthly_volumes
-    WHERE project_id = $1 GROUP BY normalised_keyword
+    SELECT normalised_keyword, month_count, earliest_month, latest_month
+    FROM provider_volume_coverage WHERE project_id = $1
   ), extra_imported_months AS (
     SELECT DISTINCT volume.keyword_id, volume.month
     FROM keyword_monthly_volumes AS volume

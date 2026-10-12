@@ -15,6 +15,11 @@ const setup = `
     id uuid PRIMARY KEY, project_id uuid NOT NULL,
     normalised_keyword text NOT NULL, detox_status text NOT NULL
   ) ON COMMIT DROP;
+  CREATE TEMP TABLE provider_volume_coverage (
+    project_id uuid NOT NULL, normalised_keyword text NOT NULL,
+    month_count integer NOT NULL, earliest_month date NOT NULL, latest_month date NOT NULL,
+    PRIMARY KEY (project_id, normalised_keyword)
+  ) ON COMMIT DROP;
   CREATE TEMP TABLE keyword_monthly_volumes (
     id uuid PRIMARY KEY, keyword_id uuid NOT NULL, month date NOT NULL,
     volume integer NOT NULL, fetched_at timestamptz NOT NULL, source text NOT NULL
@@ -41,8 +46,11 @@ const setup = `
     ('${projectId}', 'cached query', '2025-01-01', 222),
     ('${projectId}', 'removed query', '2025-01-01', 80),
     ('${otherProjectId}', 'shared query', '2025-02-01', 9999);
+  INSERT INTO provider_volume_coverage
+    SELECT project_id,normalised_keyword,count(*)::integer,min(month),max(month)
+    FROM local_provider_keyword_monthly_volumes GROUP BY project_id,normalised_keyword;
   GRANT SELECT ON keywords, keyword_monthly_volumes,
-    local_provider_keyword_monthly_volumes TO seer_api, seer_worker;
+    local_provider_keyword_monthly_volumes, provider_volume_coverage TO seer_api, seer_worker;
   ALTER TABLE keywords ADD COLUMN keyword text;
   UPDATE keywords SET keyword = normalised_keyword;
 `;

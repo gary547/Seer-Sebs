@@ -5,14 +5,27 @@ import { projectVolumeDiagnosticsSql, projectVolumeSampleSql, projectVolumeSumma
 const pool = createDatabasePool('postgresql://seer_owner:local-owner-only@127.0.0.1:25432/seer');
 const client = await pool.connect();
 const project = randomUUID();
+const otherProject = randomUUID();
+const tables = ['keywords','keyword_monthly_volumes','local_provider_keyword_monthly_volumes','provider_volume_coverage'];
 try {
   await client.query('BEGIN');
   await client.query("SET LOCAL statement_timeout = '120s'");
-  for (const table of ['keywords','keyword_monthly_volumes','local_provider_keyword_monthly_volumes']) await client.query(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING ALL) ON COMMIT DROP`);
+  for (const table of tables) await client.query(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING DEFAULTS INCLUDING CONSTRAINTS) ON COMMIT DROP`);
   await client.query("INSERT INTO keywords (id,project_id,keyword,normalised_keyword,detox_status) SELECT gen_random_uuid(),$1, 'query '||n,'query '||n,'keep' FROM generate_series(1,44135) n",[project]);
+  await client.query("INSERT INTO keywords (id,project_id,keyword,normalised_keyword,detox_status) SELECT gen_random_uuid(),$1, 'query '||n,'query '||n,'keep' FROM generate_series(1,44135) n",[otherProject]);
   await client.query("INSERT INTO local_provider_keyword_monthly_volumes (project_id,normalised_keyword,month,volume) SELECT project_id,normalised_keyword, date '2023-09-01' + (n||' months')::interval, 100+n FROM keywords CROSS JOIN generate_series(0,35) n");
-  await client.query("INSERT INTO keyword_monthly_volumes (id,keyword_id,month,volume,source) SELECT gen_random_uuid(),id,date '2026-08-01',0,'upload' FROM keywords LIMIT 450");
-  for (const table of ['keywords','keyword_monthly_volumes','local_provider_keyword_monthly_volumes']) await client.query(`ANALYZE ${table}`);
+  await client.query("INSERT INTO keyword_monthly_volumes (id,keyword_id,month,volume,source) SELECT gen_random_uuid(),id,date '2026-08-01',0,'upload' FROM keywords WHERE project_id=$1 AND split_part(keyword,' ',2)::integer<=450",[project]);
+  await client.query("INSERT INTO provider_volume_coverage SELECT project_id,normalised_keyword,count(*)::integer,min(month),max(month) FROM local_provider_keyword_monthly_volumes GROUP BY project_id,normalised_keyword");
+  await client.query("SET LOCAL maintenance_work_mem = '256MB'");
+  for (const table of tables) {
+    const indexes = await client.query('SELECT pg_get_indexdef(indexrelid) AS definition FROM pg_index WHERE indrelid=$1::regclass AND indisready AND indisvalid', ['public.'+table]);
+    for (const {definition} of indexes.rows) {
+      const index = definition.replace(/INDEX (\S+) ON public\.(\S+)/, 'INDEX fixture_$1 ON pg_temp.$2');
+      assert.notEqual(index,definition);
+      await client.query(index);
+    }
+    await client.query(`ANALYZE ${table}`);
+  }
   await client.query("SET LOCAL statement_timeout = '30s'");
   for(const [name, sql] of [['summary',projectVolumeSummarySql()],['sample',projectVolumeSampleSql()],['diagnostics',projectVolumeDiagnosticsSql()]]) {
     const result = await client.query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) '+sql,[project]);
