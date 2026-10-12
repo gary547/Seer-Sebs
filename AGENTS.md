@@ -437,6 +437,8 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   projection before fetching the canonical monthly sample, avoiding scans of
   shared provider history. The scale fixture includes a second project with
   matching keyword names; trigger regressions run with the real API role.
+  Source truncation clears the projection. Keep concurrent overlapping upserts,
+  deletion cascades and transactional rollback in the coverage regression.
   CTR, HAR and Revenue panels load independently of input diagnostics; identify
   the displayed completed run explicitly when the latest run has different results.
 - Calculation-control, LPS and HAR inspector diagnostics share one budget of at
