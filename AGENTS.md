@@ -424,6 +424,12 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   work. Authorized calculation-control requests for the same project metadata and
   latest successful run share only pending work; settled responses are never cached.
   Always authorize before joining shared work and clear failed in-flight entries.
+- Pipeline readiness and calculation summaries also use the shared diagnostic
+  reader. Readiness returns at most 20 compact records per rollup view, projecting
+  only display fields in SQL before transfer; never return full member lists.
+  Preserve saved rollups and complete financial totals. Aggregate latest-upload GSC
+  queries once for the preview, and resolve volume coverage plus its bounded sample
+  in one statement through `projectVolumeDiagnosticsSql`.
 - Local Docker validation links compiled backend code to the installed GCP
   dependencies after building. Frontend builds replace `dist`, so the gate must
   recreate that link when absent. Fresh-schema readiness uses TCP rather than the
@@ -568,6 +574,14 @@ CLOUDSDK_CONFIG=/Users/zencrust/.config/gcloud-profiles/nobrainer \
   (`conservative`, `realistic`, or `stretch`). Keep that filter and run ID on
   every pagination request; omitting it preserves the combined three-scenario
   export. No separate spreadsheet calculations or replacement export format.
+- The first complete-export page exposes `totalKeywords` for progress and final
+  row-count verification. Retry transient page/transport failures at most five
+  times with a 60-second timeout per attempt, retaining the same run, scenario
+  and cursor. Authorization, stale inputs, incomplete data and changed columns
+  remain terminal. Encode pages into Blob fragments and download only after all
+  completeness checks pass; count actual UTF-8 bytes including each part's header
+  and BOM. Keep parts within 50,000 rows and 45 MiB and restore both controls after
+  completion or failure.
 - The export column set is the client-agreed layout. New columns are appended
   after every existing column so no established column changes position, and
   columns are never removed or reordered. `peak_month` carries the highest
